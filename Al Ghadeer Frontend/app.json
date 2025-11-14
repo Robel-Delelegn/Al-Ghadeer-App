@@ -1,0 +1,77 @@
+{
+  "expo": {
+    "name": "Al Ghadeer Water Driver",
+    "slug": "al-ghadeer-water-driver",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "icon": "./assets/images/icon.png",
+    "scheme": "alghadeerwater",
+    "userInterfaceStyle": "automatic",
+    "splash": {
+      "image": "./assets/images/splash.png",
+      "resizeMode": "contain",
+      "backgroundColor": "#ffffff"
+    },
+    "newArchEnabled": true,
+    "ios": {
+      "infoPlist": {
+        "NSLocationWhenInUseUsageDescription": "This app uses your location to show maps."
+      },
+      "supportsTablet": true,
+      "config": {
+        "googleMapsApiKey": "AIzaSyAmLgiMgJ1cn24JYzdmxkdp4HBNqwH4X4U"
+      }
+    },
+    "android": {
+      "permissions": [
+        "ACCESS_FINE_LOCATION",
+        "ACCESS_COARSE_LOCATION",
+        "ACCESS_BACKGROUND_LOCATION"
+      ],
+      "adaptiveIcon": {
+        "foregroundImage": "./assets/images/adaptive-icon.png",
+        "backgroundColor": "#ffffff"
+      },
+      "config": {
+        "googleMaps": {
+          "apiKey": "AIzaSyAmLgiMgJ1cn24JYzdmxkdp4HBNqwH4X4U"
+        }
+      },
+      "edgeToEdgeEnabled": true,
+      "package": "com.anonymous.alghadeerwaterdriver"
+    },
+    "web": {
+      "bundler": "metro",
+      "output": "static",
+      "favicon": "./assets/images/favicon.png"
+    },
+    "plugins": [
+      [
+        "expo-maps",
+        {
+          "requestLocationPermission": true,
+          "locationPermission": "Allow $(PRODUCT_NAME) to use your location"
+        }
+      ],
+      [
+        "expo-location",
+        {
+          "locationAlwaysAndWhenInUsePermission": "This app needs your location to show where you are on the map.",
+          "isAndroidBackgroundLocationEnabled": false
+        }
+      ],
+      "expo-router",
+      "expo-secure-store",
+      "react-native-edge-to-edge"
+    ],
+    "experiments": {
+      "typedRoutes": true
+    },
+    "extra": {
+      "router": {},
+      "eas": {
+        "projectId": "0dc14db6-63e8-4b9e-b0e8-7ac7163b5ab6"
+      }
+    }
+  }
+}
