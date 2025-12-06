@@ -3,7 +3,7 @@ import { Ionicons } from '@expo/vector-icons';
 import React, { useEffect, useMemo, useState } from 'react';
 import { ActivityIndicator, FlatList, ScrollView, Text, TextInput, TouchableOpacity, View } from 'react-native';
 
-const IP_ADDRESS = "192.168.0.194:3000/api";
+const IP_ADDRESS = "10.140.136.176/api";
 
 // API Response interface
 interface ApiResponse {

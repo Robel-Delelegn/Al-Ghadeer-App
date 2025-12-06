@@ -4,7 +4,7 @@ import { useRouter } from 'expo-router';
 import React, { useState, useCallback, useMemo } from 'react';
 import { Alert, ScrollView, Text, TextInput, TouchableOpacity, View, ActivityIndicator, Modal, Image } from 'react-native';
 
-const IP_ADDRESS = "192.168.0.194:3000/api";
+const IP_ADDRESS = "10.140.136.176/api";
 
 const FAILURE_REASONS = [
   'Customer not available',

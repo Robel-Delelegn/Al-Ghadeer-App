@@ -14,7 +14,7 @@ import { ActivityIndicator } from 'react-native-paper';
 const formatDate = (date: Date) =>
   date.toLocaleDateString(undefined, { weekday: 'long', month: 'short', day: 'numeric' });
 
-const IP_ADDRESS = "192.168.0.194:3000/api";
+const IP_ADDRESS = "10.140.136.176/api";
 
 // API Response interface
 interface ApiResponse {
