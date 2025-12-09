@@ -1279,15 +1279,6 @@ function getNetworkIP() {
 
 const networkIP = getNetworkIP();
 
-// Catch-all 404 handler for undefined routes
-app.use((req, res) => {
-    console.log(`❌ 404 - Route not found: ${req.method} ${req.path}`);
-    res.status(404).json({
-        success: false,
-        message: `Route not found: ${req.method} ${req.path}`
-    });
-});
-
 app.listen(port, '0.0.0.0', () => {
     console.log(`\n${'='.repeat(60)}`);
     console.log(`🚀 Al Ghadeer Driver Server is RUNNING`);

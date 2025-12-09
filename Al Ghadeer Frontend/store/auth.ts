@@ -34,7 +34,24 @@ interface AuthStore {
 }
 
 // API Base URL - Update with your actual server URL
-const API_BASE_URL = process.env.EXPO_PUBLIC_IP_ADDRESS || process.env.EXPO_PUBLIC_API_URL || 'http://localhost:3000/api';
+// Ensure it always ends with /api (but not /api/api)
+const getApiBaseUrl = () => {
+  let baseUrl = process.env.EXPO_PUBLIC_IP_ADDRESS || process.env.EXPO_PUBLIC_API_URL || 'http://localhost:3000/api';
+  
+  // Remove trailing slash if present
+  baseUrl = baseUrl.endsWith('/') ? baseUrl.slice(0, -1) : baseUrl;
+  
+  // Remove /api if it appears at the end (to avoid double /api)
+  if (baseUrl.endsWith('/api')) {
+    baseUrl = baseUrl.slice(0, -4);
+  }
+  
+  // Ensure /api is appended
+  return `${baseUrl}/api`;
+};
+
+const API_BASE_URL = getApiBaseUrl();
+console.log('🔗 API Base URL configured:', API_BASE_URL);
 
 export const useAuthStore = create<AuthStore>()(
   persist(
@@ -52,9 +69,10 @@ export const useAuthStore = create<AuthStore>()(
         set({ isLoading: true });
         try {
           console.log('Requesting OTP for phone:', phone);
-          console.log('API URL:', `${API_BASE_URL}/auth/request-otp`);
+          const requestUrl = `${API_BASE_URL}/auth/request-otp`;
+          console.log('API URL:', requestUrl);
 
-          const response = await fetch(`${API_BASE_URL}/auth/request-otp`, {
+          const response = await fetch(requestUrl, {
             method: 'POST',
             headers: {
               'Content-Type': 'application/json',
