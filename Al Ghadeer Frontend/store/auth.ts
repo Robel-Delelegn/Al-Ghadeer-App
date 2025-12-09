@@ -27,6 +27,7 @@ interface AuthStore {
   resendOtp: (phone: string, tempToken: string) => Promise<{ success: boolean; message?: string }>;
   signOut: () => Promise<void>;
   checkAuth: () => Promise<boolean>;
+  verifyToken: () => Promise<boolean>;
   updateUser: (user: User) => void;
   clearAuth: () => Promise<void>;
   getToken: () => Promise<string | null>;
@@ -274,8 +275,8 @@ export const useAuthStore = create<AuthStore>()(
       },
 
       /**
-       * Check Authentication - Verify token and get user info
-       * GET /api/auth/me
+       * Check Authentication - Check if user is authenticated based on state and token existence
+       * Does NOT verify token validity (use verifyToken() for that)
        */
       checkAuth: async () => {
         try {
@@ -289,6 +290,36 @@ export const useAuthStore = create<AuthStore>()(
             }
           }
 
+          const token = await SecureStore.getItemAsync('auth_token');
+          
+          if (!token) {
+            set({
+              isAuthenticated: false,
+              user: null,
+            });
+            return false;
+          }
+
+          // Token exists but state is not authenticated
+          // Return false - caller should use verifyToken() to verify and restore state
+          return false;
+        } catch (error) {
+          console.error('Auth check error:', error);
+          set({
+            isAuthenticated: false,
+            user: null,
+          });
+          return false;
+        }
+      },
+
+      /**
+       * Verify Token - Verify token validity with backend and update state
+       * GET /api/auth/me
+       * Clears tokens and state if token is invalid
+       */
+      verifyToken: async () => {
+        try {
           const token = await SecureStore.getItemAsync('auth_token');
           
           if (!token) {
@@ -317,7 +348,8 @@ export const useAuthStore = create<AuthStore>()(
             clearTimeout(timeoutId);
 
             if (!response.ok) {
-              // Token invalid, clear auth
+              // Token invalid (401, 403, etc.), clear auth
+              console.log('Token verification failed - clearing auth');
               await SecureStore.deleteItemAsync('auth_token');
               await SecureStore.deleteItemAsync('refresh_token');
               set({
@@ -333,6 +365,7 @@ export const useAuthStore = create<AuthStore>()(
               // Check if user is approved
               if (data.user.status !== 'approved') {
                 // User not approved, sign them out
+                console.log('User not approved - clearing auth');
                 await SecureStore.deleteItemAsync('auth_token');
                 await SecureStore.deleteItemAsync('refresh_token');
                 set({
@@ -342,6 +375,7 @@ export const useAuthStore = create<AuthStore>()(
                 return false;
               }
 
+              // Token is valid, update state
               set({
                 isAuthenticated: true,
                 user: data.user,
@@ -349,29 +383,42 @@ export const useAuthStore = create<AuthStore>()(
               return true;
             }
 
+            // Invalid response format, clear auth
+            console.log('Invalid response format - clearing auth');
+            await SecureStore.deleteItemAsync('auth_token');
+            await SecureStore.deleteItemAsync('refresh_token');
+            set({
+              isAuthenticated: false,
+              user: null,
+            });
             return false;
           } catch (fetchError: any) {
             clearTimeout(timeoutId);
             
-            // If timeout or network error, fail fast without clearing token
-            // This allows offline usage if token exists
+            // If timeout or network error, check if we have cached user
             if (fetchError.name === 'AbortError' || fetchError.message?.includes('Network request failed')) {
-              console.warn('Auth check network error - using cached token');
-              // If we have a token, assume authenticated for offline use
-              // The app will handle auth errors on actual API calls
+              console.warn('Token verification network error - checking cached user');
               const cachedUser = get().user;
               if (cachedUser) {
+                // Use cached user for offline mode
                 set({
                   isAuthenticated: true,
                   user: cachedUser,
                 });
                 return true;
               }
+              // No cached user, but don't clear token (might be temporary network issue)
+              // Return false so user can try again
+              return false;
             }
+            // Other errors - clear auth
             throw fetchError;
           }
         } catch (error) {
-          console.error('Auth check error:', error);
+          console.error('Token verification error:', error);
+          // On error, clear auth to be safe
+          await SecureStore.deleteItemAsync('auth_token');
+          await SecureStore.deleteItemAsync('refresh_token');
           set({
             isAuthenticated: false,
             user: null,

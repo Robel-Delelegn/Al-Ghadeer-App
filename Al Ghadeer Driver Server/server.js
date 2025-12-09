@@ -84,6 +84,15 @@ function cleanExpiredOTPs() {
     }
 }
 
+// GET /api/auth/request-otp - Return error (only POST is supported)
+app.get('/api/auth/request-otp', (req, res) => {
+    console.log('❌ GET request to /api/auth/request-otp - Method not allowed');
+    return res.status(405).json({
+        success: false,
+        message: 'Method not allowed. Use POST instead.'
+    });
+});
+
 // POST /api/auth/request-otp
 app.post('/api/auth/request-otp', async (req, res) => {
     console.log('\n📥 ========== OTP REQUEST RECEIVED ==========');
@@ -1269,6 +1278,15 @@ function getNetworkIP() {
 }
 
 const networkIP = getNetworkIP();
+
+// Catch-all 404 handler for undefined routes
+app.use((req, res) => {
+    console.log(`❌ 404 - Route not found: ${req.method} ${req.path}`);
+    res.status(404).json({
+        success: false,
+        message: `Route not found: ${req.method} ${req.path}`
+    });
+});
 
 app.listen(port, '0.0.0.0', () => {
     console.log(`\n${'='.repeat(60)}`);
