@@ -147,6 +147,13 @@ export default function Layout() {
           href: null, // Hide from tab bar
         }}
       />
+      <Tabs.Screen
+        name="direct-sales"
+        options={{
+          headerShown: false,
+          href: null, // Hide from tab bar
+        }}
+      />
     </Tabs>
   );
 }

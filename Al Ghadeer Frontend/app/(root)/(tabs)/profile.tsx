@@ -1,7 +1,7 @@
 import ScreenHeader from '@/components/ScreenHeader';
 import { icons } from '@/constants';
 import { useOrderStore } from '@/store/index';
-import { useAuth, useUser } from '@clerk/clerk-expo';
+import { useAuthStore } from '@/store/auth';
 import { Ionicons } from '@expo/vector-icons';
 import { useRouter } from "expo-router";
 import React, { useMemo } from 'react';
@@ -10,20 +10,19 @@ import { Image, Text, TouchableOpacity, View, ScrollView, Dimensions } from 'rea
 const { width } = Dimensions.get('window');
 
 const Profile = () => {
-  const router = useRouter()
-  const { user } = useUser();
-  const { signOut } = useAuth();
+  const router = useRouter();
+  const { user, signOut } = useAuthStore();
   const { assignedOrders, currentDriver, getDriverMetrics } = useOrderStore();
 
-  const onLogOut = () => {
-    signOut();
-    router.push("/")
-  }
+  const onLogOut = async () => {
+    await signOut();
+    router.replace("/");
+  };
 
-  const avatar = currentDriver?.profile_image || user?.imageUrl || icons.person;
-  const driverName = currentDriver?.name || user?.fullName || user?.username || user?.emailAddresses?.[0]?.emailAddress?.split('@')[0] || 'Driver';
-  const email = currentDriver?.email || user?.emailAddresses?.[0]?.emailAddress || 'Not set';
-  const phone = currentDriver?.phone || user?.primaryPhoneNumber?.phoneNumber || user?.phoneNumbers?.[0]?.phoneNumber || 'Not set';
+  const avatar = currentDriver?.profile_image || icons.person;
+  const driverName = currentDriver?.name || user?.driver_name || user?.name || user?.phone || 'Driver';
+  const helperName = currentDriver?.helper_name || user?.helper_name || '';
+  const phone = currentDriver?.phone || user?.phone || 'Not set';
   const memberSince = currentDriver?.account.joined_date ? new Date(currentDriver.account.joined_date).toLocaleDateString() : '—';
   const vehicleInfo = currentDriver?.vehicle ? `${currentDriver.vehicle.model} (${currentDriver.vehicle.plate_number})` : 'Not set';
 
@@ -104,9 +103,11 @@ const Profile = () => {
               <Text style={{ color: '#212529', fontSize: 22, fontWeight: '700', marginBottom: 4 }} numberOfLines={1}>
                 {driverName}
               </Text>
-              <Text style={{ color: '#6C757D', fontSize: 14, marginBottom: 2 }} numberOfLines={1}>
-                {email}
-              </Text>
+              {helperName ? (
+                <Text style={{ color: '#6C757D', fontSize: 14, marginBottom: 2 }} numberOfLines={1}>
+                  Helper: {helperName}
+                </Text>
+              ) : null}
               <View style={{ flexDirection: 'row', alignItems: 'center' }}>
                 <Ionicons name="calendar" size={14} color="#6C757D" />
                 <Text style={{ color: '#6C757D', fontSize: 12, marginLeft: 4 }}>

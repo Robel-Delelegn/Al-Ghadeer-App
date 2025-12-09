@@ -1,7 +1,7 @@
 import MyMap from "@/components/map";
 import { icons } from '@/constants';
 import { useOrderStore } from '@/store/index';
-import { useUser } from '@clerk/clerk-expo';
+import { useAuthStore } from '@/store/auth';
 import BottomSheet, { BottomSheetView } from "@gorhom/bottom-sheet";
 import { useRef } from "react";
 import { Image, Text, View } from "react-native";
@@ -12,9 +12,9 @@ const formatDate = (date: Date) =>
     date.toLocaleDateString(undefined, { weekday: 'long', month: 'short', day: 'numeric' });
 
 const HomeLayout = ({children, snapPoints, driverName}:{children: React.ReactNode, snapPoints?:string[], driverName:string}) => {
-    const { user } = useUser();
-    const { assignedOrders } = useOrderStore(); // Removed unused variables
-    const avatar = user?.imageUrl || icons.person;
+    const { user } = useAuthStore();
+    const { assignedOrders, currentDriver } = useOrderStore();
+    const avatar = currentDriver?.profile_image || icons.person;
     const today = new Date();
     const bottomSheet = useRef<BottomSheet>(null);
 

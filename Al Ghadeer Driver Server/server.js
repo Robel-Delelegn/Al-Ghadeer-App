@@ -1,741 +1,1299 @@
 require('dotenv').config();
 
 const express = require('express');
-const { Pool } = require('pg'); 
 const cors = require('cors'); 
 
 const app = express();
-const port = process.env.PORT || 3000; // Use port from .env or default to 3000
-console.log("Port: ", port)
-
-// --- Database Connection Pool Setup ---
-const connectionString = process.env.DATABASE_URL;
-
-// Ensure the DATABASE_URL is set
-if (!connectionString) {
-    console.error('DATABASE_URL is not set in .env file!');
-    process.exit(1); // Exit the process if the critical environment variable is missing
-}
-
-const pool = new Pool({
-    connectionString: connectionString,
-    connectionTimeoutMillis: 100000,
-    // For Neon, SSL is required. rejectUnauthorized: false is often used for development/testing
-    // if you don't have the CA certificate set up. For production, consider robust SSL.
-    ssl: process.env.NODE_ENV === 'production' ? { rejectUnauthorized: false } : false,
-});
-
-// Test database connection on startup
-pool.connect()
-    .then(client => {
-        console.log('Successfully connected to PostgreSQL database!');
-        client.release(); // Release the client immediately after testing connection
-    })
-    .catch(err => {
-        console.error('Failed to connect to PostgreSQL database:', err.message);
-        process.exit(1); // Exit if database connection fails
-    });
+const port = process.env.PORT || 3000;
 
 // --- Middleware ---
-app.use(express.json()); // Middleware to parse JSON request bodies
+app.use(express.json({ limit: '50mb' })); // Increased limit for base64 images
+app.use(express.urlencoded({ extended: true, limit: '50mb' }));
 
-// CORS configuration:
-// Allows requests from any origin during development.
-// In a production environment, you should restrict this to your specific frontend domain(s)
-// for better security (e.g., origin: 'https://your-expo-app.com').
+// CORS configuration
 app.use(cors({
-    origin: '*', // Allow all origins for development
-    methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'], // Allowed HTTP methods
-    allowedHeaders: ['Content-Type', 'Authorization'], // Allowed headers
+    origin: '*',
+    methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+    allowedHeaders: ['Content-Type', 'Authorization'],
 }));
 
-// --- API Routes ---
-
-// GET /api/users - Retrieve all users from the database
-app.get('/api/users', async (req, res) => {
-    let client;
-    try {
-        client = await pool.connect();
-        const result = await client.query('SELECT id, name, email, clerk_id, created_at FROM users ORDER BY name ASC');
-        res.status(200).json(result.rows);
-    } catch (err) {
-        console.error('Error fetching users:', err.stack);
-        res.status(500).json({ error: 'Internal Server Error', details: err.message });
-    } finally {
-        if (client) {
-            client.release();
-        }
+// Request logging middleware
+app.use((req, res, next) => {
+    const timestamp = new Date().toISOString();
+    console.log(`\n[${timestamp}] ${req.method} ${req.path}`);
+    console.log('Headers:', JSON.stringify(req.headers, null, 2));
+    if (req.body && Object.keys(req.body).length > 0) {
+        console.log('Body:', JSON.stringify(req.body, null, 2));
     }
+    next();
 });
 
-// POST /api/users - Add a new user to the database
-app.post('/api/users', async (req, res) => {
-    const { name, email, clerk_id } = req.body;
+// ============================================
+// AUTHENTICATION ENDPOINTS
+// ============================================
 
-    // Basic validation
-    if (!name || !email || !clerk_id) {
-        return res.status(400).json({ error: 'Name, email, and clerk_id are required fields.' });
+// In-memory OTP storage (phone -> { otp, tempToken, expiresAt })
+const otpStore = new Map();
+
+// Demo driver directory (acts as DB)
+const drivers = [
+    {
+        id: 'driver_001',
+        phone: '+971501234567',
+        driver_name: 'Ahmed Al-Rashid',
+        helper_name: 'Khalid Hussein',
+        vehicle_number: 'DUB-12345',
+        vehicle_type: 'Truck',
+        zone: 'Dubai Marina',
+        status: 'approved'
+    },
+    {
+        id: 'driver_002',
+        phone: '+971501234568',
+        driver_name: 'Fatima Noor',
+        helper_name: 'Salem Mansoor',
+        vehicle_number: 'DXB-67890',
+        vehicle_type: 'Van',
+        zone: 'Jumeirah',
+        status: 'approved'
+    },
+    {
+        id: 'driver_003',
+        phone: '+971501234569',
+        driver_name: 'Omar Khalid',
+        helper_name: 'Yousef Rahman',
+        vehicle_number: 'AUH-11223',
+        vehicle_type: 'Truck',
+        zone: 'Business Bay',
+        status: 'approved'
     }
-    if (typeof name !== 'string' || typeof email !== 'string' || typeof clerk_id !== 'string') {
-        return res.status(400).json({ error: 'Name, email, and clerk_id must be strings.' });
+];
+
+// Generate 6-digit OTP
+function generateOTP() {
+    return Math.floor(100000 + Math.random() * 900000).toString();
+}
+
+// Clean expired OTPs
+function cleanExpiredOTPs() {
+    const now = Date.now();
+    for (const [phone, data] of otpStore.entries()) {
+        if (data.expiresAt < now) {
+            otpStore.delete(phone);
+        }
     }
-    if (!email.includes('@') || !email.includes('.')) {
-        return res.status(400).json({ error: 'Invalid email format.' });
+}
+
+// POST /api/auth/request-otp
+app.post('/api/auth/request-otp', async (req, res) => {
+    console.log('\n📥 ========== OTP REQUEST RECEIVED ==========');
+    console.log('📥 Received OTP request');
+    const { phone } = req.body;
+    console.log('📱 Phone received:', phone);
+    console.log('📥 ===========================================\n');
+
+    if (!phone) {
+        console.log('❌ Missing phone number');
+        return res.status(400).json({
+            success: false,
+            message: 'Phone number is required'
+        });
     }
 
-    let client;
-    try {
-        client = await pool.connect();
-        const result = await client.query(
-            'INSERT INTO users (name, email, clerk_id) VALUES ($1, $2, $3) RETURNING id, name, email, clerk_id, created_at',
-            [name, email, clerk_id]
-        );
-        res.status(201).json(result.rows[0]);
-    } catch (err) {
-        console.error('Error adding user:', err.stack);
-        if (err.code === '23505') {
-            if (err.constraint === 'users_email_key') {
-                return res.status(409).json({ error: 'Email already exists.' });
-            }
-            return res.status(409).json({ error: 'Duplicate entry detected.' });
-        }
-        res.status(500).json({ error: 'Internal Server Error', details: err.message });
-    } finally {
-        if (client) {
-            client.release();
-        }
+    // Look up driver by phone (in real app, query database)
+    const driver = drivers.find(d => d.phone === phone);
+    
+    if (!driver) {
+        return res.status(404).json({
+            success: false,
+            message: 'Phone number not registered'
+        });
     }
+
+    // Clean expired OTPs
+    cleanExpiredOTPs();
+
+    // Generate 6-digit OTP
+    const otp = generateOTP();
+    
+    // Generate temporary token
+    const tempToken = `temp_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+
+    // Store OTP with expiration (10 minutes)
+    otpStore.set(phone, {
+        otp: otp,
+        tempToken: tempToken,
+        expiresAt: Date.now() + (10 * 60 * 1000) // 10 minutes
+    });
+
+    // Log OTP to console for testing
+    console.log('\n========================================');
+    console.log('📱 OTP REQUESTED');
+    console.log('========================================');
+    console.log(`Phone: ${phone}`);
+    console.log(`OTP Code: ${otp}`);
+    console.log(`Temp Token: ${tempToken}`);
+    console.log(`Expires in: 10 minutes`);
+    console.log('========================================\n');
+
+    console.log('✅ Sending response...');
+    res.status(200).json({
+        success: true,
+        message: 'OTP sent to your phone number',
+        temp_token: tempToken,
+        requires_otp: true
+    });
+    console.log('✅ Response sent successfully');
 });
 
-// GET /api/orders - Fetch current orders with optimized response
-app.get('/api/orders', async (req, res) => {
-    const { driver_id } = req.query;
-    let client;
-    try {
-        client = await pool.connect();
-        
-        // Build query based on whether driver_id is provided
-        let query = `
-            SELECT 
-                o.id,
-                o.order_number,
-                o.status,
-                o.created_at,
-                o.updated_at,
-                o.customer_name,
-                o.customer_phone,
-                o.customer_email,
-                o.customer_address,
-                o.latitude,
-                o.longitude,
-                o.delivery_instructions,
-                o.five_litre_bottles,
-                o.ten_litre_bottles,
-                o.three_hundred_ml_bottles,
-                o.one_litre_bottles,
-                o.twenty_litre_bottles,
-                o.water_dispenser,
-                o.total_amount,
-                o.payment_method,
-                o.payment_status,
-                o.delivery_zone,
-                o.driver_id
-            FROM orders o 
-            WHERE o.status IN ('pending', 'assigned', 'in_progress')
-        `;
-        
-        let queryParams = [];
-        
-        // If driver_id is provided, filter by driver
-        if (driver_id) {
-            query += ` AND (o.driver_id = $1 OR o.driver_id IS NULL)`;
-            queryParams.push(driver_id);
-        }
-        
-        query += ` ORDER BY o.created_at DESC`;
-        
-        const result = await client.query(query, queryParams);
-        
-        // Return optimized flat structure
-        const orders = result.rows.map(row => ({
-            id: row.id.toString(),
-            order_number: row.order_number,
-            status: row.status,
-            created_at: row.created_at,
-            updated_at: row.updated_at,
-            customer_name: row.customer_name,
-            customer_phone: row.customer_phone,
-            customer_email: row.customer_email,
-            customer_address: row.customer_address,
-            latitude: row.latitude,
-            longitude: row.longitude,
-            delivery_instructions: row.delivery_instructions,
-            five_litre_bottles: row.five_litre_bottles || 0,
-            ten_litre_bottles: row.ten_litre_bottles || 0,
-            three_hundred_ml_bottles: row.three_hundred_ml_bottles || 0,
-            one_litre_bottles: row.one_litre_bottles || 0,
-            twenty_litre_bottles: row.twenty_litre_bottles || 0,
-            water_dispenser: row.water_dispenser || 0,
-            total_amount: row.total_amount || 0,
-            payment_method: row.payment_method || 'cash',
-            payment_status: row.payment_status || 'pending',
-            delivery_zone: row.delivery_zone,
-            driver_id: row.driver_id
-        }));
-        
-        res.status(200).json(orders);
-    } catch (err) {
-        console.error('Error fetching orders:', err.stack);
-        res.status(500).json({ error: 'Internal Server Error', details: err.message });
-    } finally {
-        if (client) {
-            client.release();
-        }
+// POST /api/auth/verify-otp
+app.post('/api/auth/verify-otp', async (req, res) => {
+    const { phone, otp } = req.body;
+    const authHeader = req.headers.authorization;
+    const tempToken = authHeader?.replace('Bearer ', '');
+
+    if (!tempToken) {
+        return res.status(401).json({
+            success: false,
+            message: 'Invalid temporary token'
+        });
     }
+
+    if (!phone || !otp) {
+        return res.status(400).json({
+            success: false,
+            message: 'Phone and OTP are required'
+        });
+    }
+
+    // Validate OTP format
+    if (otp.length !== 6 || !/^\d{6}$/.test(otp)) {
+        return res.status(400).json({
+            success: false,
+            message: 'Invalid OTP format. OTP must be 6 digits.'
+        });
+    }
+
+    // Clean expired OTPs
+    cleanExpiredOTPs();
+
+    // Get stored OTP data
+    const storedData = otpStore.get(phone);
+
+    if (!storedData) {
+        return res.status(400).json({
+            success: false,
+            message: 'OTP not found or expired. Please request a new OTP.'
+        });
+    }
+
+    // Check if temp token matches
+    if (storedData.tempToken !== tempToken) {
+        return res.status(401).json({
+            success: false,
+            message: 'Invalid temporary token'
+        });
+    }
+
+    // Check if OTP is expired
+    if (storedData.expiresAt < Date.now()) {
+        otpStore.delete(phone);
+        return res.status(410).json({
+            success: false,
+            message: 'OTP expired. Please request a new OTP.'
+        });
+    }
+
+    // Verify OTP
+    if (storedData.otp !== otp) {
+        console.log(`\n❌ OTP VERIFICATION FAILED`);
+        console.log(`Phone: ${phone}`);
+        console.log(`Expected: ${storedData.otp}`);
+        console.log(`Received: ${otp}\n`);
+        return res.status(400).json({
+            success: false,
+            message: 'Invalid OTP. Please check and try again.'
+        });
+    }
+
+    // OTP verified successfully - remove from store
+    otpStore.delete(phone);
+
+    // Generate permanent token
+    const permanentToken = `perm_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+
+    // Lookup driver data (in real app, get from database)
+    const driver = drivers.find(d => d.phone === phone);
+    
+    if (!driver) {
+        return res.status(404).json({
+            success: false,
+            message: 'Driver not found for this phone number'
+        });
+    }
+
+    const user = {
+        id: driver.id,
+        phone: driver.phone,
+        name: driver.driver_name,
+        driver_name: driver.driver_name,
+        helper_name: driver.helper_name,
+        vehicle_number: driver.vehicle_number,
+        vehicle_type: driver.vehicle_type,
+        zone: driver.zone,
+        status: driver.status
+    };
+
+    console.log('\n✅ OTP VERIFIED SUCCESSFULLY');
+    console.log(`Phone: ${phone}`);
+    console.log(`User: ${user.name}`);
+    console.log(`Permanent Token: ${permanentToken}\n`);
+
+    res.status(200).json({
+        success: true,
+        message: 'Phone number verified successfully',
+        token: permanentToken,
+        refresh_token: `refresh_${Date.now()}`,
+        user: user
+    });
 });
 
-// GET /api/history - Fetch delivery history with optimized response
-app.get('/api/history', async (req, res) => {
-    let client;
-    try {
-        client = await pool.connect();
-        const result = await client.query(`
-            SELECT 
-                o.id,
-                o.order_number,
-                o.status,
-                o.created_at,
-                o.updated_at,
-                o.customer_name,
-                o.customer_phone,
-                o.customer_email,
-                o.customer_address,
-                o.latitude,
-                o.longitude,
-                o.delivery_instructions,
-                o.five_litre_bottles,
-                o.ten_litre_bottles,
-                o.three_hundred_ml_bottles,
-                o.one_litre_bottles,
-                o.twenty_litre_bottles,
-                o.water_dispenser,
-                o.total_amount,
-                o.payment_method,
-                o.payment_status,
-                o.delivery_zone,
-                o.assigned_at,
-                o.completed_at
-            FROM orders o 
-            WHERE o.status IN ('delivered', 'failed', 'cancelled')
-            ORDER BY o.delivered_at DESC, o.created_at DESC
-        `);
-        
-        // Return optimized flat structure
-        const orders = result.rows.map(row => ({
-            id: row.id.toString(),
-            order_number: row.order_number,
-            status: row.status,
-            created_at: row.created_at,
-            updated_at: row.updated_at,
-            customer_name: row.customer_name,
-            customer_phone: row.customer_phone,
-            customer_email: row.customer_email,
-            customer_address: row.customer_address,
-            latitude: row.latitude,
-            longitude: row.longitude,
-            delivery_instructions: row.delivery_instructions,
-            five_litre_bottles: row.five_litre_bottles || 0,
-            ten_litre_bottles: row.ten_litre_bottles || 0,
-            three_hundred_ml_bottles: row.three_hundred_ml_bottles || 0,
-            one_litre_bottles: row.one_litre_bottles || 0,
-            twenty_litre_bottles: row.twenty_litre_bottles || 0,
-            water_dispenser: row.water_dispenser || 0,
-            total_amount: row.total_amount || 0,
-            payment_method: row.payment_method || 'cash',
-            payment_status: row.payment_status || 'pending',
-            delivery_zone: row.delivery_zone,
-            assigned_at: row.assigned_at,
-            completed_at: row.completed_at
-        }));
-        
-        res.status(200).json(orders);
-    } catch (err) {
-        console.error('Error fetching delivery history:', err.stack);
-        res.status(500).json({ error: 'Internal Server Error', details: err.message });
-    } finally {
-        if (client) {
-            client.release();
-        }
-    }
-});
+// POST /api/auth/resend-otp
+app.post('/api/auth/resend-otp', async (req, res) => {
+    const { phone } = req.body;
+    const authHeader = req.headers.authorization;
+    const tempToken = authHeader?.replace('Bearer ', '');
 
-// PUT /api/orders/:id/status - Update order status (MISSING ENDPOINT)
-app.put('/api/orders/:id/status', async (req, res) => {
-    const { id } = req.params;
-    const { status, failure_reason, failure_note } = req.body;
-
-    // Validation
-    if (!status) {
-        return res.status(400).json({ error: 'Status is required.' });
+    if (!tempToken) {
+        return res.status(401).json({
+            success: false,
+            message: 'Invalid temporary token'
+        });
     }
 
-    const validStatuses = ['pending', 'assigned', 'in_progress', 'delivered', 'failed', 'cancelled'];
-    if (!validStatuses.includes(status)) {
-        return res.status(400).json({ error: 'Invalid status value.' });
+    if (!phone) {
+        return res.status(400).json({
+            success: false,
+            message: 'Phone number is required'
+        });
     }
 
-    let client;
-    try {
-        client = await pool.connect();
-        
-        // Build dynamic update query based on status
-        let updateFields = ['status = $2', 'updated_at = NOW()'];
-        let values = [id, status];
-        let paramCount = 2;
+    // Clean expired OTPs
+    cleanExpiredOTPs();
 
-        if (status === 'in_progress') {
-            updateFields.push('started_at = NOW()');
-        } else if (status === 'delivered') {
-            updateFields.push('delivered_at = NOW()');
-            updateFields.push('completed_at = NOW()');
-        } else if (status === 'failed') {
-            if (failure_reason) {
-                paramCount++;
-                updateFields.push(`failure_reason = $${paramCount}`);
-                values.push(failure_reason);
-            }
-            if (failure_note) {
-                paramCount++;
-                updateFields.push(`failure_note = $${paramCount}`);
-                values.push(failure_note);
-            }
-        }
+    // Get existing data to verify temp token
+    const existingData = otpStore.get(phone);
+    
+    if (!existingData || existingData.tempToken !== tempToken) {
+        return res.status(401).json({
+            success: false,
+            message: 'Invalid temporary token'
+        });
+    }
 
-        const query = `UPDATE orders SET ${updateFields.join(', ')} WHERE id = $1 RETURNING *`;
-        const result = await client.query(query, values);
+    // Generate new OTP
+    const newOtp = generateOTP();
 
-        if (result.rows.length === 0) {
-            return res.status(404).json({ error: 'Order not found.' });
-        }
+    // Update stored OTP
+    otpStore.set(phone, {
+        otp: newOtp,
+        tempToken: tempToken, // Keep same temp token
+        expiresAt: Date.now() + (10 * 60 * 1000) // 10 minutes
+    });
+
+    // Log new OTP to console
+    console.log('\n========================================');
+    console.log('📱 OTP RESENT');
+    console.log('========================================');
+    console.log(`Phone: ${phone}`);
+    console.log(`New OTP Code: ${newOtp}`);
+    console.log(`Temp Token: ${tempToken}`);
+    console.log(`Expires in: 10 minutes`);
+    console.log('========================================\n');
 
         res.status(200).json({ 
-            message: 'Order status updated successfully',
-            order: result.rows[0]
+        success: true,
+        message: 'OTP resent to your phone number'
+    });
+});
+
+// GET /api/auth/me
+app.get('/api/auth/me', async (req, res) => {
+    const authHeader = req.headers.authorization;
+    const token = authHeader?.replace('Bearer ', '');
+
+    if (!token || !token.startsWith('perm_')) {
+        return res.status(401).json({
+            success: false,
+            message: 'Invalid or expired token'
         });
-    } catch (err) {
-        console.error('Error updating order status:', err.stack);
-        res.status(500).json({ error: 'Internal Server Error', details: err.message });
-    } finally {
-        if (client) {
-            client.release(); 
-        }
     }
+
+    // Dummy user data
+    const user = {
+        id: 'b97f3fc1-0708-4b97-bf5d-deb424b2cd93',
+        name: 'Ahmed Al-Rashid',
+        phone: '+971501234567',
+        email: 'ahmed@example.com',
+        status: 'approved'
+    };
+
+    res.status(200).json({
+        success: true,
+        user: user
+    });
 });
 
-// POST /api/orders - Create new order 
-app.post('/api/orders', async (req, res) => {
-    const {
-        customer_name,
-        customer_phone,
-        customer_email,
-        customer_address,
-        latitude,
-        longitude,
-        delivery_instructions,
-        five_litre_bottles,
-        ten_litre_bottles,
-        three_hundred_ml_bottles,
-        one_litre_bottles,
-        twenty_litre_bottles,
-        water_dispenser,
-        subtotal,
-        delivery_fee,
-        vat,
-        total_amount,
-        payment_method,
-        scheduled_time,
-        distance_km,
-        delivery_zone
-    } = req.body;
-
-    // Basic validation
-    if (!customer_name || !customer_phone || !customer_address) {
-        return res.status(400).json({ error: 'Customer name, phone, and address are required.' });
-    }
-
-    let client;
-    try {
-        client = await pool.connect(); 
-        const result = await client.query(`
-            INSERT INTO orders (
-                order_number, status, priority, customer_name, customer_phone, customer_email,
-                customer_address, latitude, longitude, delivery_instructions, five_litre_bottles,
-                ten_litre_bottles, three_hundred_ml_bottles, one_litre_bottles, twenty_litre_bottles,
-                water_dispenser, subtotal, delivery_fee, vat, total_amount, payment_method,
-                scheduled_time, distance_km, delivery_zone
-            ) VALUES (
-                $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24
-            ) RETURNING *
-        `, [
-            `ORD-${Date.now()}`, // order_number
-            'pending', // status
-            'normal', // priority
-            customer_name,
-            customer_phone,
-            customer_email,
-            customer_address,
-            latitude,
-            longitude,
-            delivery_instructions,
-            five_litre_bottles || 0,
-            ten_litre_bottles || 0,
-            three_hundred_ml_bottles || 0,
-            one_litre_bottles || 0,
-            twenty_litre_bottles || 0,
-            water_dispenser || 0,
-            subtotal || 0,
-            delivery_fee || 0,
-            vat || 0,
-            total_amount || 0,
-            payment_method || 'cash',
-            scheduled_time,
-            distance_km || 0,
-            delivery_zone
-        ]);
-
-        res.status(201).json(result.rows[0]);
-    } catch (err) {
-        console.error('Error creating order:', err.stack);
-        res.status(500).json({ error: 'Internal Server Error', details: err.message });
-    } finally {
-        if (client) {
-            client.release(); 
-        }
-    }
+// POST /api/auth/logout
+app.post('/api/auth/logout', async (req, res) => {
+    res.status(200).json({
+        success: true,
+        message: 'Logged out successfully'
+    });
 });
 
-// GET /api/products - Fetch all available products
-app.get('/api/products', async (req, res) => {
-    let client;
-    try {
-        client = await pool.connect();
-        const result = await client.query(`
-            SELECT 
-                id,
-                name,
-                description,
-                price,
-                unit,
-                available_stock,
-                category,
-                image_url,
-                is_active
-            FROM products 
-            WHERE is_active = true AND available_stock > 0
-            ORDER BY category, name ASC
-        `);
-        
-        const products = result.rows.map(row => ({
-            id: row.id,
-            name: row.name,
-            description: row.description,
-            price: parseFloat(row.price),
-            unit: row.unit,
-            available_stock: row.available_stock,
-            category: row.category,
-            image_url: row.image_url,
-            is_active: row.is_active
-        }));
-        
-        res.status(200).json(products);
-    } catch (err) {
-        console.error('Error fetching products:', err.stack);
-        res.status(500).json({ error: 'Internal Server Error', details: err.message });
-    } finally {
-        if (client) {
-            client.release(); 
+// ============================================
+// ORDER ENDPOINTS
+// ============================================
+
+// GET /api/driver/orders
+app.get('/api/driver/orders', async (req, res) => {
+    const { driver_id } = req.query;
+
+    // Dummy orders data
+    const orders = [
+        {
+            id: '1',
+            order_number: 'ORD-001',
+            status: 'pending',
+            customer_name: 'Mohammed Ali',
+            customer_phone: '+971501111111',
+            customer_email: 'mohammed@example.com',
+            customer_address: '123 Sheikh Zayed Road, Dubai',
+            latitude: 25.2048,
+            longitude: 55.2708,
+            delivery_instructions: 'Ring doorbell twice',
+            start_time: '09:00',
+            end_time: '17:00',
+            total_amount: 45.50,
+            payment_method: 'cash',
+            payment_status: 'pending',
+            delivery_zone: 'Dubai Marina',
+            customer_site_id: 'site_001',
+            customer_id: 'cust_001',
+            products: {
+                five_litre_bottles: 5,
+                ten_litre_bottles: 2
+            },
+            created_at: new Date().toISOString(),
+            updated_at: new Date().toISOString()
+        },
+        {
+            id: '2',
+            order_number: 'ORD-002',
+            status: 'assigned',
+            customer_name: 'Fatima Hassan',
+            customer_phone: '+971502222222',
+            customer_email: 'fatima@example.com',
+            customer_address: '456 Jumeirah Beach Road, Dubai',
+            latitude: 25.1972,
+            longitude: 55.2278,
+            delivery_instructions: 'Leave at reception',
+            start_time: '10:00',
+            end_time: '18:00',
+            total_amount: 32.00,
+            payment_method: 'wallet',
+            payment_status: 'paid',
+            delivery_zone: 'Jumeirah',
+            customer_site_id: 'site_002',
+            customer_id: 'cust_002',
+            products: {
+                five_litre_bottles: 3,
+                three_hundred_ml_bottles: 10
+            },
+            created_at: new Date().toISOString(),
+            updated_at: new Date().toISOString()
+        },
+        {
+            id: '3',
+            order_number: 'ORD-003',
+            status: 'in_progress',
+            customer_name: 'Omar Khalid',
+            customer_phone: '+971503333333',
+            customer_email: 'omar@example.com',
+            customer_address: '789 Business Bay, Dubai',
+            latitude: 25.1868,
+            longitude: 55.2644,
+            delivery_instructions: 'Call before arrival',
+            start_time: '08:00',
+            end_time: '16:00',
+            total_amount: 67.25,
+            payment_method: 'cash',
+            payment_status: 'pending',
+            delivery_zone: 'Business Bay',
+            customer_site_id: 'site_003',
+            customer_id: 'cust_003',
+            products: {
+                ten_litre_bottles: 4,
+                water_dispenser: 1
+            },
+            created_at: new Date().toISOString(),
+            updated_at: new Date().toISOString()
         }
-    }
+    ];
+
+    res.status(200).json({
+        success: true,
+        data: orders
+    });
 });
 
-// POST /api/orders/confirm-payment - Confirm payment and create order
-app.post('/api/orders/confirm-payment', async (req, res) => {
-    const {
-        customer_name,
-        customer_phone,
-        customer_email,
-        customer_address,
-        latitude,
-        longitude,
-        delivery_instructions,
-        products,
-        subtotal,
-        vat,
-        total_amount,
-        payment_method,
-        delivery_zone
-    } = req.body;
+// GET /api/driver/history
+app.get('/api/driver/history', async (req, res) => {
+    const { driver_id } = req.query;
 
-    // Validation
-    if (!customer_name || !customer_phone || !customer_address) {
-        return res.status(400).json({ error: 'Customer name, phone, and address are required.' });
-    }
+    console.log('\n📋 Delivery History Request');
+    console.log('Driver ID:', driver_id);
 
-    if (!products || !Array.isArray(products) || products.length === 0) {
-        return res.status(400).json({ error: 'Products are required.' });
-    }
-
-    let client;
-    try {
-        client = await pool.connect(); 
-        
-        // Start transaction
-        await client.query('BEGIN');
-        
-        // Generate order number
-        const orderNumber = `ORD-${Date.now()}`;
-        
-        // Create order
-        const orderResult = await client.query(`
-            INSERT INTO orders (
-                order_number, status, priority, customer_name, customer_phone, customer_email,
-                customer_address, latitude, longitude, delivery_instructions,
-                five_litre_bottles, ten_litre_bottles, three_hundred_ml_bottles,
-                one_litre_bottles, twenty_litre_bottles, water_dispenser,
-                subtotal, delivery_fee, vat, total_amount, payment_method,
-                payment_status, delivery_zone, created_at, updated_at
-            ) VALUES (
-                $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, NOW(), NOW()
-            ) RETURNING id, order_number, created_at
-        `, [
-            orderNumber,
-            'pending',
-            'normal',
-            customer_name,
-            customer_phone,
-            customer_email,
-            customer_address,
-            latitude,
-            longitude,
-            delivery_instructions,
-            products.find(p => p.name === '5L Bottle')?.quantity || 0,
-            products.find(p => p.name === '10L Bottle')?.quantity || 0,
-            products.find(p => p.name === '300ml Bottle')?.quantity || 0,
-            products.find(p => p.name === '1L Bottle')?.quantity || 0,
-            products.find(p => p.name === '20L Bottle')?.quantity || 0,
-            products.find(p => p.name === 'Water Dispenser')?.quantity || 0,
-            subtotal,
-            0, // delivery_fee
-            vat,
-            total_amount,
-            payment_method,
-            'paid',
-            delivery_zone
-        ]);
-
-        const order = orderResult.rows[0];
-        
-        // Update product stock
-        for (const product of products) {
-            if (product.quantity > 0) {
-                await client.query(`
-                    UPDATE products 
-                    SET available_stock = available_stock - $1, updated_at = NOW()
-                    WHERE name = $2 AND available_stock >= $1
-                `, [product.quantity, product.name]);
+    // Dummy delivery history (completed, failed, cancelled orders)
+    const history = [
+        {
+            id: '101',
+            order_number: 'ORD-101',
+            status: 'delivered',
+            customer_name: 'Sarah Ahmed',
+            customer_phone: '+971504444444',
+            customer_email: 'sarah@example.com',
+            customer_address: '321 Al Barsha, Dubai',
+            latitude: 25.1172,
+            longitude: 55.2014,
+            total_amount: 28.50,
+            payment_method: 'cash',
+            payment_status: 'paid',
+            delivery_zone: 'Al Barsha',
+            customer_site_id: 'site_101',
+            customer_id: 'cust_001',
+            products: {
+                five_litre_bottles: 3
+            },
+            created_at: new Date(Date.now() - 86400000).toISOString(),
+            assigned_at: new Date(Date.now() - 86400000).toISOString(),
+            completed_at: new Date(Date.now() - 82800000).toISOString(),
+            delivery: {
+                delivered_at: new Date(Date.now() - 82800000).toISOString()
+            }
+        },
+        {
+            id: '102',
+            order_number: 'ORD-102',
+            status: 'failed',
+            customer_name: 'Khalid Ibrahim',
+            customer_phone: '+971505555555',
+            customer_email: 'khalid@example.com',
+            customer_address: '654 Deira, Dubai',
+            latitude: 25.2653,
+            longitude: 55.3093,
+            total_amount: 35.00,
+            payment_method: 'wallet',
+            payment_status: 'refunded',
+            delivery_zone: 'Deira',
+            customer_site_id: 'site_102',
+            customer_id: 'cust_002',
+            products: {
+                ten_litre_bottles: 2
+            },
+            created_at: new Date(Date.now() - 172800000).toISOString(),
+            assigned_at: new Date(Date.now() - 172800000).toISOString(),
+            completed_at: null,
+            delivery: {
+                delivered_at: null
+            }
+        },
+        {
+            id: '103',
+            order_number: 'ORD-103',
+            status: 'delivered',
+            customer_name: 'Layla Mohammed',
+            customer_phone: '+971506666666',
+            customer_email: 'layla@example.com',
+            customer_address: '987 Downtown Dubai',
+            latitude: 25.1972,
+            longitude: 55.2794,
+            total_amount: 52.75,
+            payment_method: 'cash',
+            payment_status: 'paid',
+            delivery_zone: 'Downtown',
+            customer_site_id: 'site_103',
+            customer_id: 'cust_003',
+            products: {
+                five_litre_bottles: 4,
+                one_litre_bottles: 5
+            },
+            created_at: new Date(Date.now() - 259200000).toISOString(),
+            assigned_at: new Date(Date.now() - 259200000).toISOString(),
+            completed_at: new Date(Date.now() - 255600000).toISOString(),
+            delivery: {
+                delivered_at: new Date(Date.now() - 255600000).toISOString()
+            }
+        },
+        {
+            id: '104',
+            order_number: 'ORD-104',
+            status: 'cancelled',
+            customer_name: 'Omar Hassan',
+            customer_phone: '+971507777777',
+            customer_email: 'omar@example.com',
+            customer_address: '456 Business Bay, Dubai',
+            latitude: 25.1868,
+            longitude: 55.2650,
+            total_amount: 45.00,
+            payment_method: 'wallet',
+            payment_status: 'refunded',
+            delivery_zone: 'Business Bay',
+            customer_site_id: 'site_104',
+            customer_id: 'cust_001',
+            products: {
+                ten_litre_bottles: 3
+            },
+            created_at: new Date(Date.now() - 345600000).toISOString(),
+            assigned_at: new Date(Date.now() - 345600000).toISOString(),
+            completed_at: null,
+            delivery: {
+                delivered_at: null
             }
         }
-        
-        // Commit transaction
-        await client.query('COMMIT');
-        
+    ];
+
+    console.log(`✅ Returning ${history.length} history items`);
+
+    res.status(200).json({
+        success: true,
+        data: history
+    });
+});
+
+// GET /api/driver/failed-deliveries (also supports /api/failed-deliveries)
+app.get('/api/driver/failed-deliveries', async (req, res) => {
+    const { driver_id } = req.query;
+
+    const failedDeliveries = [
+        {
+            id: '201',
+            order_number: 'ORD-201',
+            status: 'failed',
+            customer_name: 'Ahmed Saleh',
+            customer_phone: '+971507777777',
+            customer_address: '111 Al Qusais, Dubai',
+            failure_reason: 'Customer not available',
+            failure_notes: 'Tried calling multiple times, no response',
+            created_at: new Date(Date.now() - 43200000).toISOString()
+        },
+        {
+            id: '202',
+            order_number: 'ORD-202',
+            status: 'failed',
+            customer_name: 'Mariam Ali',
+            customer_phone: '+971508888888',
+            customer_address: '222 Al Nahda, Dubai',
+            failure_reason: 'Wrong address',
+            failure_notes: 'Address provided does not exist',
+            created_at: new Date(Date.now() - 86400000).toISOString()
+        }
+    ];
+
+    res.status(200).json(failedDeliveries);
+});
+
+// POST /api/failed-deliveries/submit
+app.post('/api/failed-deliveries/submit', async (req, res) => {
+    const { driver_id } = req.query;
+    const failureData = req.body;
+
+        res.status(200).json({ 
+        success: true,
+        message: 'Failed delivery report submitted successfully',
+        failure_id: `FAIL-${Date.now()}`
+    });
+});
+
+// Dummy customer wallet data (in production, fetch from database)
+// Each customer has their own wallet balance that they deposited
+const customerWallets = {
+    'cust_001': { balance: 500.00, currency: 'AED' },
+    'cust_002': { balance: 250.00, currency: 'AED' },
+    'cust_003': { balance: 100.00, currency: 'AED' },
+    // Default wallet for unknown customers
+    'default': { balance: 0.00, currency: 'AED' }
+};
+
+// Helper function to get customer wallet balance
+function getCustomerWallet(customerId) {
+    return customerWallets[customerId] || customerWallets['default'];
+}
+
+// POST /api/driver/orders/validate-payment
+app.post('/api/driver/orders/validate-payment', async (req, res) => {
+    const { payment_method, amount, order_id, customer_id } = req.body;
+
+    console.log('\n📋 Payment Validation Request');
+    console.log('Payment Method:', payment_method);
+    console.log('Amount:', amount);
+    console.log('Order ID:', order_id);
+    console.log('Customer ID:', customer_id);
+
+    // Validate required fields
+    if (!payment_method) {
+        return res.status(400).json({
+            success: false,
+            message: 'Payment method is required'
+        });
+    }
+
+    if (!amount || typeof amount !== 'number' || amount <= 0) {
+        return res.status(400).json({
+            success: false,
+            message: 'Valid amount is required'
+        });
+    }
+
+    // Validate payment method (must be 'cash' or 'wallet' ONLY)
+    const validMethods = ['cash', 'wallet'];
+    const normalizedMethod = payment_method.toLowerCase();
+    console.log(`🔍 Validating payment method: "${normalizedMethod}" against valid methods: [${validMethods.join(', ')}]`);
+    
+    if (!validMethods.includes(normalizedMethod)) {
+        console.log(`❌ Invalid payment method: "${normalizedMethod}"`);
+        return res.status(400).json({
+            success: false,
+            message: 'Invalid payment method. Must be "cash" or "wallet"'
+        });
+    }
+    
+    console.log(`✅ Payment method "${normalizedMethod}" is valid`);
+
+    // Validate amount (should be positive and reasonable)
+    if (amount < 0.01) {
+        return res.status(400).json({
+            success: false,
+            message: 'Amount must be greater than 0'
+        });
+    }
+
+    // If wallet payment method, validate wallet balance
+    if (normalizedMethod === 'wallet') {
+        if (!customer_id) {
+            return res.status(400).json({
+                success: false,
+                message: 'Customer ID is required for wallet payment'
+            });
+        }
+
+        // Get customer wallet balance (in production, fetch from database)
+        const wallet = getCustomerWallet(customer_id);
+        const walletBalance = wallet.balance;
+
+        console.log(`💰 Wallet Check - Customer: ${customer_id}, Balance: ${walletBalance}, Required: ${amount}`);
+
+        if (walletBalance < amount) {
+            return res.status(400).json({
+                success: false,
+                message: `Insufficient wallet balance. Available: ${wallet.currency} ${walletBalance.toFixed(2)}, Required: ${wallet.currency} ${amount.toFixed(2)}`,
+                wallet_balance: walletBalance,
+                required_amount: amount,
+                insufficient: true
+            });
+        }
+
+        console.log(`✅ Wallet balance sufficient: ${walletBalance} >= ${amount}`);
+    }
+
+    console.log('✅ Payment validation successful');
+    res.status(200).json({
+        success: true,
+        message: 'Payment method and amount validated successfully',
+        validated: true,
+        payment_method: normalizedMethod,
+        amount: amount,
+        ...(normalizedMethod === 'wallet' && {
+            wallet_balance: getCustomerWallet(customer_id).balance
+        })
+    });
+});
+
+// POST /api/driver/orders/confirm-payment
+app.post('/api/driver/orders/confirm-payment', async (req, res) => {
+    const { driver_id } = req.query;
+    const orderData = req.body;
+
+    const order = {
+        id: `order_${Date.now()}`,
+        order_number: `ORD-${Date.now()}`,
+        created_at: new Date().toISOString(),
+        total_amount: orderData.total_amount,
+        payment_method: orderData.payment_method,
+        status: 'pending'
+    };
+
+    res.status(201).json({
+        success: true,
+        message: `Order ${order.order_number} has been created successfully.`,
+        order: order
+    });
+});
+
+// POST /api/driver/direct-sales
+app.post('/api/driver/direct-sales', async (req, res) => {
+    const saleData = req.body;
+
+    console.log('\n💰 Direct Sale Request');
+    console.log('Driver ID:', saleData.driver_id);
+    console.log('Customer:', saleData.customer_name);
+    console.log('Phone:', saleData.customer_phone);
+    console.log('Location:', saleData.latitude, saleData.longitude);
+    console.log('Products:', saleData.products);
+    console.log('Total Amount:', saleData.total_amount);
+
+    // Validate required fields
+    if (!saleData.driver_id) {
+        return res.status(400).json({ 
+            success: false,
+            message: 'Driver ID is required'
+        });
+    }
+
+    if (!saleData.customer_name || !saleData.customer_name.trim()) {
+        return res.status(400).json({ 
+            success: false,
+            message: 'Customer name is required'
+        });
+    }
+
+    if (!saleData.customer_phone || !saleData.customer_phone.trim()) {
+        return res.status(400).json({ 
+            success: false,
+            message: 'Customer phone number is required'
+        });
+    }
+
+    if (!saleData.latitude || !saleData.longitude) {
+        return res.status(400).json({
+            success: false,
+            message: 'Location coordinates are required'
+        });
+    }
+
+    if (!saleData.products || !Array.isArray(saleData.products) || saleData.products.length === 0) {
+        return res.status(400).json({
+            success: false,
+            message: 'At least one product is required'
+        });
+    }
+
+    if (!saleData.total_amount || saleData.total_amount <= 0) {
+        return res.status(400).json({
+            success: false,
+            message: 'Valid total amount is required'
+        });
+    }
+
+    // Create sale record
+    const sale = {
+        id: `sale_${Date.now()}`,
+        sale_number: `DS-${Date.now()}`,
+        driver_id: saleData.driver_id,
+        customer_name: saleData.customer_name.trim(),
+        customer_phone: saleData.customer_phone.trim(),
+        latitude: saleData.latitude,
+        longitude: saleData.longitude,
+        address: saleData.address || 'Location from device',
+        products: saleData.products,
+        subtotal: saleData.subtotal,
+        vat: saleData.vat,
+        total_amount: saleData.total_amount,
+        payment_method: 'cash', // Always cash for direct sales
+        payment_status: 'paid',
+        sale_date: saleData.sale_date || new Date().toISOString(),
+        created_at: new Date().toISOString()
+    };
+
+    console.log('✅ Direct sale created:', sale.sale_number);
+
         res.status(201).json({
             success: true,
-            message: 'Payment confirmed and order created successfully',
-            order: {
-                id: order.id,
-                order_number: order.order_number,
-                created_at: order.created_at,
-                total_amount: total_amount,
-                payment_method: payment_method,
-                status: 'pending'
-            }
-        });
-        
-    } catch (err) {
-        // Rollback transaction on error
-        await client.query('ROLLBACK');
-        console.error('Error confirming payment:', err.stack);
-        res.status(500).json({ error: 'Internal Server Error', details: err.message });
-    } finally {
-        if (client) {
-            client.release(); 
-        }
-    }
+        message: `Direct sale ${sale.sale_number} has been recorded successfully.`,
+        sale: sale
+    });
 });
 
-// POST /api/submit_expense - Submit expense request
-app.post('/api/submit_expense', async (req, res) => {
-    const {
-        driver_id,
-        type,
-        amount,
-        description,
-        receipt_image,
-        submission_date
-    } = req.body;
+// ============================================
+// LOADED/UNLOADED ITEMS ENDPOINTS
+// ============================================
 
-    // Validation
-    if (!driver_id || !type || !amount) {
-        return res.status(400).json({ 
-            error: 'Driver ID, expense type, and amount are required.' 
-        });
-    }
+// GET /api/drivers/:driver_id/loaded-items/request
+app.get('/api/drivers/:driver_id/loaded-items/request', async (req, res) => {
+    const { driver_id } = req.params;
 
-    if (typeof amount !== 'number' || amount <= 0) {
-        return res.status(400).json({ 
-            error: 'Amount must be a positive number.' 
-        });
-    }
-
-    const validTypes = ['Fuel', 'Parking', 'Toll', 'Maintenance', 'Supplies', 'Other'];
-    if (!validTypes.includes(type)) {
-        return res.status(400).json({ 
-            error: 'Invalid expense type.' 
-        });
-    }
-
-    let client;
-    try {
-        client = await pool.connect();
+    const items = [
+        {
+            id: 'water_5l_001',
+            name: '5L Water Bottles',
+            quantity: 50,
+            unit: 'bottles',
+            category: 'Water',
+            condition: 'full'
+        },
+        {
+            id: 'water_10l_001',
+            name: '10L Water Bottles',
+            quantity: 25,
+            unit: 'bottles',
+            category: 'Water',
+            condition: 'full'
+        },
+        {
+            id: 'water_300ml_001',
+            name: '300ml Water Bottles',
+            quantity: 100,
+            unit: 'bottles',
+            category: 'Water',
+            condition: 'full'
+        },
+        {
+            id: 'dispenser_001',
+            name: 'Water Dispensers',
+            quantity: 5,
+            unit: 'units',
+            category: 'Equipment',
+            condition: 'full'
+        },
+        {
+            id: 'water_1l_001',
+            name: '1L Water Bottles',
+            quantity: 75,
+            unit: 'bottles',
+            category: 'Water',
+            condition: 'full'
+        }
+    ];
         
-        // Generate expense request ID
-        const requestId = `EXP-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
-        
-        // Insert expense request
-        const result = await client.query(`
-            INSERT INTO expenses (
-                request_id, driver_id, type, amount, description, 
-                receipt_image, status, submission_date, created_at, updated_at
-            ) VALUES (
-                $1, $2, $3, $4, $5, $6, $7, $8, NOW(), NOW()
-            ) RETURNING id, request_id, status, created_at
-        `, [
-            requestId,
-            driver_id,
-            type,
-            amount,
-            description || null,
-            receipt_image || null,
-            'pending',
-            submission_date || new Date().toISOString()
-        ]);
+    res.status(200).json({
+        success: true,
+        message: 'Items retrieved successfully',
+        data: items,
+        requested_at: new Date().toISOString()
+    });
+});
 
-        const expense = result.rows[0];
+// POST /api/drivers/:driver_id/loaded-items/confirm
+app.post('/api/drivers/:driver_id/loaded-items/confirm', async (req, res) => {
+    const { driver_id } = req.params;
+    const { items, is_correct, confirmed_at } = req.body;
+
+    res.status(200).json({
+        success: true,
+        message: 'Loaded items confirmed successfully',
+        agreement: {
+            status: is_correct ? 'agreed' : 'disagreed',
+            notes: is_correct ? 'All items verified' : 'Discrepancy noted',
+            final_items: items
+        }
+    });
+});
+        
+// GET /api/drivers/:driver_id/unloaded-items/request
+app.get('/api/drivers/:driver_id/unloaded-items/request', async (req, res) => {
+    const { driver_id } = req.params;
+
+    const items = [
+        {
+            id: 'water_5l_002',
+            name: '5L Water Bottles',
+            quantity: 28,
+            unit: 'bottles',
+            category: 'Water',
+            condition: 'empty'
+        },
+        {
+            id: 'water_10l_002',
+            name: '10L Water Bottles',
+            quantity: 15,
+            unit: 'bottles',
+            category: 'Water',
+            condition: 'full'
+        },
+        {
+            id: 'water_5l_003',
+            name: '5L Water Bottles',
+            quantity: 3,
+            unit: 'bottles',
+            category: 'Water',
+            condition: 'leaked'
+        },
+        {
+            id: 'water_10l_003',
+            name: '10L Water Bottles',
+            quantity: 2,
+            unit: 'bottles',
+            category: 'Water',
+            condition: 'damaged'
+        }
+    ];
+        
+    res.status(200).json({
+            success: true,
+        message: 'Items retrieved successfully',
+        data: items,
+        requested_at: new Date().toISOString()
+    });
+});
+
+// POST /api/drivers/:driver_id/unloaded-items/confirm
+app.post('/api/drivers/:driver_id/unloaded-items/confirm', async (req, res) => {
+    const { driver_id } = req.params;
+    const { items, is_correct, confirmed_at } = req.body;
+
+    res.status(200).json({
+        success: true,
+        message: 'Unloaded items confirmed successfully',
+        agreement: {
+            status: is_correct ? 'agreed' : 'disagreed',
+            notes: is_correct ? 'All items verified' : 'Discrepancy noted',
+            final_items: items
+        }
+    });
+});
+
+// ============================================
+// EXPENSES ENDPOINTS
+// ============================================
+
+// GET /api/expenses
+app.get('/api/expenses', async (req, res) => {
+    const { driver_id, status } = req.query;
+
+    const expenses = [
+        {
+            id: 'exp_001',
+            request_id: 'EXP-001',
+            type: 'Fuel',
+            amount: 150.00,
+            description: 'Gas station refill',
+            receipt_image: null,
+            status: 'pending',
+            submission_date: new Date(Date.now() - 86400000).toISOString(),
+            created_at: new Date(Date.now() - 86400000).toISOString(),
+            updated_at: new Date(Date.now() - 86400000).toISOString(),
+            reviewed_at: null,
+            reviewed_by: null,
+            review_notes: null
+        },
+        {
+            id: 'exp_002',
+            request_id: 'EXP-002',
+            type: 'Parking',
+            amount: 25.00,
+            description: 'Parking fee at delivery location',
+            receipt_image: 'base64_image_data_here',
+            status: 'approved',
+            submission_date: new Date(Date.now() - 172800000).toISOString(),
+            created_at: new Date(Date.now() - 172800000).toISOString(),
+            updated_at: new Date(Date.now() - 86400000).toISOString(),
+            reviewed_at: new Date(Date.now() - 86400000).toISOString(),
+            reviewed_by: 'admin_001',
+            review_notes: 'Approved'
+        },
+        {
+            id: 'exp_003',
+            request_id: 'EXP-003',
+            type: 'Maintenance',
+            amount: 300.00,
+            description: 'Vehicle maintenance',
+            receipt_image: null,
+            status: 'rejected',
+            submission_date: new Date(Date.now() - 259200000).toISOString(),
+            created_at: new Date(Date.now() - 259200000).toISOString(),
+            updated_at: new Date(Date.now() - 172800000).toISOString(),
+            reviewed_at: new Date(Date.now() - 172800000).toISOString(),
+            reviewed_by: 'admin_001',
+            review_notes: 'Receipt required'
+        }
+    ];
+
+    let filteredExpenses = expenses;
+        if (status) {
+        filteredExpenses = expenses.filter(exp => exp.status === status);
+    }
+
+    res.status(200).json(filteredExpenses);
+});
+
+// POST /api/expenses/submit
+app.post('/api/expenses/submit', async (req, res) => {
+    const { driver_id } = req.query;
+    const expenseData = req.body;
+
+    const expense = {
+        id: `exp_${Date.now()}`,
+        request_id: `EXP-${Date.now()}`,
+        status: 'pending',
+        created_at: new Date().toISOString()
+    };
 
         res.status(201).json({
             success: true,
             message: 'Expense request submitted successfully',
-            expense: {
-                id: expense.id,
-                request_id: expense.request_id,
-                status: expense.status,
-                created_at: expense.created_at
+        expense: expense
+    });
+});
+
+// ============================================
+// PRODUCTS ENDPOINTS
+// ============================================
+
+// GET /api/products (also supports /api/driver/products)
+app.get('/api/products', async (req, res) => {
+    const { driver_id, customer_site_id } = req.query;
+
+    const products = [
+        {
+            id: 'prod_001',
+            name: '5L Water Bottle',
+            description: 'Premium 5-liter water bottle',
+            price: 8.50,
+            unit: 'bottle',
+            available_stock: 500,
+            category: 'Water',
+            image_url: 'https://example.com/images/5l-bottle.jpg',
+            is_active: true,
+            customer_site_id: customer_site_id || 'site_001',
+            customer_id: 'cust_001'
+        },
+        {
+            id: 'prod_002',
+            name: '10L Water Bottle',
+            description: 'Premium 10-liter water bottle',
+            price: 15.00,
+            unit: 'bottle',
+            available_stock: 300,
+            category: 'Water',
+            image_url: 'https://example.com/images/10l-bottle.jpg',
+            is_active: true,
+            customer_site_id: customer_site_id || 'site_001',
+            customer_id: 'cust_001'
+        },
+        {
+            id: 'prod_003',
+            name: '300ml Water Bottle',
+            description: 'Compact 300ml water bottle',
+            price: 2.00,
+            unit: 'bottle',
+            available_stock: 1000,
+            category: 'Water',
+            image_url: 'https://example.com/images/300ml-bottle.jpg',
+            is_active: true,
+            customer_site_id: customer_site_id || 'site_001',
+            customer_id: 'cust_001'
+        },
+        {
+            id: 'prod_004',
+            name: '1L Water Bottle',
+            description: 'Standard 1-liter water bottle',
+            price: 3.50,
+            unit: 'bottle',
+            available_stock: 800,
+            category: 'Water',
+            image_url: 'https://example.com/images/1l-bottle.jpg',
+            is_active: true,
+            customer_site_id: customer_site_id || 'site_001',
+            customer_id: 'cust_001'
+        },
+        {
+            id: 'prod_005',
+            name: '20L Water Bottle',
+            description: 'Large 20-liter water bottle',
+            price: 25.00,
+            unit: 'bottle',
+            available_stock: 200,
+            category: 'Water',
+            image_url: 'https://example.com/images/20l-bottle.jpg',
+            is_active: true,
+            customer_site_id: customer_site_id || 'site_001',
+            customer_id: 'cust_001'
+        },
+        {
+            id: 'prod_006',
+            name: 'Water Dispenser',
+            description: 'Premium water dispenser unit',
+            price: 150.00,
+            unit: 'unit',
+            available_stock: 50,
+            category: 'Equipment',
+            image_url: 'https://example.com/images/dispenser.jpg',
+            is_active: true,
+            customer_site_id: customer_site_id || 'site_001',
+            customer_id: 'cust_001'
+        }
+    ];
+
+    res.status(200).json({
+        success: true,
+        message: 'Products retrieved successfully',
+        data: products,
+        count: products.length
+        });
+});
+
+// GET /api/driver/products (alias for /api/products)
+app.get('/api/driver/products', async (req, res) => {
+    const { driver_id, customer_site_id } = req.query;
+
+    const products = [
+        {
+            id: 'prod_001',
+            name: '5L Water Bottle',
+            description: 'Premium 5-liter water bottle',
+            price: 8.50,
+            unit: 'bottle',
+            available_stock: 500,
+            category: 'Water',
+            image_url: 'https://example.com/images/5l-bottle.jpg',
+            is_active: true,
+            customer_site_id: customer_site_id || 'site_001',
+            customer_id: 'cust_001'
+        },
+        {
+            id: 'prod_002',
+            name: '10L Water Bottle',
+            description: 'Premium 10-liter water bottle',
+            price: 15.00,
+            unit: 'bottle',
+            available_stock: 300,
+            category: 'Water',
+            image_url: 'https://example.com/images/10l-bottle.jpg',
+            is_active: true,
+            customer_site_id: customer_site_id || 'site_001',
+            customer_id: 'cust_001'
+        },
+        {
+            id: 'prod_003',
+            name: '300ml Water Bottle',
+            description: 'Compact 300ml water bottle',
+            price: 2.00,
+            unit: 'bottle',
+            available_stock: 1000,
+            category: 'Water',
+            image_url: 'https://example.com/images/300ml-bottle.jpg',
+            is_active: true,
+            customer_site_id: customer_site_id || 'site_001',
+            customer_id: 'cust_001'
+        },
+        {
+            id: 'prod_004',
+            name: '1L Water Bottle',
+            description: 'Standard 1-liter water bottle',
+            price: 3.50,
+            unit: 'bottle',
+            available_stock: 800,
+            category: 'Water',
+            image_url: 'https://example.com/images/1l-bottle.jpg',
+            is_active: true,
+            customer_site_id: customer_site_id || 'site_001',
+            customer_id: 'cust_001'
+        },
+        {
+            id: 'prod_005',
+            name: '20L Water Bottle',
+            description: 'Large 20-liter water bottle',
+            price: 25.00,
+            unit: 'bottle',
+            available_stock: 200,
+            category: 'Water',
+            image_url: 'https://example.com/images/20l-bottle.jpg',
+            is_active: true,
+            customer_site_id: customer_site_id || 'site_001',
+            customer_id: 'cust_001'
+        },
+        {
+            id: 'prod_006',
+            name: 'Water Dispenser',
+            description: 'Premium water dispenser unit',
+            price: 150.00,
+            unit: 'unit',
+            available_stock: 50,
+            category: 'Equipment',
+            image_url: 'https://example.com/images/dispenser.jpg',
+            is_active: true,
+            customer_site_id: customer_site_id || 'site_001',
+            customer_id: 'cust_001'
+        }
+    ];
+
+    res.status(200).json({
+        success: true,
+        message: 'Products retrieved successfully',
+        data: products,
+        count: products.length
+    });
+});
+
+// ============================================
+// HEALTH CHECK
+// ============================================
+
+app.get('/api/health', (req, res) => {
+    res.status(200).json({
+        status: 'ok',
+        message: 'Server is running',
+        timestamp: new Date().toISOString()
+    });
+});
+
+// ============================================
+// START SERVER
+// ============================================
+
+// Get network interfaces to show actual IP
+const os = require('os');
+
+function getNetworkIP() {
+    const interfaces = os.networkInterfaces();
+    for (const name of Object.keys(interfaces)) {
+        for (const iface of interfaces[name] || []) {
+            // Skip internal (loopback) and non-IPv4 addresses
+            if (iface.family === 'IPv4' && !iface.internal) {
+                return iface.address;
             }
-        });
-
-    } catch (err) {
-        console.error('Error submitting expense:', err.stack);
-        res.status(500).json({ 
-            error: 'Internal Server Error', 
-            details: err.message 
-        });
-    } finally {
-        if (client) {
-            client.release();
         }
     }
-});
+    return 'localhost';
+}
 
-// GET /api/expenses/:driver_id - Get expense requests for a driver
-app.get('/api/expenses/:driver_id', async (req, res) => {
-    const { driver_id } = req.params;
-    const { status } = req.query; // Optional filter by status
+const networkIP = getNetworkIP();
 
-    if (!driver_id) {
-        return res.status(400).json({ 
-            error: 'Driver ID is required.' 
-        });
-    }
-
-    let client;
-    try {
-        client = await pool.connect();
-        
-        let query = `
-            SELECT 
-                id,
-                request_id,
-                type,
-                amount,
-                description,
-                receipt_image,
-                status,
-                submission_date,
-                created_at,
-                updated_at,
-                reviewed_at,
-                reviewed_by,
-                review_notes
-            FROM expenses 
-            WHERE driver_id = $1
-        `;
-        
-        let queryParams = [driver_id];
-        
-        // Add status filter if provided
-        if (status) {
-            query += ` AND status = $2`;
-            queryParams.push(status);
-        }
-        
-        query += ` ORDER BY created_at DESC`;
-
-        const result = await client.query(query, queryParams);
-
-        const expenses = result.rows.map(row => ({
-            id: row.id,
-            request_id: row.request_id,
-            type: row.type,
-            amount: parseFloat(row.amount),
-            description: row.description,
-            receipt_image: row.receipt_image,
-            status: row.status,
-            submission_date: row.submission_date,
-            created_at: row.created_at,
-            updated_at: row.updated_at,
-            reviewed_at: row.reviewed_at,
-            reviewed_by: row.reviewed_by,
-            review_notes: row.review_notes
-        }));
-
-        res.status(200).json(expenses);
-
-    } catch (err) {
-        console.error('Error fetching expenses:', err.stack);
-        res.status(500).json({ 
-            error: 'Internal Server Error', 
-            details: err.message 
-        });
-    } finally {
-        if (client) {
-            client.release(); 
-        }
-    }
-});
-
-// --- Start the Server ---
-app.listen(3000, "0.0.0.0", () => {
-    console.log(`Express backend server listening on port ${port}`);
-    console.log(`Access API at http://localhost:${port}/api/users`);
+app.listen(port, '0.0.0.0', () => {
+    console.log(`\n${'='.repeat(60)}`);
+    console.log(`🚀 Al Ghadeer Driver Server is RUNNING`);
+    console.log(`${'='.repeat(60)}`);
+    console.log(`📡 Listening on: 0.0.0.0:${port}`);
+    console.log(`🌐 Network IP: ${networkIP}`);
+    console.log(`\n📍 Access URLs:`);
+    console.log(`   Local:  http://localhost:${port}/api`);
+    console.log(`   Network: http://${networkIP}:${port}/api`);
+    console.log(`\n✅ Health Check:`);
+    console.log(`   http://${networkIP}:${port}/api/health`);
+    console.log(`\n📋 Available endpoints:`);
+    console.log(`   Auth: POST /api/auth/request-otp, /api/auth/verify-otp, /api/auth/resend-otp`);
+    console.log(`   Auth: GET /api/auth/me, POST /api/auth/logout`);
+    console.log(`   Orders: GET /api/driver/orders, GET /api/driver/history`);
+    console.log(`   Items: GET/POST /api/drivers/:driver_id/loaded-items/*`);
+    console.log(`   Items: GET/POST /api/drivers/:driver_id/unloaded-items/*`);
+    console.log(`   Expenses: GET /api/expenses, POST /api/expenses/submit`);
+    console.log(`   Products: GET /api/products`);
+    console.log(`   Payment: POST /api/driver/orders/validate-payment`);
+    console.log(`   Payment: POST /api/driver/orders/confirm-payment`);
+    console.log(`   Direct Sales: POST /api/driver/direct-sales`);
+    console.log(`   Failed: GET/POST /api/driver/failed-deliveries`);
+    console.log(`\n💡 OTP codes will be printed to console for testing`);
+    console.log(`\n⚠️  Make sure your .env file has: EXPO_PUBLIC_IP_ADDRESS=http://${networkIP}:${port}/api`);
+    console.log(`${'='.repeat(60)}\n`);
 });

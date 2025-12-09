@@ -14,7 +14,7 @@ const EXPENSE_TYPES = [
   'Other',
 ];
 
-const IP_ADDRESS = "192.168.0.194:3000/api";
+const IP_ADDRESS = process.env.EXPO_PUBLIC_IP_ADDRESS || 'http://localhost:3000/api';
 
 // API Response interfaces
 interface SubmitExpenseResponse {
@@ -83,7 +83,7 @@ const Expenses = () => {
 
     try {
       setLoadingHistory(true);
-      let url = `http://${IP_ADDRESS}/expenses`;
+      let url = `${IP_ADDRESS}/expenses`;
       url += `?driver_id=${currentDriver.id}`;
       if (status) {
         url += `&status=${status}`;
@@ -184,8 +184,8 @@ const Expenses = () => {
       };
 
       // Submit to server
-      let url = `http://${IP_ADDRESS}/expenses/submit`;
-      url += `?driver_id=+${currentDriver.id}`;
+      let url = `${IP_ADDRESS}/expenses/submit`;
+      url += `?driver_id=${currentDriver.id}`;
       console.log('Submitting expense to:', url);
       console.log('Expense data:', { ...expenseData, receipt_image: receiptBase64 ? 'base64...' : 'none' });
       

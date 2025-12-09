@@ -113,7 +113,7 @@ interface OrderStore {
   cartItems: CartItem[];
   
   // Payment management
-  selectedPaymentMethod: 'cash' | 'card';
+  selectedPaymentMethod: 'cash' | 'wallet';
   
   // Order actions
   selectOrder: (id: string) => void;
@@ -137,7 +137,7 @@ interface OrderStore {
   clearCart: () => void;
   
   // Payment actions
-  setPaymentMethod: (method: 'cash' | 'card') => void;
+  setPaymentMethod: (method: 'cash' | 'wallet') => void;
   
   // Utility actions
   getOrderHistory: () => Order[];
@@ -160,7 +160,7 @@ export const useOrderStore = create<OrderStore>()(persist(
     cartItems: [],
     
     // Payment management state
-    selectedPaymentMethod: 'cash' as 'cash' | 'card',
+    selectedPaymentMethod: 'cash' as 'cash' | 'wallet',
 
     
     // Order management actions
@@ -239,20 +239,20 @@ export const useOrderStore = create<OrderStore>()(persist(
     
     initializeDriver: (user: any) => {
       const driverData: Driver = {
-        id: "b97f3fc1-0708-4b97-bf5d-deb424b2cd93",
-        clerk_id: user.id,
-        name: user.fullName || 'Driver',
-        email: user.emailAddresses[0]?.emailAddress || '',
-        phone: user.primaryPhoneNumber?.phoneNumber || '',
-        profile_image: user.imageUrl,
+        id: user.id || "b97f3fc1-0708-4b97-bf5d-deb424b2cd93",
+        clerk_id: user.id, // Keep for backward compatibility, but will use user.id from auth
+        name: user.driver_name || user.name || user.fullName || 'Driver',
+        helper_name: user.helper_name || '',
+        phone: user.phone || '',
+        profile_image: user.profile_image || user.imageUrl,
         vehicle: {
-          type: 'Van',
-          plate_number: 'ABC-123',
-          model: 'Ford Transit',
+          type: user.vehicle_type || 'Van',
+          plate_number: user.vehicle_number || 'N/A',
+          model: user.vehicle_type || 'N/A',
           year: 2020,
           capacity: 1000
         },
-        status: 'online',
+        status: user.status || 'online',
         current_location: {
           latitude: 0,
           longitude: 0,
@@ -390,7 +390,7 @@ export const useOrderStore = create<OrderStore>()(persist(
     },
     
     // Payment management actions
-    setPaymentMethod: (method: 'cash' | 'card') => {
+    setPaymentMethod: (method: 'cash' | 'wallet') => {
       set({ selectedPaymentMethod: method });
     },
     

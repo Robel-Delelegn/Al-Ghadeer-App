@@ -1,5 +1,3 @@
-import { ClerkProvider } from '@clerk/clerk-expo';
-import { tokenCache } from '@clerk/clerk-expo/token-cache';
 import { useFonts } from 'expo-font';
 import { SplashScreen, Stack } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
@@ -38,10 +36,6 @@ export default function RootLayout() {
   }
 
   return (
-    <ClerkProvider 
-      publishableKey={process.env.EXPO_PUBLIC_CLERK_PUBLISHABLE_KEY!}
-      tokenCache={tokenCache}
-    >
       <PaperProvider theme={appTheme}>
         <StatusBar style="dark" />
         <Stack>
@@ -51,6 +45,5 @@ export default function RootLayout() {
           <Stack.Screen name="+not-found" />
         </Stack>
       </PaperProvider>
-    </ClerkProvider>
   );
 }

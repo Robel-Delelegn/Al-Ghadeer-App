@@ -6,7 +6,7 @@ import { useRouter } from 'expo-router';
 import React, { useCallback, useMemo, useState, useEffect } from 'react';
 import { Alert, Image, ScrollView, Text, TouchableOpacity, View, ActivityIndicator } from 'react-native';
 
-const IP_ADDRESS = "192.168.0.194:3000/api";
+const IP_ADDRESS = process.env.EXPO_PUBLIC_IP_ADDRESS || 'http://localhost:3000/api';
 
 interface ServerProduct {
   customer_site_id?: string;
@@ -173,7 +173,7 @@ const ProductList: React.FC = () => {
       try {
         setLoading(true);
         // Use the driver/products endpoint
-        let url = `http://${IP_ADDRESS}/driver/products`;
+        let url = `${IP_ADDRESS}/driver/products`;
         url += "?driver_id=b97f3fc1-0708-4b97-bf5d-deb424b2cd93";
         
         // Get customer_site_id from the selected order

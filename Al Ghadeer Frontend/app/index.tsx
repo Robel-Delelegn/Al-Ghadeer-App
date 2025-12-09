@@ -1,12 +1,22 @@
 import { Redirect } from 'expo-router';
-import { useAuth } from '@clerk/clerk-expo';
-import { View, ActivityIndicator } from 'react-native';
+import { View, ActivityIndicator, Text } from 'react-native';
+import { useEffect, useState } from 'react';
+import { useAuthStore } from '@/store/auth';
 
 export default function Index() {
-  const { isLoaded, isSignedIn } = useAuth();
+  const { isAuthenticated, checkAuth, isLoading } = useAuthStore();
+  const [isChecking, setIsChecking] = useState(true);
+
+  useEffect(() => {
+    const verifyAuth = async () => {
+      await checkAuth();
+      setIsChecking(false);
+    };
+    verifyAuth();
+  }, [checkAuth]);
 
   // Show loading while checking auth status
-  if (!isLoaded) {
+  if (isChecking || isLoading) {
     return (
       <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center' }}>
         <ActivityIndicator size="large" />
@@ -15,7 +25,7 @@ export default function Index() {
   }
 
   // Redirect based on auth status
-  if (isSignedIn) {
+  if (isAuthenticated) {
     return <Redirect href="/(root)/(tabs)/home" />;
   }
 

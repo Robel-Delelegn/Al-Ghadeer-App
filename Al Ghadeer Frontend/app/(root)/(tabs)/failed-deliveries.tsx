@@ -4,7 +4,7 @@ import { useRouter } from 'expo-router';
 import React, { useState, useCallback, useMemo } from 'react';
 import { Alert, ScrollView, Text, TextInput, TouchableOpacity, View, ActivityIndicator, Modal, Image } from 'react-native';
 
-const IP_ADDRESS = "10.140.136.176/api";
+const IP_ADDRESS = process.env.EXPO_PUBLIC_IP_ADDRESS || 'http://localhost:3000/api';
 
 const FAILURE_REASONS = [
   'Customer not available',
@@ -63,7 +63,7 @@ const FailedDeliveries = () => {
       };
 
       // Send to server
-      const url = `http://${IP_ADDRESS}/failed-deliveries/submit?driver_id=${currentDriver.id}`;
+      const url = `${IP_ADDRESS}/failed-deliveries/submit?driver_id=${currentDriver.id}`;
       console.log('Submitting failed delivery to:', url);
       console.log('Failed delivery data:', failureDetails);
       

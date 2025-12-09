@@ -5,6 +5,8 @@ import { useRouter } from 'expo-router';
 import React, { useCallback, useState } from 'react';
 import { ActivityIndicator, Alert, Image, ScrollView, Text, TouchableOpacity, View } from 'react-native';
 
+const IP_ADDRESS = process.env.EXPO_PUBLIC_IP_ADDRESS || 'http://localhost:3000/api';
+
 const Checkout: React.FC = () => {
   const router = useRouter();
   const { 
@@ -45,25 +47,76 @@ const Checkout: React.FC = () => {
 
 
 
-  const handleContinueToPayment = useCallback(() => {
+  const handleContinueToPayment = useCallback(async () => {
     if (cartItems.length === 0) {
       Alert.alert('Empty Cart', 'Please add items to your cart.');
       return;
     }
-    
-    // Payment method is already stored in the order store
-    console.log('Selected payment method:', selectedPaymentMethod);
+
+    if (!selectedPaymentMethod) {
+      Alert.alert('Payment Method Required', 'Please select a payment method.');
+      return;
+    }
     
     setIsLoading(true);
+    
     try {
-      // Navigate to payment confirmation page
+      // Prepare validation data
+      const validationData = {
+        payment_method: selectedPaymentMethod.toLowerCase(),
+        amount: parseFloat(totalWithVat),
+        order_id: orderDetail?.id || orderDetail?.order_number || null,
+        customer_id: orderDetail?.customer_id || orderDetail?.customer?.id || null
+      };
+
+      console.log('Validating payment:', validationData);
+
+      // Call validation endpoint
+      const response = await fetch(`${IP_ADDRESS}/driver/orders/validate-payment`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(validationData),
+      });
+
+      const result = await response.json();
+      console.log('Payment validation response:', result);
+
+      if (!response.ok || !result.success) {
+        // Validation failed - show popup and go back
+        Alert.alert(
+          'Payment Validation Failed',
+          result.message || 'Payment method or amount is invalid. Please check and try again.',
+          [
+            {
+              text: 'OK',
+              onPress: () => router.back()
+            }
+          ]
+        );
+        return;
+      }
+
+      // Validation successful - proceed to payment confirmation
+      console.log('✅ Payment validated, proceeding to confirmation');
       router.push('/(root)/(tabs)/payment-confirmation');
     } catch (error) {
-      Alert.alert('Error', 'Failed to proceed. Please try again.');
+      console.error('Payment validation error:', error);
+      Alert.alert(
+        'Validation Error',
+        error instanceof Error ? error.message : 'Failed to validate payment. Please try again.',
+        [
+          {
+            text: 'OK',
+            onPress: () => router.back()
+          }
+        ]
+      );
     } finally {
       setIsLoading(false);
     }
-  }, [cartItems, router, selectedPaymentMethod]);
+  }, [cartItems, router, selectedPaymentMethod, totalWithVat, orderDetail]);
 
   return (
     <View style={{ flex: 1, backgroundColor: '#F8F9FA' }}>
@@ -384,10 +437,10 @@ const Checkout: React.FC = () => {
                 padding: 16, 
                 borderRadius: 8, 
                 borderWidth: 2, 
-                backgroundColor: selectedPaymentMethod === 'card' ? '#E3F2FD' : '#F8F9FA',
-                borderColor: selectedPaymentMethod === 'card' ? '#1976D2' : '#E9ECEF'
+                backgroundColor: selectedPaymentMethod === 'wallet' ? '#E3F2FD' : '#F8F9FA',
+                borderColor: selectedPaymentMethod === 'wallet' ? '#1976D2' : '#E9ECEF'
               }}
-              onPress={() => setPaymentMethod('card')}
+              onPress={() => setPaymentMethod('wallet')}
             >
               <View style={{ 
                 width: 20, 
@@ -395,12 +448,12 @@ const Checkout: React.FC = () => {
                 borderRadius: 10, 
                 borderWidth: 2, 
                 marginRight: 8,
-                backgroundColor: selectedPaymentMethod === 'card' ? '#1976D2' : 'transparent',
-                borderColor: selectedPaymentMethod === 'card' ? '#1976D2' : '#6C757D',
+                backgroundColor: selectedPaymentMethod === 'wallet' ? '#1976D2' : 'transparent',
+                borderColor: selectedPaymentMethod === 'wallet' ? '#1976D2' : '#6C757D',
                 alignItems: 'center',
                 justifyContent: 'center'
               }}>
-                {selectedPaymentMethod === 'card' && (
+                {selectedPaymentMethod === 'wallet' && (
                   <View style={{ 
                     width: 8, 
                     height: 8, 
@@ -410,17 +463,17 @@ const Checkout: React.FC = () => {
                 )}
               </View>
               <Ionicons 
-                name="card" 
+                name="wallet" 
                 size={20} 
-                color={selectedPaymentMethod === 'card' ? '#1976D2' : '#6C757D'} 
+                color={selectedPaymentMethod === 'wallet' ? '#1976D2' : '#6C757D'} 
               />
               <Text style={{ 
-                color: selectedPaymentMethod === 'card' ? '#1976D2' : '#6C757D', 
+                color: selectedPaymentMethod === 'wallet' ? '#1976D2' : '#6C757D', 
                 fontSize: 14, 
                 fontWeight: '600', 
                 marginLeft: 8 
               }}>
-                Card
+                Wallet
               </Text>
             </TouchableOpacity>
           </View>

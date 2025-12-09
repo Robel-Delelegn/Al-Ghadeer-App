@@ -3,18 +3,19 @@ import MyMap from '@/components/map';
 import { icons, images } from '@/constants';
 import { useLocationStore, useOrderStore } from '@/store/index';
 import { Order } from '@/types/order';
-import { useUser } from '@clerk/clerk-expo';
+import { useAuthStore } from '@/store/auth';
 import * as Location from 'expo-location';
 import { useRouter } from 'expo-router';
 import React, { useEffect, useState } from 'react';
 import { FlatList, Image, Text, TextInput, TouchableOpacity, View } from 'react-native';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import { ActivityIndicator } from 'react-native-paper';
+import { Ionicons } from '@expo/vector-icons';
 
 const formatDate = (date: Date) =>
   date.toLocaleDateString(undefined, { weekday: 'long', month: 'short', day: 'numeric' });
 
-const IP_ADDRESS = "10.140.136.176/api";
+const IP_ADDRESS = process.env.EXPO_PUBLIC_IP_ADDRESS || 'http://localhost:3000/api';
 
 // API Response interface
 interface ApiResponse {
@@ -29,12 +30,13 @@ interface HomeProps {
 }
 
 const Home = ({ navigation }: HomeProps) => {
-  const { user } = useUser();
+  const { user } = useAuthStore();
   const { setAssignedOrders, selectedOrder, selectOrder, assignedOrders, initializeDriver, currentDriver } = useOrderStore();
   const router = useRouter();
   const { setUserLocation } = useLocationStore();
-  const driverName = user?.fullName || user?.emailAddresses?.[0]?.emailAddress?.split('@')[0] || 'Driver';
-  const avatar = user?.imageUrl || icons.person;
+  const driverName = user?.driver_name || user?.name || user?.phone || 'Driver';
+  const helperName = user?.helper_name;
+  const avatar = icons.person;
   const today = new Date();
   const [searchQuery, setSearchQuery] = useState('');
   const [hasPermission, setHasPermission] = useState(false);
@@ -101,9 +103,11 @@ const Home = ({ navigation }: HomeProps) => {
         console.log('Current Driver:', currentDriver);
         
         // Build URL with driver_id parameter if available
-        let url = `http://${IP_ADDRESS}/driver/orders`;
+        let url = `${IP_ADDRESS}/driver/orders`;
         
-        url += "?driver_id=b97f3fc1-0708-4b97-bf5d-deb424b2cd93";
+        // Use authenticated user's ID
+        const driverId = user?.id || currentDriver?.id || 'b97f3fc1-0708-4b97-bf5d-deb424b2cd93';
+        url += `?driver_id=${driverId}`;
        
         console.log('Fetching from URL:', url);
         
@@ -202,6 +206,9 @@ const Home = ({ navigation }: HomeProps) => {
               <View>
                 <Text className="text-gray-700 text-xs">Good morning,</Text>
                 <Text className="text-gray-900 text-xl font-JakartaSemiBold">{driverName}</Text>
+                {helperName ? (
+                  <Text className="text-gray-600 text-xs mt-0.5">Helper: {helperName}</Text>
+                ) : null}
               </View>
             </View>
             <View className="bg-white/80 rounded-full px-3 py-1" style={{ shadowColor: '#0F172A', shadowOpacity: 0.06, shadowRadius: 10, shadowOffset: { width: 0, height: 6 }, elevation: 3 }}>
@@ -214,21 +221,48 @@ const Home = ({ navigation }: HomeProps) => {
 
         {/* Search Section */}
         <View className="px-6 py-3 bg-transparent">
-          <View className="flex-row items-center bg-white rounded-2xl px-4 py-3 border border-gray-200"
-            style={{ shadowColor: '#0F172A', shadowOpacity: 0.06, shadowRadius: 12, shadowOffset: { width: 0, height: 8 }, elevation: 4 }}>
-            <Image source={icons.search} className="w-5 h-5 mr-3" resizeMode="contain" />
-            <TextInput
-              className="flex-1 text-base font-JakartaMedium"
-              placeholder="Search for customers..."
-              placeholderTextColor="#9CA3AF"
-              value={searchQuery}
-              onChangeText={setSearchQuery}
-            />
-            {searchQuery.length > 0 && (
-              <TouchableOpacity onPress={() => setSearchQuery('')}>
-                <Image source={icons.close} className="w-5 h-5 ml-2" resizeMode="contain" />
-              </TouchableOpacity>
-            )}
+          <View className="flex-row items-center gap-3">
+            <View
+              className="flex-1 flex-row items-center rounded-full px-4 py-[4px] bg-white border border-gray-200"
+              style={{
+                shadowColor: '#0F172A',
+                shadowOpacity: 0.06,
+                shadowRadius: 12,
+                shadowOffset: { width: 0, height: 8 },
+                elevation: 4
+              }}
+            >
+              <Image source={icons.search} className="w-5 h-5 mr-3" resizeMode="contain" />
+              <TextInput
+                className="flex-1 text-[15px] font-JakartaSemiBold text-gray-800"
+                placeholder="Search for customers..."
+                placeholderTextColor="#9CA3AF"
+                value={searchQuery}
+                onChangeText={setSearchQuery}
+              />
+              {searchQuery.length > 0 && (
+                <TouchableOpacity onPress={() => setSearchQuery('')}>
+                  <Image source={icons.close} className="w-5 h-5 ml-2 opacity-70" resizeMode="contain" />
+                </TouchableOpacity>
+              )}
+            </View>
+            <TouchableOpacity
+              onPress={() => router.push('/(root)/(tabs)/direct-sales')}
+              className="rounded-full px-3 py-[10px] flex-row items-center justify-center"
+              style={{ 
+                backgroundColor: '#0EA5E9',
+                shadowColor: '#0EA5E9',
+                shadowOpacity: 0.28,
+                shadowRadius: 10,
+                shadowOffset: { width: 0, height: 6 },
+                elevation: 8
+              }}
+            >
+              <View className="flex-row items-center gap-2">
+                <Ionicons name="flash-outline" size={18} color="white" />
+                <Text className="text-white text-sm font-JakartaSemiBold">Direct Sale</Text>
+              </View>
+            </TouchableOpacity>
           </View>
         </View>
 

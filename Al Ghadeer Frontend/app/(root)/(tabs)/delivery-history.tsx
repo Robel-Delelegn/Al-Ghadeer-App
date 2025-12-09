@@ -3,7 +3,7 @@ import { Ionicons } from '@expo/vector-icons';
 import React, { useEffect, useMemo, useState } from 'react';
 import { ActivityIndicator, FlatList, ScrollView, Text, TextInput, TouchableOpacity, View } from 'react-native';
 
-const IP_ADDRESS = "10.140.136.176/api";
+const IP_ADDRESS = process.env.EXPO_PUBLIC_IP_ADDRESS || 'http://localhost:3000/api';
 
 // API Response interface
 interface ApiResponse {
@@ -57,7 +57,7 @@ const DeliveryHistory = () => {
         setLoading(true); // Start loading before fetch
 
         // Build URL with driver_id parameter
-        let url = `http://${IP_ADDRESS}/driver/history`;
+        let url = `${IP_ADDRESS}/driver/history`;
         url += "?driver_id=b97f3fc1-0708-4b97-bf5d-deb424b2cd93";
 
         // Fetch data from Express API
@@ -68,25 +68,44 @@ const DeliveryHistory = () => {
           throw new Error(`HTTP error! Status: ${response.status}`);
         }
 
-        // Parse the new API response format
-        const apiResponse: ApiResponse = await response.json();
-        console.log('History API Response:', apiResponse);
+        // Parse the API response
+        const responseData = await response.json();
+        console.log('History API Response:', responseData);
         
-        if (!apiResponse.success || !apiResponse.data) {
+        // Handle both response formats for compatibility
+        let orders: Order[] = [];
+        if (responseData.success && responseData.data) {
+          // New format: { success: true, data: [...] }
+          orders = responseData.data;
+        } else if (Array.isArray(responseData)) {
+          // Old format: [...] (direct array)
+          orders = responseData;
+        } else {
           throw new Error('Invalid API response format');
         }
 
-        // Keep products as-is, no transformation needed
-        const transformedHistory: Order[] = apiResponse.data.map(order => ({
+        // Transform orders to ensure proper structure
+        const transformedHistory: Order[] = orders.map(order => ({
           ...order,
           products: order.products || {},
+          customer: order.customer || {
+            name: order.customer_name,
+            phone: order.customer_phone,
+            email: order.customer_email,
+            address: order.customer_address,
+            id: order.customer_id,
+            site_id: order.customer_site_id
+          }
         }));
 
         // Save fetched data into state
         setHistory(transformedHistory);
+        console.log(`✅ Loaded ${transformedHistory.length} history items`);
 
       } catch (err) {
         console.error('Error fetching history:', err);
+        // Set empty array on error to prevent crashes
+        setHistory([]);
       } finally {
         setLoading(false); // End loading whether success or failure
       }

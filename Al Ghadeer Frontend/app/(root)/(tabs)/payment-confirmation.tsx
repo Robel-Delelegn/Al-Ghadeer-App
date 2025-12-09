@@ -5,7 +5,7 @@ import { useRouter } from 'expo-router';
 import React, { useCallback, useState } from 'react';
 import { ActivityIndicator, Alert, Image, ScrollView, Text, TouchableOpacity, View } from 'react-native';
 
-const IP_ADDRESS = "192.168.0.194:3000/api";
+const IP_ADDRESS = process.env.EXPO_PUBLIC_IP_ADDRESS || 'http://localhost:3000/api';
 
 // API Response interface
 interface ApiResponse {
@@ -96,7 +96,7 @@ const PaymentConfirmation: React.FC = () => {
       console.log('Sending order data:', orderData);
 
       // Send order to server
-      let url = `http://${IP_ADDRESS}/driver/orders/confirm-payment`;
+      let url = `${IP_ADDRESS}/driver/orders/confirm-payment`;
       url += "?driver_id=b97f3fc1-0708-4b97-bf5d-deb424b2cd93";;
       console.log('Sending to:', url);
       
@@ -462,14 +462,14 @@ const PaymentConfirmation: React.FC = () => {
                 marginRight: 12 
               }}>
                 <Ionicons 
-                  name={selectedPaymentMethod === 'card' ? 'card' : 'cash'} 
+                  name={selectedPaymentMethod === 'wallet' ? 'wallet' : 'cash'} 
                   size={20} 
                   color="white" 
                 />
               </View>
               <View style={{ flex: 1 }}>
                 <Text style={{ color: '#1976D2', fontSize: 16, fontWeight: '600', marginBottom: 2 }}>
-                  {selectedPaymentMethod === 'card' ? 'Card Payment' : 'Cash Payment'}
+                  {selectedPaymentMethod === 'wallet' ? 'Wallet Payment' : 'Cash Payment'}
                 </Text>
                 <Text style={{ color: '#1565C0', fontSize: 12 }}>
                   Selected payment method

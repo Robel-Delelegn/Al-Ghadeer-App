@@ -54,7 +54,7 @@ export interface Order {
     delivery_fee: number;
     vat: number;
     total_amount: number;
-    payment_method: 'cash' | 'card' | 'wallet';
+    payment_method: 'cash' | 'wallet';
     payment_status: 'pending' | 'paid' | 'failed';
     driver_commission?: number;
   };
