@@ -52,7 +52,7 @@ const Checkout: React.FC = () => {
       Alert.alert('Empty Cart', 'Please add items to your cart.');
       return;
     }
-
+    
     if (!selectedPaymentMethod) {
       Alert.alert('Payment Method Required', 'Please select a payment method.');
       return;

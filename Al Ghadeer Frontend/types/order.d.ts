@@ -129,7 +129,6 @@ export interface Driver {
   id: string;
   clerk_id: string;
   name: string;
-  email: string;
   phone: string;
   profile_image?: string;
   

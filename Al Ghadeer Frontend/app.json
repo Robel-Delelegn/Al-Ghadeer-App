@@ -8,7 +8,7 @@
     "scheme": "alghadeerwater",
     "userInterfaceStyle": "automatic",
     "splash": {
-      "image": "./assets/images/splash.png",
+      "image": "./assets/images/water-bottle.png",
       "resizeMode": "contain",
       "backgroundColor": "#ffffff"
     },
@@ -46,6 +46,14 @@
       "favicon": "./assets/images/favicon.png"
     },
     "plugins": [
+      [
+        "expo-splash-screen",
+        {
+          "image": "./assets/images/water-bottle.png",
+          "resizeMode": "contain",
+          "backgroundColor": "#ffffff"
+        }
+      ],
       [
         "expo-maps",
         {

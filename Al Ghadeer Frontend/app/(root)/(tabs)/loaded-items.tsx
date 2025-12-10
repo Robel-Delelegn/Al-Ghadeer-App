@@ -7,15 +7,12 @@ import { Alert, ScrollView, Text, TouchableOpacity, View, ActivityIndicator, Ref
 
 const API_BASE_URL = process.env.EXPO_PUBLIC_IP_ADDRESS || process.env.EXPO_PUBLIC_API_URL || 'http://localhost:3000/api'; 
 
-type OperationMode = 'load' | 'unload';
-
 interface Item {
   id: string;
   name: string;
   quantity: number;
   unit: string;
   category: string;
-  condition?: 'full' | 'empty' | 'leaked' | 'damaged'; // For unload: empty, leaked, or damaged bottles
   confirmed?: boolean;
 }
 
@@ -39,9 +36,6 @@ interface ConfirmationResponse {
 const LoadedItems = () => {
   const router = useRouter();
   const { currentDriver } = useOrderStore();
-  
-  // Operation mode: 'load' or 'unload'
-  const [operationMode, setOperationMode] = useState<OperationMode>('load');
   
   // Items state
   const [items, setItems] = useState<Item[]>([]);
@@ -67,9 +61,7 @@ const LoadedItems = () => {
     setErrorMessage(null);
     
     try {
-      const endpoint = operationMode === 'load' 
-        ? `${API_BASE_URL}/drivers/${currentDriver.id}/loaded-items/request`
-        : `${API_BASE_URL}/drivers/${currentDriver.id}/unloaded-items/request`;
+      const endpoint = `${API_BASE_URL}/drivers/${currentDriver.id}/loaded-items/request`;
 
       const response = await fetch(endpoint, {
         method: 'GET',
@@ -79,213 +71,22 @@ const LoadedItems = () => {
       const data: ItemsResponse = await response.json();
 
       if (!response.ok || !data.success) {
-        throw new Error(data.message || `Failed to fetch ${operationMode} items`);
+        throw new Error(data.message || 'Failed to fetch loaded items');
       }
 
       setItems(Array.isArray(data.data) ? data.data : []);
       setHasRequestedItems(true);
       setConfirmationStep('review');
-      return;
-
-      await new Promise(resolve => setTimeout(resolve, 1500));
-      
-      // Dummy data - Different data for load vs unload
-      const dummyItems: Item[] = operationMode === 'load' 
-        ? [
-            {
-              id: 'water_5l_001',
-              name: '5L Water Bottles',
-              quantity: 50,
-              unit: 'bottles',
-              category: 'Water',
-              condition: 'full'
-            },
-            {
-              id: 'water_10l_001',
-              name: '10L Water Bottles',
-              quantity: 25,
-              unit: 'bottles',
-              category: 'Water',
-              condition: 'full'
-            },
-            {
-              id: 'water_300ml_001',
-              name: '300ml Water Bottles',
-              quantity: 100,
-              unit: 'bottles',
-              category: 'Water',
-              condition: 'full'
-            },
-            {
-              id: 'dispenser_001',
-              name: 'Water Dispensers',
-              quantity: 5,
-              unit: 'units',
-              category: 'Equipment',
-              condition: 'full'
-            },
-            {
-              id: 'water_1l_001',
-              name: '1L Water Bottles',
-              quantity: 75,
-              unit: 'bottles',
-              category: 'Water',
-              condition: 'full'
-            }
-          ]
-        : [
-            // Full bottles being returned
-            {
-              id: 'water_5l_001',
-              name: '5L Water Bottles (Full)',
-              quantity: 20,
-              unit: 'bottles',
-              category: 'Water',
-              condition: 'full'
-            },
-            {
-              id: 'water_10l_001',
-              name: '10L Water Bottles (Full)',
-              quantity: 10,
-              unit: 'bottles',
-              category: 'Water',
-              condition: 'full'
-            },
-            {
-              id: 'water_300ml_001',
-              name: '300ml Water Bottles (Full)',
-              quantity: 40,
-              unit: 'bottles',
-              category: 'Water',
-              condition: 'full'
-            },
-            // Empty bottles being returned
-            {
-              id: 'water_5l_empty_001',
-              name: '5L Water Bottles (Empty)',
-              quantity: 30,
-              unit: 'bottles',
-              category: 'Water',
-              condition: 'empty'
-            },
-            {
-              id: 'water_10l_empty_001',
-              name: '10L Water Bottles (Empty)',
-              quantity: 15,
-              unit: 'bottles',
-              category: 'Water',
-              condition: 'empty'
-            },
-            {
-              id: 'water_300ml_empty_001',
-              name: '300ml Water Bottles (Empty)',
-              quantity: 60,
-              unit: 'bottles',
-              category: 'Water',
-              condition: 'empty'
-            },
-            {
-              id: 'water_1l_empty_001',
-              name: '1L Water Bottles (Empty)',
-              quantity: 35,
-              unit: 'bottles',
-              category: 'Water',
-              condition: 'empty'
-            },
-            // Leaked bottles being returned
-            {
-              id: 'water_5l_leaked_001',
-              name: '5L Water Bottles (Leaked)',
-              quantity: 5,
-              unit: 'bottles',
-              category: 'Water',
-              condition: 'leaked'
-            },
-            {
-              id: 'water_10l_leaked_001',
-              name: '10L Water Bottles (Leaked)',
-              quantity: 3,
-              unit: 'bottles',
-              category: 'Water',
-              condition: 'leaked'
-            },
-            {
-              id: 'water_300ml_leaked_001',
-              name: '300ml Water Bottles (Leaked)',
-              quantity: 8,
-              unit: 'bottles',
-              category: 'Water',
-              condition: 'leaked'
-            },
-            // Damaged bottles being returned
-            {
-              id: 'water_5l_damaged_001',
-              name: '5L Water Bottles (Damaged)',
-              quantity: 2,
-              unit: 'bottles',
-              category: 'Water',
-              condition: 'damaged'
-            },
-            {
-              id: 'water_10l_damaged_001',
-              name: '10L Water Bottles (Damaged)',
-              quantity: 1,
-              unit: 'bottles',
-              category: 'Water',
-              condition: 'damaged'
-            },
-            {
-              id: 'water_300ml_damaged_001',
-              name: '300ml Water Bottles (Damaged)',
-              quantity: 4,
-              unit: 'bottles',
-              category: 'Water',
-              condition: 'damaged'
-            },
-            // Equipment
-            {
-              id: 'dispenser_001',
-              name: 'Water Dispensers',
-              quantity: 2,
-              unit: 'units',
-              category: 'Equipment',
-              condition: 'full'
-            }
-          ];
-
-      // Simulate empty response case
-      const shouldReturnEmpty = Math.random() < 0.2; 
-      
-      if (shouldReturnEmpty) {
-        setItems([]);
-        setHasRequestedItems(true);
-        setConfirmationStep('request');
-        Alert.alert(
-          'No Items Available',
-          operationMode === 'load' 
-            ? 'Items have not arrived yet or no items are scheduled for loading today.'
-            : 'No items are available for unloading or all items have already been unloaded.',
-          [{ text: 'OK' }]
-        );
-        return;
-      }
-      
-      setItems(dummyItems);
-      setHasRequestedItems(true);
-      setConfirmationStep('review');
-      setIsCorrect(null);
-      setAgreementResponse(null);
-      
-      console.log(`${operationMode === 'load' ? 'Loaded' : 'Unloaded'} items received (dummy data):`, dummyItems);
+      console.log('Loaded items received:', data.data);
     } catch (error) {
-      console.error(`Error fetching ${operationMode} items:`, error);
+      console.error('Error fetching loaded items:', error);
       const errorMsg = error instanceof Error ? error.message : 'Failed to fetch items. Please try again.';
       setErrorMessage(errorMsg);
       Alert.alert('Error', errorMsg);
     } finally {
       setIsLoading(false);
     }
-  }, [currentDriver, operationMode]);
+  }, [currentDriver]);
 
   const handleConfirmItems = useCallback(async () => {
     if (!currentDriver) {
@@ -307,11 +108,8 @@ const LoadedItems = () => {
     setErrorMessage(null);
     
     try {
-      // Determine API endpoint based on operation mode
-      const endpoint = operationMode === 'load'
-        ? `${API_BASE_URL}/drivers/${currentDriver.id}/loaded-items/confirm`
-        : `${API_BASE_URL}/drivers/${currentDriver.id}/unloaded-items/confirm`;
-
+      const endpoint = `${API_BASE_URL}/drivers/${currentDriver.id}/loaded-items/confirm`;
+      
       const confirmationData = {
         driver_id: currentDriver.id,
         items: items.map(item => ({
@@ -319,8 +117,7 @@ const LoadedItems = () => {
           name: item.name,
           quantity: item.quantity,
           unit: item.unit,
-          category: item.category,
-          condition: item.condition
+          category: item.category
         })),
         is_correct: isCorrect,
         confirmed_at: new Date().toISOString()
@@ -334,90 +131,32 @@ const LoadedItems = () => {
       const data: ConfirmationResponse = await response.json();
 
       if (!response.ok || !data.success) {
-        throw new Error(data.message || `Failed to confirm ${operationMode} items`);
+        throw new Error(data.message || 'Failed to confirm loaded items');
       }
-
+      
       setAgreementResponse(data.agreement || null);
       setConfirmationStep('agreement');
-
+      
       const statusAgreed = data.agreement?.status === 'agreed';
 
-      Alert.alert(
+        Alert.alert(
         statusAgreed ? 'Agreement Confirmed' : 'Disagreement Noted',
         data.message || (statusAgreed
-          ? `${operationMode === 'load' ? 'Items have been loaded and agreed upon successfully' : 'Items have been unloaded and agreed upon successfully'}`
+          ? 'Items have been loaded and agreed upon successfully'
           : 'Disagreement noted, please contact management'),
-        [
+          [
           { text: 'OK', onPress: () => resetProcess() }
-        ]
-      );
-      return;
-      await new Promise(resolve => setTimeout(resolve, 2000));
-      
-      console.log(`Sending ${operationMode} confirmation (dummy):`, confirmationData);
-      
-      // Simulate server response based on isCorrect
-      const dummyResponse: ConfirmationResponse = {
-        success: true,
-        message: isCorrect 
-          ? `${operationMode === 'load' ? 'Items have been loaded and agreed upon successfully' : 'Items have been unloaded and agreed upon successfully'}`
-          : 'Disagreement noted, please contact management',
-        agreement: {
-          status: isCorrect ? 'agreed' : 'disagreed',
-          notes: isCorrect 
-            ? `All items confirmed by management. ${operationMode === 'load' ? 'Items are now in your vehicle.' : 'Items have been returned to warehouse.'}`
-            : 'Quantity mismatch detected. Please verify with store manager.',
-          final_items: isCorrect ? items : [
-            {
-              id: 'water_5l_001',
-              name: '5L Water Bottles',
-              quantity: operationMode === 'load' ? 45 : 28, 
-              unit: 'bottles',
-              category: 'Water'
-            }
-          ]
-        }
-      };
-      
-      setAgreementResponse(dummyResponse.agreement);
-      setConfirmationStep('agreement');
-      
-      if (dummyResponse.agreement?.status === 'agreed') {
-        Alert.alert(
-          'Agreement Confirmed',
-          dummyResponse.message,
-          [
-            {
-              text: 'OK',
-              onPress: () => {
-                resetProcess();
-              }
-            }
           ]
         );
-      } else {
-        Alert.alert(
-          'Disagreement Noted',
-          dummyResponse.message,
-          [
-            {
-              text: 'OK',
-              onPress: () => {
-                resetProcess();
-              }
-            }
-          ]
-        );
-      }
     } catch (error) {
-      console.error(`Error confirming ${operationMode} items:`, error);
+      console.error('Error confirming loaded items:', error);
       const errorMsg = error instanceof Error ? error.message : 'Failed to confirm items. Please try again.';
       setErrorMessage(errorMsg);
       Alert.alert('Error', errorMsg);
     } finally {
       setIsConfirming(false);
     }
-  }, [currentDriver, items, isCorrect, operationMode]);
+  }, [currentDriver, items, isCorrect]);
 
   const handleRefresh = useCallback(async () => {
     setIsRefreshing(true);
@@ -433,17 +172,6 @@ const LoadedItems = () => {
     setAgreementResponse(null);
     setErrorMessage(null);
   }, []);
-
-  const switchMode = useCallback((mode: OperationMode) => {
-    if (mode === operationMode) return;
-
-    resetProcess();
-    setOperationMode(mode);
-  }, [operationMode, resetProcess]);
-
-  const modeLabel = operationMode === 'load' ? 'Load' : 'Unload';
-  const modeColor = operationMode === 'load' ? '#1976D2' : '#F59E0B';
-  const modeIcon = operationMode === 'load' ? 'cube' : 'cube-outline';
 
   return (
     <View style={{ flex: 1, backgroundColor: '#F8F9FA' }}>
@@ -477,88 +205,12 @@ const LoadedItems = () => {
           </TouchableOpacity>
           
           <Text style={{ color: '#212529', fontSize: 18, fontWeight: '600' }}>
-            Items {modeLabel} Confirmation
+            Items Load Confirmation
           </Text>
           
           <View style={{ width: 40 }} />
         </View>
 
-        {/* Mode Selector */}
-        <View style={{ 
-          flexDirection: 'row', 
-          marginTop: 16, 
-          backgroundColor: '#F8F9FA', 
-          borderRadius: 8, 
-          padding: 4 
-        }}>
-          <TouchableOpacity
-            style={{
-              flex: 1,
-              paddingVertical: 10,
-              paddingHorizontal: 16,
-              borderRadius: 6,
-              backgroundColor: operationMode === 'load' ? '#FFFFFF' : 'transparent',
-              alignItems: 'center',
-              justifyContent: 'center',
-              shadowColor: operationMode === 'load' ? '#000' : 'transparent',
-              shadowOffset: { width: 0, height: 1 },
-              shadowOpacity: operationMode === 'load' ? 0.1 : 0,
-              shadowRadius: 2,
-              elevation: operationMode === 'load' ? 2 : 0
-            }}
-            onPress={() => switchMode('load')}
-          >
-            <View style={{ flexDirection: 'row', alignItems: 'center' }}>
-              <Ionicons 
-                name="cube" 
-                size={18} 
-                color={operationMode === 'load' ? '#1976D2' : '#6C757D'} 
-                style={{ marginRight: 6 }}
-              />
-              <Text style={{ 
-                color: operationMode === 'load' ? '#1976D2' : '#6C757D', 
-                fontSize: 14, 
-                fontWeight: operationMode === 'load' ? '600' : '400' 
-              }}>
-                Load Items
-              </Text>
-            </View>
-          </TouchableOpacity>
-
-          <TouchableOpacity
-            style={{
-              flex: 1,
-              paddingVertical: 10,
-              paddingHorizontal: 16,
-              borderRadius: 6,
-              backgroundColor: operationMode === 'unload' ? '#FFFFFF' : 'transparent',
-              alignItems: 'center',
-              justifyContent: 'center',
-              shadowColor: operationMode === 'unload' ? '#000' : 'transparent',
-              shadowOffset: { width: 0, height: 1 },
-              shadowOpacity: operationMode === 'unload' ? 0.1 : 0,
-              shadowRadius: 2,
-              elevation: operationMode === 'unload' ? 2 : 0
-            }}
-            onPress={() => switchMode('unload')}
-          >
-            <View style={{ flexDirection: 'row', alignItems: 'center' }}>
-              <Ionicons 
-                name="cube-outline" 
-                size={18} 
-                color={operationMode === 'unload' ? '#F59E0B' : '#6C757D'} 
-                style={{ marginRight: 6 }}
-              />
-              <Text style={{ 
-                color: operationMode === 'unload' ? '#F59E0B' : '#6C757D', 
-                fontSize: 14, 
-                fontWeight: operationMode === 'unload' ? '600' : '400' 
-              }}>
-                Unload Items
-              </Text>
-            </View>
-          </TouchableOpacity>
-        </View>
       </View>
 
       <ScrollView 
@@ -605,29 +257,27 @@ const LoadedItems = () => {
             <View style={{ 
               width: 40, 
               height: 40, 
-              backgroundColor: operationMode === 'load' ? '#E3F2FD' : '#FFF3E0', 
+              backgroundColor: '#E3F2FD', 
               borderRadius: 20, 
               alignItems: 'center', 
               justifyContent: 'center', 
               marginRight: 12 
             }}>
-              <Ionicons name={modeIcon} size={20} color={modeColor} />
+              <Ionicons name="cube" size={20} color="#1976D2" />
             </View>
             <Text style={{ color: '#212529', fontSize: 16, fontWeight: '600' }}>
-              {operationMode === 'load' ? "Today's Items to Load" : "Today's Items to Unload"}
+              Today's Items to Load
             </Text>
           </View>
           
           {confirmationStep === 'request' ? (
             <View style={{ alignItems: 'center', paddingVertical: 20 }}>
               <Text style={{ color: '#6C757D', fontSize: 14, textAlign: 'center', marginBottom: 16 }}>
-                {operationMode === 'load' 
-                  ? 'Request today\'s items to load from the server. Items may not have arrived yet.'
-                  : 'Request today\'s items to unload from the server. Items may not be ready for unloading yet.'}
+                Request today's items to load from the server. Items may not have arrived yet.
               </Text>
               <TouchableOpacity
                 style={{ 
-                  backgroundColor: modeColor, 
+                  backgroundColor: '#1976D2', 
                   paddingHorizontal: 24, 
                   paddingVertical: 12, 
                   borderRadius: 8,
@@ -641,14 +291,14 @@ const LoadedItems = () => {
                   <ActivityIndicator size="small" color="white" style={{ marginRight: 8 }} />
                 ) : (
                   <Ionicons 
-                    name={operationMode === 'load' ? 'download' : 'arrow-up'} 
+                    name="download" 
                     size={16} 
                     color="white" 
                     style={{ marginRight: 8 }} 
                   />
                 )}
                 <Text style={{ color: 'white', fontSize: 14, fontWeight: '600' }}>
-                  {isLoading ? 'Requesting...' : `Request ${modeLabel} Items`}
+                  {isLoading ? 'Requesting...' : 'Request Load Items'}
                 </Text>
               </TouchableOpacity>
             </View>
@@ -733,21 +383,21 @@ const LoadedItems = () => {
               <View style={{ 
                 width: 40, 
                 height: 40, 
-                backgroundColor: operationMode === 'load' ? '#FFF3E0' : '#E3F2FD', 
+                backgroundColor: '#FFF3E0', 
                 borderRadius: 20, 
                 alignItems: 'center', 
                 justifyContent: 'center', 
                 marginRight: 12 
               }}>
-                <Ionicons name="list" size={20} color={modeColor} />
+                <Ionicons name="list" size={20} color="#1976D2" />
               </View>
               <Text style={{ color: '#212529', fontSize: 16, fontWeight: '600' }}>
                 {confirmationStep === 'review' 
-                  ? `Items to ${modeLabel} & Review` 
-                  : `${operationMode === 'load' ? 'Loaded' : 'Unloaded'} Items`}
+                  ? 'Items to Load & Review' 
+                  : 'Loaded Items'}
               </Text>
             </View>
-
+            
             {/* Table Header */}
             <View style={{ 
               flexDirection: 'row', 
@@ -757,7 +407,7 @@ const LoadedItems = () => {
               borderRadius: 8,
               marginBottom: 8,
               borderBottomWidth: 2,
-              borderBottomColor: modeColor
+              borderBottomColor: '#1976D2'
             }}>
               <View style={{ flex: 3, paddingHorizontal: 4 }}>
                 <Text style={{ color: '#495057', fontSize: 12, fontWeight: '700', textTransform: 'uppercase' }}>
@@ -769,51 +419,36 @@ const LoadedItems = () => {
                   Qty
                 </Text>
               </View>
-              {operationMode === 'unload' && (
-                <View style={{ flex: 1.5, paddingHorizontal: 4, alignItems: 'center' }}>
-                  <Text style={{ color: '#495057', fontSize: 12, fontWeight: '700', textTransform: 'uppercase' }}>
-                    Condition
-                  </Text>
-                </View>
-              )}
             </View>
 
             {/* Table Rows */}
             <View style={{ gap: 4 }}>
               {items.map((item, index) => {
-                // Condition color logic: full=green, empty=yellow, leaked=orange, damaged=red
-                const conditionColor = item.condition === 'empty' ? '#FFC107' : 
-                                      item.condition === 'leaked' ? '#FD7E14' :
-                                      item.condition === 'damaged' ? '#DC3545' : '#28A745';
-                const conditionBg = item.condition === 'empty' ? '#FFF3CD' : 
-                                   item.condition === 'leaked' ? '#FFE5CC' :
-                                   item.condition === 'damaged' ? '#F8D7DA' : '#D4EDDA';
-                
                 return (
-                  <View
-                    key={item.id}
-                    style={{ 
-                      flexDirection: 'row', 
-                      alignItems: 'center', 
+                <View
+                  key={item.id}
+                  style={{ 
+                    flexDirection: 'row', 
+                    alignItems: 'center', 
                       paddingVertical: 12,
                       paddingHorizontal: 8,
                       backgroundColor: index % 2 === 0 ? '#FFFFFF' : '#F8F9FA',
                       borderRadius: 6,
-                      borderWidth: 1,
+                    borderWidth: 1,
                       borderColor: '#E9ECEF',
                       minHeight: 50
                     }}
                   >
                     {/* Item Name */}
                     <View style={{ flex: 3, paddingHorizontal: 4 }}>
-                      <Text style={{ 
-                        color: '#212529', 
+                    <Text style={{ 
+                      color: '#212529', 
                         fontSize: 13, 
-                        fontWeight: '600',
+                      fontWeight: '600',
                         marginBottom: 2
-                      }}>
-                        {item.name}
-                      </Text>
+                    }}>
+                      {item.name}
+                    </Text>
                       <Text style={{ color: '#6C757D', fontSize: 11 }}>
                         {item.category}
                       </Text>
@@ -826,32 +461,9 @@ const LoadedItems = () => {
                       </Text>
                       <Text style={{ color: '#6C757D', fontSize: 10 }}>
                         {item.unit}
-                      </Text>
-                    </View>
-
-                    {/* Condition (only for unload) */}
-                    {operationMode === 'unload' && (
-                      <View style={{ flex: 1.5, paddingHorizontal: 4, alignItems: 'center' }}>
-                        <View style={{
-                          backgroundColor: conditionBg,
-                          paddingHorizontal: 6,
-                          paddingVertical: 2,
-                          borderRadius: 4,
-                          borderWidth: 1,
-                          borderColor: conditionColor
-                        }}>
-                          <Text style={{ 
-                            color: conditionColor, 
-                            fontSize: 10, 
-                            fontWeight: '600',
-                            textTransform: 'capitalize'
-                          }}>
-                            {item.condition || 'full'}
-                          </Text>
-                        </View>
-                      </View>
-                    )}
+                    </Text>
                   </View>
+                </View>
                 );
               })}
             </View>
@@ -892,14 +504,10 @@ const LoadedItems = () => {
           }}>
             <Ionicons name="cube-outline" size={48} color="#6C757D" style={{ marginBottom: 16 }} />
             <Text style={{ color: '#6C757D', fontSize: 16, fontWeight: '500', textAlign: 'center' }}>
-              {operationMode === 'load' 
-                ? 'No items to load today' 
-                : 'No items to unload today'}
+              No items to load today
             </Text>
             <Text style={{ color: '#6C757D', fontSize: 14, textAlign: 'center', marginTop: 8 }}>
-              {operationMode === 'load'
-                ? 'Items have not arrived yet or all items have been confirmed.'
-                : 'No items are available for unloading or all items have already been unloaded.'}
+              Items have not arrived yet or all items have been confirmed.
             </Text>
           </View>
         )}
@@ -944,14 +552,14 @@ const LoadedItems = () => {
             
             <TouchableOpacity
               style={{ 
-                backgroundColor: isCorrect !== null && !isConfirming ? modeColor : '#94A3B8', 
+                backgroundColor: isCorrect !== null && !isConfirming ? '#1976D2' : '#94A3B8', 
                 flex: 1, 
                 paddingVertical: 16, 
                 borderRadius: 12, 
                 flexDirection: 'row', 
                 justifyContent: 'center', 
                 alignItems: 'center',
-                shadowColor: isCorrect !== null && !isConfirming ? modeColor : 'transparent',
+                shadowColor: isCorrect !== null && !isConfirming ? '#1976D2' : 'transparent',
                 shadowOffset: { width: 0, height: 4 },
                 shadowOpacity: isCorrect !== null && !isConfirming ? 0.3 : 0,
                 shadowRadius: 8,
@@ -971,7 +579,7 @@ const LoadedItems = () => {
                 <>
                   <Ionicons name="send" size={22} color="white" />
                   <Text style={{ color: 'white', fontWeight: '600', fontSize: 16, marginLeft: 8 }}>
-                    Send {modeLabel} Confirmation
+                    Send Load Confirmation
                   </Text>
                 </>
               )}
