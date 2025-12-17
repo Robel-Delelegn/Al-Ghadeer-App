@@ -24,3 +24,5 @@ dist-ssr
 *.sw?
 *.env
 .env
+# Ignore env file inside nested server folder
+Al\ Ghadeer\ Driver\ Server/.env
