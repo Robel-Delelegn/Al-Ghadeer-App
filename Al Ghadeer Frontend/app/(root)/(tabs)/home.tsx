@@ -7,7 +7,7 @@ import { useAuthStore } from '@/store/auth';
 import * as Location from 'expo-location';
 import { useRouter } from 'expo-router';
 import React, { useEffect, useState } from 'react';
-import { FlatList, Image, Text, TextInput, TouchableOpacity, View, Modal } from 'react-native';
+import { FlatList, Image, Text, TextInput, TouchableOpacity, View } from 'react-native';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import { ActivityIndicator } from 'react-native-paper';
 import { Ionicons } from '@expo/vector-icons';
@@ -42,7 +42,6 @@ const Home = ({ navigation }: HomeProps) => {
   const [hasPermission, setHasPermission] = useState(false);
   const [deliveries, setDeliveries] = useState<Order[]>([]);
   const [isloading, setIsloading] = useState(true);
-  const [showDriverModal, setShowDriverModal] = useState(false);
   
   // Helper function to check if order is currently available
   const isOrderCurrentlyAvailable = (order: Order) => {
@@ -200,23 +199,10 @@ const Home = ({ navigation }: HomeProps) => {
         <View className="absolute top-0 left-0 right-0 px-6 pt-14 pb-2">
           <View className="flex-row items-center justify-between mb-4">
             <View className="flex-row items-center">
-              <TouchableOpacity 
-                onPress={() => setShowDriverModal(true)}
-                activeOpacity={0.8}
-              >
-                <View style={{
-                  shadowColor: '#000',
-                  shadowOpacity: 0.15,
-                  shadowRadius: 8,
-                  shadowOffset: { width: 0, height: 4 },
-                  elevation: 6
-                }}>
               <Image 
                 source={typeof avatar === 'string' ? { uri: avatar } : avatar} 
                 className="w-12 h-12 rounded-full border-2 border-white mr-4" 
               />
-                </View>
-              </TouchableOpacity>
               <View>
                 <Text className="text-gray-700 text-xs">Good morning,</Text>
                 <Text className="text-gray-900 text-xl font-JakartaSemiBold">{driverName}</Text>
@@ -246,19 +232,19 @@ const Home = ({ navigation }: HomeProps) => {
                 elevation: 4
               }}
             >
-            <Image source={icons.search} className="w-5 h-5 mr-3" resizeMode="contain" />
-            <TextInput
+              <Image source={icons.search} className="w-5 h-5 mr-3" resizeMode="contain" />
+              <TextInput
                 className="flex-1 text-[15px] font-JakartaSemiBold text-gray-800"
-              placeholder="Search for customers..."
-              placeholderTextColor="#9CA3AF"
-              value={searchQuery}
-              onChangeText={setSearchQuery}
-            />
-            {searchQuery.length > 0 && (
-              <TouchableOpacity onPress={() => setSearchQuery('')}>
+                placeholder="Search for customers..."
+                placeholderTextColor="#9CA3AF"
+                value={searchQuery}
+                onChangeText={setSearchQuery}
+              />
+              {searchQuery.length > 0 && (
+                <TouchableOpacity onPress={() => setSearchQuery('')}>
                   <Image source={icons.close} className="w-5 h-5 ml-2 opacity-70" resizeMode="contain" />
-              </TouchableOpacity>
-            )}
+                </TouchableOpacity>
+              )}
             </View>
             <TouchableOpacity
               onPress={() => router.push('/(root)/(tabs)/direct-sales')}
@@ -320,7 +306,7 @@ const Home = ({ navigation }: HomeProps) => {
                 onPress={()=>{handleViewDetails(item.id)}}
               />
             )}
-            contentContainerStyle={{ paddingHorizontal: 24, paddingBottom: 100 }}
+            contentContainerStyle={{ paddingHorizontal: 24, paddingBottom: 32 }}
             ListEmptyComponent={
               <View className="flex-1 items-center justify-center mt-24">
                 <Image source={images.noResult} className="w-40 h-40 mb-6" resizeMode="contain" />
@@ -336,152 +322,6 @@ const Home = ({ navigation }: HomeProps) => {
           /> )
         } 
         </View>
-
-        {/* Driver Status Modal */}
-        <Modal
-          visible={showDriverModal}
-          transparent={true}
-          animationType="fade"
-          onRequestClose={() => setShowDriverModal(false)}
-        >
-          <TouchableOpacity
-            style={{
-              flex: 1,
-              backgroundColor: 'rgba(0, 0, 0, 0.4)',
-              justifyContent: 'center',
-              alignItems: 'center',
-              padding: 20,
-            }}
-            activeOpacity={1}
-            onPress={() => setShowDriverModal(false)}
-          >
-            <TouchableOpacity
-              activeOpacity={1}
-              onPress={(e) => e.stopPropagation()}
-              style={{
-                backgroundColor: '#FFFFFF',
-                borderRadius: 16,
-                padding: 20,
-                width: '85%',
-                maxWidth: 320,
-                shadowColor: '#000',
-                shadowOffset: { width: 0, height: 4 },
-                shadowOpacity: 0.15,
-                shadowRadius: 12,
-                elevation: 8,
-              }}
-            >
-              {/* Header with Close */}
-              <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
-                <Text style={{ fontSize: 18, fontWeight: '600', color: '#111827' }}>
-                  Driver Info
-                </Text>
-                <TouchableOpacity
-                  onPress={() => setShowDriverModal(false)}
-                  style={{ padding: 4 }}
-                >
-                  <Ionicons name="close" size={20} color="#6B7280" />
-                </TouchableOpacity>
-              </View>
-
-              {/* Avatar and Name */}
-              <View style={{ alignItems: 'center', marginBottom: 20 }}>
-                <Image 
-                  source={typeof avatar === 'string' ? { uri: avatar } : avatar} 
-                  style={{ width: 64, height: 64, borderRadius: 32, marginBottom: 8 }}
-                  resizeMode="cover"
-                />
-                <Text style={{ fontSize: 16, fontWeight: '600', color: '#111827', marginBottom: 2 }}>
-                  {driverName}
-                </Text>
-                {helperName && (
-                  <Text style={{ fontSize: 12, color: '#6B7280' }}>
-                    Helper: {helperName}
-                  </Text>
-                )}
-              </View>
-
-              {/* Info List */}
-              <View style={{ gap: 0 }}>
-                {user?.phone && (
-                  <View style={{ 
-                    flexDirection: 'row', 
-                    alignItems: 'center', 
-                    paddingVertical: 12,
-                    borderBottomWidth: 1,
-                    borderBottomColor: '#F3F4F6',
-                  }}>
-                    <Ionicons name="call-outline" size={16} color="#6B7280" style={{ marginRight: 12, width: 20 }} />
-                    <View style={{ flex: 1 }}>
-                      <Text style={{ fontSize: 11, color: '#9CA3AF', marginBottom: 2 }}>Phone</Text>
-                      <Text style={{ fontSize: 14, color: '#111827', fontWeight: '500' }}>{user.phone}</Text>
-                    </View>
-                  </View>
-                )}
-
-                {(user?.vehicle_number || user?.vehicle_type) && (
-                  <View style={{ 
-                    flexDirection: 'row', 
-                    alignItems: 'center', 
-                    paddingVertical: 12,
-                    borderBottomWidth: 1,
-                    borderBottomColor: '#F3F4F6',
-                  }}>
-                    <Ionicons name="car-outline" size={16} color="#6B7280" style={{ marginRight: 12, width: 20 }} />
-                    <View style={{ flex: 1 }}>
-                      <Text style={{ fontSize: 11, color: '#9CA3AF', marginBottom: 2 }}>Vehicle</Text>
-                      <Text style={{ fontSize: 14, color: '#111827', fontWeight: '500' }}>
-                        {user.vehicle_type || 'N/A'} {user.vehicle_number ? `• ${user.vehicle_number}` : ''}
-                      </Text>
-                    </View>
-                  </View>
-                )}
-
-                {user?.zone && (
-                  <View style={{ 
-                    flexDirection: 'row', 
-                    alignItems: 'center', 
-                    paddingVertical: 12,
-                    borderBottomWidth: 1,
-                    borderBottomColor: '#F3F4F6',
-                  }}>
-                    <Ionicons name="location-outline" size={16} color="#6B7280" style={{ marginRight: 12, width: 20 }} />
-                    <View style={{ flex: 1 }}>
-                      <Text style={{ fontSize: 11, color: '#9CA3AF', marginBottom: 2 }}>Zone</Text>
-                      <Text style={{ fontSize: 14, color: '#111827', fontWeight: '500' }}>{user.zone}</Text>
-                    </View>
-                  </View>
-                )}
-
-                {user?.status && (
-                  <View style={{ 
-                    flexDirection: 'row', 
-                    alignItems: 'center', 
-                    paddingVertical: 12,
-                  }}>
-                    <Ionicons 
-                      name={user.status === 'approved' ? 'checkmark-circle' : 'time-outline'} 
-                      size={16} 
-                      color={user.status === 'approved' ? '#10B981' : '#F59E0B'} 
-                      style={{ marginRight: 12, width: 20 }} 
-                    />
-                    <View style={{ flex: 1 }}>
-                      <Text style={{ fontSize: 11, color: '#9CA3AF', marginBottom: 2 }}>Status</Text>
-                      <Text style={{ 
-                        fontSize: 14, 
-                        color: user.status === 'approved' ? '#10B981' : '#F59E0B', 
-                        fontWeight: '600',
-                        textTransform: 'capitalize'
-                      }}>
-                        {user.status}
-                      </Text>
-                    </View>
-                  </View>
-                )}
-              </View>
-            </TouchableOpacity>
-          </TouchableOpacity>
-        </Modal>
       </View>
     </GestureHandlerRootView>
   );

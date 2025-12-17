@@ -1,7 +1,7 @@
 import { Text, View, ScrollView, Image, Alert, ActivityIndicator, Modal, TextInput, TouchableOpacity } from 'react-native';
 import { icons, images } from '@/constants';
 import InputField from '@/components/InputField';
-import { useState, useEffect } from 'react';
+import { useState } from 'react';
 import CustomButton from '@/components/CustomButton';
 import { useRouter } from 'expo-router';
 import { useAuthStore } from '@/store/auth';
@@ -9,7 +9,7 @@ import { Ionicons } from '@expo/vector-icons';
 
 const SignIn = () => {
   const router = useRouter();
-  const { requestOtp, verifyOtp, resendOtp, isLoading, clearAuth } = useAuthStore();
+  const { requestOtp, verifyOtp, resendOtp, isLoading } = useAuthStore();
   const [phone, setPhone] = useState('');
   const [errors, setErrors] = useState<{ [key: string]: string }>({});
   const [showOtpModal, setShowOtpModal] = useState(false);
@@ -20,19 +20,13 @@ const SignIn = () => {
   const [countdown, setCountdown] = useState(0);
   const [tempToken, setTempToken] = useState<string | null>(null);
 
-  // Clear any existing auth when component mounts (starting fresh sign-in)
-  useEffect(() => {
-    clearAuth();
-  }, []);
-
   const validatePhone = () => {
     if (!phone.trim()) {
       setErrors({ phone: 'Phone number is required' });
       return false;
     }
-    // Validate phone number (should be 9 digits for UAE after +971)
-    if (!/^\d{9}$/.test(phone.replace(/\s/g, ''))) {
-      setErrors({ phone: 'Please enter a valid 9-digit phone number' });
+    if (!/^\+?[1-9]\d{1,14}$/.test(phone.replace(/\s/g, ''))) {
+      setErrors({ phone: 'Please enter a valid phone number' });
       return false;
     }
     setErrors({});
@@ -44,15 +38,10 @@ const SignIn = () => {
       return;
     }
 
-    // Clear any existing auth before starting new sign-in
-    await clearAuth();
-
-    // Prepend +971 prefix to phone number
-    const fullPhone = `+971${phone.replace(/\s/g, '')}`;
-    console.log('onPhoneSubmit called with phone:', fullPhone);
+    console.log('onPhoneSubmit called with phone:', phone);
     
     // Request OTP - server sends SMS and returns temporary token
-    const result = await requestOtp(fullPhone);
+    const result = await requestOtp(phone);
     
     console.log('requestOtp result:', result);
     console.log('Result check:', {
@@ -97,20 +86,14 @@ const SignIn = () => {
     setIsVerifyingOtp(true);
     setOtpError('');
 
-    // Use full phone number with +971 prefix
-    const fullPhone = `+971${phone.replace(/\s/g, '')}`;
-    const result = await verifyOtp(fullPhone, otp, tempToken);
+    const result = await verifyOtp(phone, otp, tempToken);
 
     if (result.success) {
       setShowOtpModal(false);
       setOtp('');
       setTempToken(null);
       
-      // Wait a moment for state to be fully set
-      await new Promise(resolve => setTimeout(resolve, 100));
-      
       const user = useAuthStore.getState().user;
-      const isAuth = useAuthStore.getState().isAuthenticated;
       
       if (user?.status === 'pending') {
         Alert.alert(
@@ -125,8 +108,7 @@ const SignIn = () => {
             },
           ]
         );
-      } else if (user?.status === 'approved' && isAuth) {
-        // Navigate to home page
+      } else if (user?.status === 'approved') {
         router.replace('/(root)/(tabs)/home');
       } else {
         Alert.alert('Account Rejected', 'Your account has been rejected. Please contact the administrator.');
@@ -143,9 +125,7 @@ const SignIn = () => {
     if (countdown > 0 || !tempToken) return;
 
     setIsResendingOtp(true);
-    // Use full phone number with +971 prefix
-    const fullPhone = `+971${phone.replace(/\s/g, '')}`;
-    const result = await resendOtp(fullPhone, tempToken);
+    const result = await resendOtp(phone, tempToken);
 
     if (result.success) {
       setCountdown(60);
@@ -176,43 +156,17 @@ const SignIn = () => {
           </Text>
         </View>
         <View className="p-5">
-          <View className="my-2 w-full">
-            <Text className="text-sm font-JakartaMedium mb-2 text-gray-600">
-              Phone Number
-            </Text>
-            <View
-              className="flex-row items-center bg-white rounded-2xl border border-gray-200"
-              style={{
-                paddingHorizontal: 14,
-                paddingVertical: 10,
-                shadowColor: '#0F172A',
-                shadowOpacity: 0.06,
-                shadowRadius: 12,
-                shadowOffset: { width: 0, height: 8 },
-                elevation: 3,
-              }}
-            >
-              <Image source={icons.person} className="w-5 h-5 mr-3" />
-              <View className="flex-row items-center">
-                <Text className="font-JakartaMedium text-[15px] text-gray-700 mr-2">
-                  +971
-                </Text>
-                <TextInput
-                  className="font-JakartaMedium text-[15px] flex-1 text-left"
-                  placeholder="501234567"
-                  placeholderTextColor="#94A3B8"
-                  value={phone}
-                  onChangeText={(value: any) => {
-                    // Only allow digits and limit to 9 digits
-                    const numericValue = value.replace(/[^0-9]/g, '').slice(0, 9);
-                    setPhone(numericValue);
-                    if (errors.phone) setErrors({ ...errors, phone: '' });
-                  }}
-                  keyboardType="phone-pad"
-                />
-              </View>
-            </View>
-          </View>
+          <InputField
+            label="Phone Number"
+            placeholder="Enter your phone number"
+            icon={icons.person}
+            value={phone}
+            onChangeText={(value: any) => {
+              setPhone(value);
+              if (errors.phone) setErrors({ ...errors, phone: '' });
+            }}
+            keyboardType="phone-pad"
+          />
           {errors.phone && (
             <Text className="text-red-500 text-sm mt-1 ml-2">{errors.phone}</Text>
           )}
@@ -290,7 +244,7 @@ const SignIn = () => {
               Enter the 6-digit code sent to
             </Text>
             <Text style={{ fontSize: 14, color: '#212529', fontWeight: '600', marginBottom: 24 }}>
-              +971{phone.replace(/\s/g, '')}
+              {phone}
             </Text>
 
             <View style={{ marginBottom: 16 }}>

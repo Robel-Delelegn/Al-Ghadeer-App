@@ -27,31 +27,13 @@ interface AuthStore {
   resendOtp: (phone: string, tempToken: string) => Promise<{ success: boolean; message?: string }>;
   signOut: () => Promise<void>;
   checkAuth: () => Promise<boolean>;
-  verifyToken: () => Promise<boolean>;
   updateUser: (user: User) => void;
   clearAuth: () => Promise<void>;
   getToken: () => Promise<string | null>;
 }
 
 // API Base URL - Update with your actual server URL
-// Ensure it always ends with /api (but not /api/api)
-const getApiBaseUrl = () => {
-  let baseUrl = process.env.EXPO_PUBLIC_IP_ADDRESS || process.env.EXPO_PUBLIC_API_URL || 'http://localhost:3000/api';
-  
-  // Remove trailing slash if present
-  baseUrl = baseUrl.endsWith('/') ? baseUrl.slice(0, -1) : baseUrl;
-  
-  // Remove /api if it appears at the end (to avoid double /api)
-  if (baseUrl.endsWith('/api')) {
-    baseUrl = baseUrl.slice(0, -4);
-  }
-  
-  // Ensure /api is appended
-  return `${baseUrl}/api`;
-};
-
-const API_BASE_URL = getApiBaseUrl();
-console.log('🔗 API Base URL configured:', API_BASE_URL);
+const API_BASE_URL = process.env.EXPO_PUBLIC_IP_ADDRESS || process.env.EXPO_PUBLIC_API_URL || 'http://localhost:3000/api';
 
 export const useAuthStore = create<AuthStore>()(
   persist(
@@ -69,10 +51,9 @@ export const useAuthStore = create<AuthStore>()(
         set({ isLoading: true });
         try {
           console.log('Requesting OTP for phone:', phone);
-          const requestUrl = `${API_BASE_URL}/auth/request-otp`;
-          console.log('API URL:', requestUrl);
+          console.log('API URL:', `${API_BASE_URL}/auth/request-otp`);
 
-          const response = await fetch(requestUrl, {
+          const response = await fetch(`${API_BASE_URL}/auth/request-otp`, {
             method: 'POST',
             headers: {
               'Content-Type': 'application/json',
@@ -293,21 +274,11 @@ export const useAuthStore = create<AuthStore>()(
       },
 
       /**
-       * Check Authentication - Check if user is authenticated based on state and token existence
-       * Does NOT verify token validity (use verifyToken() for that)
+       * Check Authentication - Verify token and get user info
+       * GET /api/auth/me
        */
       checkAuth: async () => {
         try {
-          // Fast path: If we already have authenticated user in state, return immediately
-          const currentState = get();
-          if (currentState.isAuthenticated && currentState.user) {
-            const token = await SecureStore.getItemAsync('auth_token');
-            if (token) {
-              // Token exists and user is in state, skip network call for faster startup
-              return true;
-            }
-          }
-
           const token = await SecureStore.getItemAsync('auth_token');
           
           if (!token) {
@@ -318,29 +289,19 @@ export const useAuthStore = create<AuthStore>()(
             return false;
           }
 
-          // Token exists but state is not authenticated
-          // Return false - caller should use verifyToken() to verify and restore state
-          return false;
-        } catch (error) {
-          console.error('Auth check error:', error);
-          set({
-            isAuthenticated: false,
-            user: null,
+          // Verify token with backend
+          const response = await fetch(`${API_BASE_URL}/auth/me`, {
+            method: 'GET',
+            headers: {
+              'Authorization': `Bearer ${token}`,
+              'Content-Type': 'application/json',
+            },
           });
-          return false;
-        }
-      },
 
-      /**
-       * Verify Token - Verify token validity with backend and update state
-       * GET /api/auth/me
-       * Clears tokens and state if token is invalid
-       */
-      verifyToken: async () => {
-        try {
-          const token = await SecureStore.getItemAsync('auth_token');
-          
-          if (!token) {
+          if (!response.ok) {
+            // Token invalid, clear auth
+            await SecureStore.deleteItemAsync('auth_token');
+            await SecureStore.deleteItemAsync('refresh_token');
             set({
               isAuthenticated: false,
               user: null,
@@ -348,26 +309,12 @@ export const useAuthStore = create<AuthStore>()(
             return false;
           }
 
-          // Add timeout to prevent hanging
-          const controller = new AbortController();
-          const timeoutId = setTimeout(() => controller.abort(), 5000); // 5 second timeout
+          const data = await response.json();
 
-          try {
-            // Verify token with backend
-            const response = await fetch(`${API_BASE_URL}/auth/me`, {
-              method: 'GET',
-              headers: {
-                'Authorization': `Bearer ${token}`,
-                'Content-Type': 'application/json',
-              },
-              signal: controller.signal,
-            });
-
-            clearTimeout(timeoutId);
-
-            if (!response.ok) {
-              // Token invalid (401, 403, etc.), clear auth
-              console.log('Token verification failed - clearing auth');
+          if (data.success && data.user) {
+            // Check if user is approved
+            if (data.user.status !== 'approved') {
+              // User not approved, sign them out
               await SecureStore.deleteItemAsync('auth_token');
               await SecureStore.deleteItemAsync('refresh_token');
               set({
@@ -377,66 +324,16 @@ export const useAuthStore = create<AuthStore>()(
               return false;
             }
 
-            const data = await response.json();
-
-            if (data.success && data.user) {
-              // Check if user is approved
-              if (data.user.status !== 'approved') {
-                // User not approved, sign them out
-                console.log('User not approved - clearing auth');
-                await SecureStore.deleteItemAsync('auth_token');
-                await SecureStore.deleteItemAsync('refresh_token');
-                set({
-                  isAuthenticated: false,
-                  user: null,
-                });
-                return false;
-              }
-
-              // Token is valid, update state
-              set({
-                isAuthenticated: true,
-                user: data.user,
-              });
-              return true;
-            }
-
-            // Invalid response format, clear auth
-            console.log('Invalid response format - clearing auth');
-            await SecureStore.deleteItemAsync('auth_token');
-            await SecureStore.deleteItemAsync('refresh_token');
             set({
-              isAuthenticated: false,
-              user: null,
+              isAuthenticated: true,
+              user: data.user,
             });
-            return false;
-          } catch (fetchError: any) {
-            clearTimeout(timeoutId);
-            
-            // If timeout or network error, check if we have cached user
-            if (fetchError.name === 'AbortError' || fetchError.message?.includes('Network request failed')) {
-              console.warn('Token verification network error - checking cached user');
-              const cachedUser = get().user;
-              if (cachedUser) {
-                // Use cached user for offline mode
-                set({
-                  isAuthenticated: true,
-                  user: cachedUser,
-                });
-                return true;
-              }
-              // No cached user, but don't clear token (might be temporary network issue)
-              // Return false so user can try again
-              return false;
-            }
-            // Other errors - clear auth
-            throw fetchError;
+            return true;
           }
+
+          return false;
         } catch (error) {
-          console.error('Token verification error:', error);
-          // On error, clear auth to be safe
-          await SecureStore.deleteItemAsync('auth_token');
-          await SecureStore.deleteItemAsync('refresh_token');
+          console.error('Auth check error:', error);
           set({
             isAuthenticated: false,
             user: null,

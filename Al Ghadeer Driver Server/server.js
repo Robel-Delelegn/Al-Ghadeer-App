@@ -69,61 +69,9 @@ const drivers = [
     }
 ];
 
-// Twilio Verify configuration (read from environment)
-const {
-    TWILIO_ACCOUNT_SID,
-    TWILIO_AUTH_TOKEN,
-    TWILIO_VERIFY_SERVICE_SID
-} = process.env;
-
-const useTwilioVerify = Boolean(
-    TWILIO_ACCOUNT_SID &&
-    TWILIO_AUTH_TOKEN &&
-    TWILIO_VERIFY_SERVICE_SID
-);
-
-let twilioClient = null;
-if (useTwilioVerify) {
-    try {
-        const twilio = require('twilio');
-        twilioClient = twilio(TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN);
-        console.log('✅ Twilio Verify enabled');
-    } catch (error) {
-        console.warn('⚠️ Twilio client not available; falling back to in-memory OTPs.', error);
-    }
-}
-
 // Generate 6-digit OTP
 function generateOTP() {
     return Math.floor(100000 + Math.random() * 900000).toString();
-}
-
-async function sendOtpViaTwilio(phone) {
-    if (!twilioClient || !useTwilioVerify) return null;
-    try {
-        const verification = await twilioClient.verify.v2
-            .services(TWILIO_VERIFY_SERVICE_SID)
-            .verifications.create({ to: phone, channel: 'sms' });
-        console.log(`✅ Twilio verification started for ${phone} | SID: ${verification.sid}`);
-        return verification.sid;
-    } catch (err) {
-        console.error('❌ Twilio send OTP failed, falling back to in-memory OTP.', err?.message || err);
-        return null;
-    }
-}
-
-async function verifyOtpViaTwilio(phone, code) {
-    if (!twilioClient || !useTwilioVerify) return null;
-    try {
-        const result = await twilioClient.verify.v2
-            .services(TWILIO_VERIFY_SERVICE_SID)
-            .verificationChecks.create({ to: phone, code });
-        console.log(`✅ Twilio verification check | status: ${result.status} | to: ${phone}`);
-        return result.status === 'approved';
-    } catch (err) {
-        console.error('❌ Twilio verify OTP failed.', err?.message || err);
-        return null;
-    }
 }
 
 // Clean expired OTPs
@@ -135,15 +83,6 @@ function cleanExpiredOTPs() {
         }
     }
 }
-
-// GET /api/auth/request-otp - Return error (only POST is supported)
-app.get('/api/auth/request-otp', (req, res) => {
-    console.log('❌ GET request to /api/auth/request-otp - Method not allowed');
-    return res.status(405).json({
-        success: false,
-        message: 'Method not allowed. Use POST instead.'
-    });
-});
 
 // POST /api/auth/request-otp
 app.post('/api/auth/request-otp', async (req, res) => {
@@ -180,25 +119,21 @@ app.post('/api/auth/request-otp', async (req, res) => {
     // Generate temporary token
     const tempToken = `temp_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
 
-    // Store OTP with expiration (10 minutes) for fallback/local verification
+    // Store OTP with expiration (10 minutes)
     otpStore.set(phone, {
-        otp,
-        tempToken,
+        otp: otp,
+        tempToken: tempToken,
         expiresAt: Date.now() + (10 * 60 * 1000) // 10 minutes
     });
 
-    // Attempt to send via Twilio Verify first
-    const sentViaTwilio = await sendOtpViaTwilio(phone);
-
-    // Log OTP to console for debugging / fallback
+    // Log OTP to console for testing
     console.log('\n========================================');
     console.log('📱 OTP REQUESTED');
     console.log('========================================');
     console.log(`Phone: ${phone}`);
-    console.log(`OTP Code (local fallback): ${otp}`);
+    console.log(`OTP Code: ${otp}`);
     console.log(`Temp Token: ${tempToken}`);
     console.log(`Expires in: 10 minutes`);
-    console.log(`Sent via Twilio: ${Boolean(sentViaTwilio)}`);
     console.log('========================================\n');
 
     console.log('✅ Sending response...');
@@ -206,8 +141,7 @@ app.post('/api/auth/request-otp', async (req, res) => {
         success: true,
         message: 'OTP sent to your phone number',
         temp_token: tempToken,
-        requires_otp: true,
-        provider: sentViaTwilio ? 'twilio' : 'local'
+        requires_otp: true
     });
     console.log('✅ Response sent successfully');
 });
@@ -240,55 +174,46 @@ app.post('/api/auth/verify-otp', async (req, res) => {
         });
     }
 
-    // Try Twilio verification first if enabled
-    let twilioApproved = null;
-    if (useTwilioVerify && twilioClient) {
-        twilioApproved = await verifyOtpViaTwilio(phone, otp);
-    }
-
-    // Clean expired OTPs (used for fallback/local)
+    // Clean expired OTPs
     cleanExpiredOTPs();
 
-    // Get stored OTP data (fallback)
+    // Get stored OTP data
     const storedData = otpStore.get(phone);
 
-    // Validate temp token against stored fallback data
-    if (storedData && storedData.tempToken !== tempToken) {
+    if (!storedData) {
+        return res.status(400).json({
+            success: false,
+            message: 'OTP not found or expired. Please request a new OTP.'
+        });
+    }
+
+    // Check if temp token matches
+    if (storedData.tempToken !== tempToken) {
         return res.status(401).json({
             success: false,
             message: 'Invalid temporary token'
         });
     }
 
-    // If Twilio approved, continue; else fallback to local validation
-    if (twilioApproved !== true) {
-        if (!storedData) {
-            return res.status(400).json({
-                success: false,
-                message: 'OTP not found or expired. Please request a new OTP.'
-            });
-        }
+    // Check if OTP is expired
+    if (storedData.expiresAt < Date.now()) {
+        otpStore.delete(phone);
+        return res.status(410).json({
+            success: false,
+            message: 'OTP expired. Please request a new OTP.'
+        });
+    }
 
-        // Check expiry for fallback
-        if (storedData.expiresAt < Date.now()) {
-            otpStore.delete(phone);
-            return res.status(410).json({
-                success: false,
-                message: 'OTP expired. Please request a new OTP.'
-            });
-        }
-
-        // Verify OTP locally
-        if (storedData.otp !== otp) {
-            console.log(`\n❌ OTP VERIFICATION FAILED`);
-            console.log(`Phone: ${phone}`);
-            console.log(`Expected: ${storedData.otp}`);
-            console.log(`Received: ${otp}\n`);
-            return res.status(400).json({
-                success: false,
-                message: 'Invalid OTP. Please check and try again.'
-            });
-        }
+    // Verify OTP
+    if (storedData.otp !== otp) {
+        console.log(`\n❌ OTP VERIFICATION FAILED`);
+        console.log(`Phone: ${phone}`);
+        console.log(`Expected: ${storedData.otp}`);
+        console.log(`Received: ${otp}\n`);
+        return res.status(400).json({
+            success: false,
+            message: 'Invalid OTP. Please check and try again.'
+        });
     }
 
     // OTP verified successfully - remove from store
@@ -974,8 +899,69 @@ app.post('/api/drivers/:driver_id/loaded-items/confirm', async (req, res) => {
         }
     });
 });
+        
+// GET /api/drivers/:driver_id/unloaded-items/request
+app.get('/api/drivers/:driver_id/unloaded-items/request', async (req, res) => {
+    const { driver_id } = req.params;
 
-// Unload endpoints removed - only loading is supported
+    const items = [
+        {
+            id: 'water_5l_002',
+            name: '5L Water Bottles',
+            quantity: 28,
+            unit: 'bottles',
+            category: 'Water',
+            condition: 'empty'
+        },
+        {
+            id: 'water_10l_002',
+            name: '10L Water Bottles',
+            quantity: 15,
+            unit: 'bottles',
+            category: 'Water',
+            condition: 'full'
+        },
+        {
+            id: 'water_5l_003',
+            name: '5L Water Bottles',
+            quantity: 3,
+            unit: 'bottles',
+            category: 'Water',
+            condition: 'leaked'
+        },
+        {
+            id: 'water_10l_003',
+            name: '10L Water Bottles',
+            quantity: 2,
+            unit: 'bottles',
+            category: 'Water',
+            condition: 'damaged'
+        }
+    ];
+        
+    res.status(200).json({
+            success: true,
+        message: 'Items retrieved successfully',
+        data: items,
+        requested_at: new Date().toISOString()
+    });
+});
+
+// POST /api/drivers/:driver_id/unloaded-items/confirm
+app.post('/api/drivers/:driver_id/unloaded-items/confirm', async (req, res) => {
+    const { driver_id } = req.params;
+    const { items, is_correct, confirmed_at } = req.body;
+
+    res.status(200).json({
+        success: true,
+        message: 'Unloaded items confirmed successfully',
+        agreement: {
+            status: is_correct ? 'agreed' : 'disagreed',
+            notes: is_correct ? 'All items verified' : 'Discrepancy noted',
+            final_items: items
+        }
+    });
+});
 
 // ============================================
 // EXPENSES ENDPOINTS
@@ -1300,7 +1286,7 @@ app.listen(port, '0.0.0.0', () => {
     console.log(`   Auth: GET /api/auth/me, POST /api/auth/logout`);
     console.log(`   Orders: GET /api/driver/orders, GET /api/driver/history`);
     console.log(`   Items: GET/POST /api/drivers/:driver_id/loaded-items/*`);
-    console.log(`   Items: GET/POST /api/drivers/:driver_id/loaded-items/*`);
+    console.log(`   Items: GET/POST /api/drivers/:driver_id/unloaded-items/*`);
     console.log(`   Expenses: GET /api/expenses, POST /api/expenses/submit`);
     console.log(`   Products: GET /api/products`);
     console.log(`   Payment: POST /api/driver/orders/validate-payment`);

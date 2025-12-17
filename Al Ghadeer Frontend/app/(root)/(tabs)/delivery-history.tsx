@@ -85,27 +85,18 @@ const DeliveryHistory = () => {
         }
 
         // Transform orders to ensure proper structure
-        const transformedHistory: Order[] = orders.map(order => {
-          // If customer already exists, use it; otherwise construct from fallback fields
-          let customer = order.customer;
-          if (!customer && order.customer_name) {
-            customer = {
-              name: order.customer_name || '',
-              phone: order.customer_phone || '',
-              email: order.customer_email,
-              address: order.customer_address || '',
-              id: order.customer_id || '',
-              site_id: order.customer_site_id,
-              latitude: order.latitude || 0,
-              longitude: order.longitude || 0
-            };
-          }
-          return {
+        const transformedHistory: Order[] = orders.map(order => ({
           ...order,
           products: order.products || {},
-            customer
-          } as Order;
-        });
+          customer: order.customer || {
+            name: order.customer_name,
+            phone: order.customer_phone,
+            email: order.customer_email,
+            address: order.customer_address,
+            id: order.customer_id,
+            site_id: order.customer_site_id
+          }
+        }));
 
         // Save fetched data into state
         setHistory(transformedHistory);
@@ -149,41 +140,31 @@ const DeliveryHistory = () => {
     <ScrollView 
       horizontal 
       showsHorizontalScrollIndicator={false}
-      contentContainerStyle={{ paddingVertical: 4 }}
+      contentContainerStyle={{ paddingVertical: 12 }}
     >
       <View style={{ flexDirection: 'row', gap: 8 }}>
-        {(['All', 'delivered', 'failed', 'cancelled'] as const).map((s) => {
-          const isActive = statusFilter === s;
-          const statusStyle = s !== 'All' ? getStatusStyle(s) : null;
-          return (
+        {(['All', 'delivered', 'failed', 'cancelled'] as const).map((s) => (
           <TouchableOpacity
             key={s}
             style={{
-                paddingHorizontal: 14,
+              paddingHorizontal: 16,
               paddingVertical: 8,
-                borderRadius: 8,
+              borderRadius: 20,
               borderWidth: 1,
-                backgroundColor: isActive 
-                  ? (statusStyle?.backgroundColor || '#111827')
-                  : '#F9FAFB',
-                borderColor: isActive 
-                  ? (statusStyle?.borderColor || '#111827')
-                  : '#E5E7EB'
+              backgroundColor: statusFilter === s ? '#10B981' : 'white',
+              borderColor: statusFilter === s ? '#10B981' : '#E5E7EB'
             }}
             onPress={() => setStatusFilter(s)}
           >
             <Text style={{
-                color: isActive 
-                  ? (statusStyle?.textColor || '#FFFFFF')
-                  : '#6B7280',
-                fontSize: 13,
-                fontWeight: '500'
+              color: statusFilter === s ? 'white' : '#6B7280',
+              fontSize: 14,
+              fontWeight: '600'
             }}>
               {s.charAt(0).toUpperCase() + s.slice(1)}
             </Text>
           </TouchableOpacity>
-          );
-        })}
+        ))}
       </View>
     </ScrollView>
   );
@@ -209,63 +190,68 @@ const DeliveryHistory = () => {
 
     return (
       <View style={{
-        backgroundColor: '#FFFFFF',
-        borderRadius: 10,
-        padding: 14,
-        marginBottom: 10,
-        borderWidth: 1,
-        borderColor: '#F3F4F6'
+        backgroundColor: 'white',
+        borderRadius: 16,
+        padding: 20,
+        marginBottom: 16,
+        shadowColor: '#000',
+        shadowOffset: { width: 0, height: 2 },
+        shadowOpacity: 0.1,
+        shadowRadius: 4,
+        elevation: 4
       }}>
         {/* Header with customer name and status */}
-        <View style={{ flexDirection: 'row', alignItems: 'flex-start', justifyContent: 'space-between', marginBottom: 12 }}>
+        <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 16 }}>
           <View style={{ flex: 1 }}>
-            <Text style={{ color: '#111827', fontSize: 16, fontWeight: '600', marginBottom: 4 }}>
+            <Text style={{ color: '#111827', fontSize: 18, fontWeight: 'bold', marginBottom: 4 }}>
               {customerName}
             </Text>
-            <Text style={{ color: '#9CA3AF', fontSize: 11 }}>
-              #{item.order_number}
+            <Text style={{ color: '#6B7280', fontSize: 12, fontWeight: '600' }}>
+              Order #{item.order_number}
             </Text>
           </View>
           <View style={{
             backgroundColor: statusStyle.backgroundColor,
-            borderRadius: 8,
-            paddingHorizontal: 10,
-            paddingVertical: 5,
+            borderWidth: 1,
+            borderColor: statusStyle.borderColor,
+            borderRadius: 20,
+            paddingHorizontal: 12,
+            paddingVertical: 6,
             flexDirection: 'row',
             alignItems: 'center'
           }}>
             <Ionicons 
-              name={item.status === 'delivered' ? 'checkmark-circle' : item.status === 'failed' ? 'close-circle' : 'time-outline'} 
-              size={12} 
+              name={item.status === 'delivered' ? 'checkmark-circle' : item.status === 'failed' ? 'close-circle' : 'time'} 
+              size={14} 
               color={statusStyle.iconColor} 
               style={{ marginRight: 4 }}
             />
-            <Text style={{ color: statusStyle.textColor, fontSize: 11, fontWeight: '600' }}>
+            <Text style={{ color: statusStyle.textColor, fontSize: 12, fontWeight: '600' }}>
               {item.status.charAt(0).toUpperCase() + item.status.slice(1).replace('_', ' ')}
             </Text>
           </View>
         </View>
 
         {/* Customer Information */}
-        <View style={{ marginBottom: 12, paddingBottom: 12, borderBottomWidth: 1, borderBottomColor: '#F3F4F6' }}>
+        <View style={{ marginBottom: 16 }}>
           <View style={{ flexDirection: 'row', alignItems: 'flex-start', marginBottom: 8 }}>
-            <Ionicons name="location-outline" size={14} color="#9CA3AF" style={{ marginTop: 2, marginRight: 8, width: 18 }} />
-            <Text style={{ color: '#374151', fontSize: 13, flex: 1, lineHeight: 18 }}>
+            <Ionicons name="location" size={16} color="#6B7280" style={{ marginTop: 2, marginRight: 8 }} />
+            <Text style={{ color: '#374151', fontSize: 14, flex: 1, lineHeight: 20 }}>
               {customerAddress}
             </Text>
           </View>
           
           <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 8 }}>
-            <Ionicons name="call-outline" size={14} color="#9CA3AF" style={{ marginRight: 8, width: 18 }} />
-            <Text style={{ color: '#6B7280', fontSize: 13 }}>
+            <Ionicons name="call" size={16} color="#6B7280" style={{ marginRight: 8 }} />
+            <Text style={{ color: '#374151', fontSize: 14 }}>
               {customerPhone}
             </Text>
           </View>
 
           <View style={{ flexDirection: 'row', alignItems: 'center' }}>
-            <Ionicons name="cube-outline" size={14} color="#9CA3AF" style={{ marginRight: 8, width: 18 }} />
-            <Text style={{ color: '#6B7280', fontSize: 13 }}>
-              {totalItems} {totalItems === 1 ? 'item' : 'items'}
+            <Ionicons name="cube" size={16} color="#6B7280" style={{ marginRight: 8 }} />
+            <Text style={{ color: '#374151', fontSize: 14 }}>
+              {totalItems} items • AED {totalAmount}
             </Text>
           </View>
         </View>
@@ -275,43 +261,43 @@ const DeliveryHistory = () => {
           <View style={{ 
             backgroundColor: '#F9FAFB', 
             borderRadius: 8, 
-            padding: 10, 
-            marginBottom: 12,
-            borderWidth: 1,
-            borderColor: '#E5E7EB'
+            padding: 12, 
+            marginBottom: 16 
           }}>
-            <Text style={{ color: '#6B7280', fontSize: 11, fontWeight: '500', marginBottom: 4 }}>
-              Notes
+            <Text style={{ color: '#6B7280', fontSize: 12, fontWeight: '600', marginBottom: 4 }}>
+              DELIVERY NOTES
             </Text>
-            <Text style={{ color: '#374151', fontSize: 12, lineHeight: 18 }}>
+            <Text style={{ color: '#374151', fontSize: 14, lineHeight: 20 }}>
               {deliveryInstructions}
             </Text>
           </View>
         )}
 
-        {/* Footer with amount and date */}
+        {/* Timestamps */}
+        <View style={{ borderTopWidth: 1, borderTopColor: '#E5E7EB', paddingTop: 12 }}>
           <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}>
             <View style={{ flex: 1 }}>
-            {item.delivery?.delivered_at && (
-              <Text style={{ color: '#9CA3AF', fontSize: 11 }}>
-                {new Date(item.delivery.delivered_at).toLocaleDateString()}
+              {item.assigned_at && (
+                <Text style={{ color: '#6B7280', fontSize: 12, marginBottom: 2 }}>
+                  Assigned: {new Date(item.assigned_at).toLocaleDateString()}
                 </Text>
               )}
-            {!item.delivery?.delivered_at && item.completed_at && (
-              <Text style={{ color: '#9CA3AF', fontSize: 11 }}>
-                {new Date(item.completed_at).toLocaleDateString()}
+              {item.completed_at && (
+                <Text style={{ color: '#6B7280', fontSize: 12, marginBottom: 2 }}>
+                  Completed: {new Date(item.completed_at).toLocaleDateString()}
                 </Text>
               )}
-            {!item.delivery?.delivered_at && !item.completed_at && item.assigned_at && (
-              <Text style={{ color: '#9CA3AF', fontSize: 11 }}>
-                {new Date(item.assigned_at).toLocaleDateString()}
+              {item.delivery?.delivered_at && (
+                <Text style={{ color: '#6B7280', fontSize: 12 }}>
+                  Delivered: {new Date(item.delivery.delivered_at).toLocaleDateString()}
                 </Text>
               )}
             </View>
             <View style={{ alignItems: 'flex-end' }}>
-            <Text style={{ color: '#111827', fontSize: 15, fontWeight: '600' }}>
-              AED {totalAmount.toFixed(2)}
+              <Text style={{ color: '#10B981', fontSize: 16, fontWeight: 'bold' }}>
+                AED {totalAmount}
               </Text>
+            </View>
           </View>
         </View>
       </View>
@@ -320,51 +306,55 @@ const DeliveryHistory = () => {
 
 
   return (
-    <View style={{ flex: 1, backgroundColor: '#FFFFFF' }}>
-      {/* Minimal Header */}
+    <View style={{ flex: 1, backgroundColor: '#F9FAFB' }}>
+      {/* Header */}
       <View style={{ 
-        backgroundColor: '#FFFFFF', 
+        backgroundColor: '#10B981', 
         paddingHorizontal: 20, 
         paddingTop: 16, 
-        paddingBottom: 16,
-        borderBottomWidth: 1,
-        borderBottomColor: '#F3F4F6',
+        paddingBottom: 20,
+        shadowColor: '#000',
+        shadowOffset: { width: 0, height: 2 },
+        shadowOpacity: 0.1,
+        shadowRadius: 4,
+        elevation: 4
       }}>
-        <Text style={{ color: '#111827', fontSize: 20, fontWeight: '600', textAlign: 'center' }}>
+        <Text style={{ color: 'white', fontSize: 20, fontWeight: 'bold', textAlign: 'center' }}>
           Delivery History
         </Text>
-        {!loading && (
-          <Text style={{ color: '#9CA3AF', fontSize: 13, textAlign: 'center', marginTop: 4 }}>
-            {filtered.length} {filtered.length === 1 ? 'delivery' : 'deliveries'}
+        <Text style={{ color: 'rgba(255, 255, 255, 0.8)', fontSize: 14, textAlign: 'center', marginTop: 4 }}>
+          {filtered.length} deliveries found
         </Text>
-        )}
       </View>
 
       {/* Search and Filters */}
-      <View style={{ padding: 20, paddingBottom: 12 }}>
+      <View style={{ padding: 20, paddingBottom: 0 }}>
         {/* Search Bar */}
         <View style={{
-          backgroundColor: '#F9FAFB',
-          borderRadius: 10,
-          paddingHorizontal: 14,
-          paddingVertical: 10,
+          backgroundColor: 'white',
+          borderRadius: 16,
+          paddingHorizontal: 16,
+          paddingVertical: 12,
           flexDirection: 'row',
           alignItems: 'center',
           marginBottom: 16,
-          borderWidth: 1,
-          borderColor: '#E5E7EB'
+          shadowColor: '#000',
+          shadowOffset: { width: 0, height: 2 },
+          shadowOpacity: 0.1,
+          shadowRadius: 4,
+          elevation: 4
         }}>
-          <Ionicons name="search-outline" size={18} color="#9CA3AF" style={{ marginRight: 10 }} />
+          <Ionicons name="search" size={20} color="#6B7280" style={{ marginRight: 12 }} />
           <TextInput
-            style={{ flex: 1, fontSize: 15, color: '#111827' }}
-            placeholder="Search deliveries..."
+            style={{ flex: 1, fontSize: 16, color: '#111827' }}
+            placeholder="Search by customer, address, or status..."
             placeholderTextColor="#9CA3AF"
             value={search}
             onChangeText={setSearch}
           />
           {search.length > 0 && (
             <TouchableOpacity onPress={() => setSearch('')} style={{ padding: 4 }}>
-              <Ionicons name="close-circle" size={18} color="#9CA3AF" />
+              <Ionicons name="close" size={20} color="#6B7280" />
             </TouchableOpacity>
           )}
         </View>
@@ -376,10 +366,22 @@ const DeliveryHistory = () => {
       {/* Content */}
       {loading ? (
         <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center' }}>
-          <ActivityIndicator size="large" color="#6B7280" />
-          <Text style={{ color: '#9CA3AF', fontSize: 14, marginTop: 16 }}>
-            Loading...
+          <View style={{
+            backgroundColor: 'white',
+            borderRadius: 20,
+            padding: 32,
+            alignItems: 'center',
+            shadowColor: '#000',
+            shadowOffset: { width: 0, height: 4 },
+            shadowOpacity: 0.1,
+            shadowRadius: 8,
+            elevation: 8
+          }}>
+            <ActivityIndicator size="large" color="#10B981" />
+            <Text style={{ color: '#6B7280', fontSize: 16, marginTop: 16, fontWeight: '500' }}>
+              Loading delivery history...
             </Text>
+          </View>
         </View>
       ) : (
         <FlatList
@@ -394,13 +396,25 @@ const DeliveryHistory = () => {
               justifyContent: 'center',
               paddingVertical: 60
             }}>
-              <Ionicons name="time-outline" size={32} color="#D1D5DB" />
-              <Text style={{ color: '#6B7280', fontSize: 15, fontWeight: '500', marginTop: 12, textAlign: 'center' }}>
-                {search ? 'No deliveries found' : 'No delivery history'}
+              <View style={{
+                backgroundColor: 'white',
+                borderRadius: 20,
+                padding: 32,
+                alignItems: 'center',
+                shadowColor: '#000',
+                shadowOffset: { width: 0, height: 4 },
+                shadowOpacity: 0.1,
+                shadowRadius: 8,
+                elevation: 8
+              }}>
+                <Ionicons name="time" size={48} color="#9CA3AF" />
+                <Text style={{ color: '#6B7280', fontSize: 18, fontWeight: '600', marginTop: 16, textAlign: 'center' }}>
+                  No delivery history found
                 </Text>
-              <Text style={{ color: '#9CA3AF', fontSize: 13, marginTop: 6, textAlign: 'center' }}>
-                {search ? 'Try different search terms' : 'Completed deliveries will appear here'}
+                <Text style={{ color: '#9CA3AF', fontSize: 14, marginTop: 8, textAlign: 'center' }}>
+                  {search ? 'Try adjusting your search criteria' : 'Your completed deliveries will appear here'}
                 </Text>
+              </View>
             </View>
           }
           showsVerticalScrollIndicator={false}
