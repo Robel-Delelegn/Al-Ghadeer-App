@@ -113,7 +113,7 @@ interface OrderStore {
   cartItems: CartItem[];
   
   // Payment management
-  selectedPaymentMethod: 'cash' | 'wallet';
+  selectedPaymentMethod: 'cash' | 'wallet' | 'credit_card';
   
   // Order actions
   selectOrder: (id: string) => void;
@@ -137,7 +137,7 @@ interface OrderStore {
   clearCart: () => void;
   
   // Payment actions
-  setPaymentMethod: (method: 'cash' | 'wallet') => void;
+  setPaymentMethod: (method: 'cash' | 'wallet' | 'credit_card') => void;
   
   // Utility actions
   getOrderHistory: () => Order[];
@@ -160,7 +160,7 @@ export const useOrderStore = create<OrderStore>()(persist(
     cartItems: [],
     
     // Payment management state
-    selectedPaymentMethod: 'cash' as 'cash' | 'wallet',
+    selectedPaymentMethod: 'cash' as 'cash' | 'wallet' | 'credit_card',
 
     
     // Order management actions
@@ -390,7 +390,7 @@ export const useOrderStore = create<OrderStore>()(persist(
     },
     
     // Payment management actions
-    setPaymentMethod: (method: 'cash' | 'wallet') => {
+    setPaymentMethod: (method: 'cash' | 'wallet' | 'credit_card') => {
       set({ selectedPaymentMethod: method });
     },
     

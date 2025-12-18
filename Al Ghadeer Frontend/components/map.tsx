@@ -75,13 +75,13 @@ export default function MyMap({orders}: {orders: Order[]}) {
         const customerName = order.customer?.name || order.customer_name || 'Customer';
         
         return {
-            id: `order-${order.id}`,
-            coordinates: {
+        id: `order-${order.id}`,
+        coordinates: {
                 latitude: latitude,
                 longitude: longitude 
-            },
+        },
             title: customerName,
-            icon: icons.pin,
+        icon: icons.pin,
         };
     });
     if (Platform.OS !== 'android') {

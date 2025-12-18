@@ -1,5 +1,6 @@
 import DeliveryCard from '@/components/DeliveryCard';
 import MyMap from '@/components/map';
+import ProfileModal from '@/components/ProfileModal';
 import { icons, images } from '@/constants';
 import { useLocationStore, useOrderStore } from '@/store/index';
 import { Order } from '@/types/order';
@@ -42,6 +43,7 @@ const Home = ({ navigation }: HomeProps) => {
   const [hasPermission, setHasPermission] = useState(false);
   const [deliveries, setDeliveries] = useState<Order[]>([]);
   const [isloading, setIsloading] = useState(true);
+  const [isProfileModalVisible, setIsProfileModalVisible] = useState(false);
   
   // Helper function to check if order is currently available
   const isOrderCurrentlyAvailable = (order: Order) => {
@@ -199,10 +201,12 @@ const Home = ({ navigation }: HomeProps) => {
         <View className="absolute top-0 left-0 right-0 px-6 pt-14 pb-2">
           <View className="flex-row items-center justify-between mb-4">
             <View className="flex-row items-center">
-              <Image 
-                source={typeof avatar === 'string' ? { uri: avatar } : avatar} 
-                className="w-12 h-12 rounded-full border-2 border-white mr-4" 
-              />
+              <TouchableOpacity onPress={() => setIsProfileModalVisible(true)}>
+                <Image 
+                  source={typeof avatar === 'string' ? { uri: avatar } : avatar} 
+                  className="w-12 h-12 rounded-full border-2 border-white mr-4" 
+                />
+              </TouchableOpacity>
               <View>
                 <Text className="text-gray-700 text-xs">Good morning,</Text>
                 <Text className="text-gray-900 text-xl font-JakartaSemiBold">{driverName}</Text>
@@ -306,7 +310,7 @@ const Home = ({ navigation }: HomeProps) => {
                 onPress={()=>{handleViewDetails(item.id)}}
               />
             )}
-            contentContainerStyle={{ paddingHorizontal: 24, paddingBottom: 32 }}
+            contentContainerStyle={{ paddingHorizontal: 24, paddingBottom: 100 }}
             ListEmptyComponent={
               <View className="flex-1 items-center justify-center mt-24">
                 <Image source={images.noResult} className="w-40 h-40 mb-6" resizeMode="contain" />
@@ -323,6 +327,12 @@ const Home = ({ navigation }: HomeProps) => {
         } 
         </View>
       </View>
+      
+      {/* Profile Modal */}
+      <ProfileModal 
+        visible={isProfileModalVisible} 
+        onClose={() => setIsProfileModalVisible(false)} 
+      />
     </GestureHandlerRootView>
   );
 };

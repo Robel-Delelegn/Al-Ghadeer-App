@@ -2,12 +2,23 @@ import { useOrderStore } from '@/store/index';
 import { Order } from '@/types/order';
 import { Ionicons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
-import React, { useCallback, useState } from 'react';
-import { ActivityIndicator, Alert, Image, ScrollView, Text, TouchableOpacity, View } from 'react-native';
+import React, { useCallback, useState, useMemo } from 'react';
+import { 
+  ActivityIndicator, 
+  Alert, 
+  ScrollView, 
+  Text, 
+  TouchableOpacity, 
+  View,
+  StyleSheet,
+  Dimensions,
+  Platform,
+} from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
+const { width } = Dimensions.get('window');
 const IP_ADDRESS = process.env.EXPO_PUBLIC_IP_ADDRESS || 'http://localhost:3000/api';
 
-// API Response interface
 interface ApiResponse {
   success: boolean;
   message: string;
@@ -22,6 +33,7 @@ interface ApiResponse {
 }
 
 const PaymentConfirmation: React.FC = () => {
+  const insets = useSafeAreaInsets();
   const router = useRouter();
   const [isProcessing, setIsProcessing] = useState(false);
   const { 
@@ -30,41 +42,58 @@ const PaymentConfirmation: React.FC = () => {
     cartItems,
     selectedPaymentMethod
   } = useOrderStore();
+  
   const orderDetail = assignedOrders.find(item => selectedOrder === item.id) as Order | undefined;
   
-  // Debug logging
-  console.log('Payment Confirmation - orderDetail:', orderDetail);
-  console.log('Payment Confirmation - cartItems:', cartItems);
-  console.log('Payment Confirmation - cartItems length:', cartItems.length);
-  
-  // Calculate totals from cart items with safety checks
-  const subtotal = cartItems.reduce((sum, item) => {
-    if (!item || typeof item.price !== 'number' || typeof item.quantity !== 'number') {
-      console.error('Invalid cart item for calculation:', item);
-      return sum;
+  const { subtotal, vat, totalWithVat, itemCount } = useMemo(() => {
+    const sub = cartItems.reduce((sum, item) => {
+      if (!item || typeof item.price !== 'number' || typeof item.quantity !== 'number') {
+        return sum;
+      }
+      return sum + item.price * item.quantity;
+    }, 0);
+    const vatAmount = sub * 0.05;
+    const total = sub + vatAmount;
+    const count = cartItems.reduce((sum, item) => sum + (item?.quantity || 0), 0);
+    
+    return {
+      subtotal: sub.toFixed(2),
+      vat: vatAmount.toFixed(2),
+      totalWithVat: total.toFixed(2),
+      itemCount: count
+    };
+  }, [cartItems]);
+
+  const paymentIcon = useMemo(() => {
+    switch (selectedPaymentMethod) {
+      case 'wallet': return 'wallet';
+      case 'credit_card': return 'card';
+      default: return 'cash';
     }
-    return sum + item.price * item.quantity;
-  }, 0).toFixed(2);
-  const vat = (Number(subtotal) * 0.15).toFixed(2);
-  const totalWithVat = (Number(subtotal) + Number(vat)).toFixed(2);
-  const orderId = orderDetail?.order_number || 'N/A';
+  }, [selectedPaymentMethod]);
+
+  const paymentLabel = useMemo(() => {
+    switch (selectedPaymentMethod) {
+      case 'wallet': return 'Wallet';
+      case 'credit_card': return 'Card';
+      default: return 'Cash';
+    }
+  }, [selectedPaymentMethod]);
 
   const handleConfirmPayment = useCallback(async () => {
     if (!orderDetail) {
-      Alert.alert('Error', 'Order details not found. Please try again.');
+      Alert.alert('Error', 'Order details not found.');
       return;
     }
     
     if (cartItems.length === 0) {
-      Alert.alert('Error', 'No items in cart. Please add items before proceeding.');
+      Alert.alert('Error', 'No items in cart.');
       return;
     }
     
-    console.log('Starting payment confirmation process...');
     setIsProcessing(true);
     
     try {
-      // Prepare order data for server with safe property access
       const orderData = {
         customer_site_id: orderDetail.customer?.site_id || orderDetail.customer_site_id || '',
         customer_id: orderDetail.customer?.id || orderDetail.customer_id || '',
@@ -75,17 +104,11 @@ const PaymentConfirmation: React.FC = () => {
         latitude: orderDetail.customer?.latitude || orderDetail.latitude || 0,
         longitude: orderDetail.customer?.longitude || orderDetail.longitude || 0,
         delivery_instructions: orderDetail.customer?.delivery_instructions || orderDetail.delivery_instructions || '',
-        products: cartItems.map(item => {
-          if (!item || !item.name) {
-            console.error('Invalid cart item in payment confirmation:', item);
-            return null;
-          }
-          return {
-            name: item.name,
-            quantity: item.quantity,
-            price: item.price
-          };
-        }).filter(Boolean), // Remove null items
+        products: cartItems.filter(item => item?.name).map(item => ({
+          name: item.name,
+          quantity: item.quantity,
+          price: item.price
+        })),
         subtotal: parseFloat(subtotal),
         vat: parseFloat(vat),
         total_amount: parseFloat(totalWithVat),
@@ -93,18 +116,11 @@ const PaymentConfirmation: React.FC = () => {
         delivery_zone: orderDetail.delivery?.delivery_zone || orderDetail.delivery_zone || 'General'
       };
 
-      console.log('Sending order data:', orderData);
-
-      // Send order to server
-      let url = `${IP_ADDRESS}/driver/orders/confirm-payment`;
-      url += "?driver_id=b97f3fc1-0708-4b97-bf5d-deb424b2cd93";;
-      console.log('Sending to:', url);
+      const url = `${IP_ADDRESS}/driver/orders/confirm-payment?driver_id=b97f3fc1-0708-4b97-bf5d-deb424b2cd93`;
       
       const response = await fetch(url, {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
+        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(orderData),
       });
 
@@ -114,502 +130,515 @@ const PaymentConfirmation: React.FC = () => {
       }
 
       const result: ApiResponse = await response.json();
-      console.log('Payment confirmation response:', result);
 
       if (!result.success) {
         throw new Error(result.message || 'Payment confirmation failed');
       }
 
-      // Show success message
       Alert.alert(
-        'Payment Successful!', 
-        result.message || `Order ${result.order.order_number} has been created successfully.`,
-        [
-          {
-            text: 'View Receipt',
-            onPress: () => router.push('/(root)/(tabs)/payment-receipt')
-          }
-        ]
+        'Payment Successful', 
+        result.message || `Order ${result.order.order_number} confirmed.`,
+        [{ text: 'View Receipt', onPress: () => router.push('/(root)/(tabs)/payment-receipt') }]
       );
       
     } catch (error) {
-      console.error('Payment confirmation error:', error);
       Alert.alert(
         'Payment Failed', 
-        error instanceof Error ? error.message : 'There was an error processing your payment. Please try again.'
+        error instanceof Error ? error.message : 'Please try again.'
       );
     } finally {
       setIsProcessing(false);
     }
   }, [orderDetail, cartItems, subtotal, vat, totalWithVat, selectedPaymentMethod, router]);
 
-  const handleEditOrder = useCallback(() => {
-    router.back();
-  }, [router]);
+  const customerName = orderDetail?.customer?.name || orderDetail?.customer_name || 'Customer';
+  const customerAddress = orderDetail?.customer?.address || orderDetail?.customer_address || '—';
+  const customerPhone = orderDetail?.customer?.phone || orderDetail?.customer_phone || '—';
 
   return (
-    <View style={{ flex: 1, backgroundColor: '#F8F9FA' }}>
+    <View style={[styles.container, { paddingTop: insets.top }]}>
       {/* Header */}
-      <View style={{ 
-        backgroundColor: '#FFFFFF', 
-        paddingHorizontal: 20, 
-        paddingTop: 16, 
-        paddingBottom: 20,
-        borderBottomWidth: 1,
-        borderBottomColor: '#E9ECEF'
-      }}>
-        <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 12 }}>
-          <TouchableOpacity onPress={() => router.back()} style={{ padding: 8 }}>
-            <Ionicons name="arrow-back" size={24} color="#495057" />
-          </TouchableOpacity>
-          <Text style={{ color: '#212529', fontSize: 18, fontWeight: '600' }}>Payment Confirmation</Text>
-          <View style={{ width: 40 }} />
-        </View>
-        
-        {orderDetail && (
-          <View style={{ 
-            backgroundColor: '#E3F2FD', 
-            borderRadius: 8, 
-            padding: 12,
-            borderWidth: 1,
-            borderColor: '#BBDEFB'
-          }}>
-            <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 4 }}>
-              <Ionicons name="receipt" size={16} color="#1976D2" />
-              <Text style={{ color: '#1976D2', fontSize: 14, fontWeight: '600', marginLeft: 6 }}>
-                Order #{orderDetail.order_number}
-              </Text>
-            </View>
-            <View style={{ flexDirection: 'row', alignItems: 'center' }}>
-              <Ionicons name="person" size={14} color="#1976D2" />
-              <Text style={{ color: '#1976D2', fontSize: 12, marginLeft: 6 }}>
-                {orderDetail.customer?.name || orderDetail.customer_name || 'Customer'}
-              </Text>
-            </View>
-          </View>
-        )}
+      <View style={styles.header}>
+        <TouchableOpacity 
+          style={styles.backButton} 
+          onPress={() => router.back()}
+          activeOpacity={0.7}
+        >
+          <Ionicons name="chevron-back" size={20} color="#0F172A" />
+        </TouchableOpacity>
+        <Text style={styles.headerTitle}>Confirm Payment</Text>
+        <View style={styles.headerRight} />
       </View>
 
-      {/* Content */}
       <ScrollView 
-        contentContainerStyle={{ padding: 20, paddingBottom: 120 }} 
+        style={styles.content}
+        contentContainerStyle={styles.contentContainer}
         showsVerticalScrollIndicator={false}
       >
-        {/* Status Card */}
-        <View style={{ 
-          backgroundColor: '#FFFFFF', 
-          borderRadius: 8, 
-          padding: 20, 
-          marginBottom: 16,
-          borderWidth: 1,
-          borderColor: '#E9ECEF',
-          shadowColor: '#000',
-          shadowOffset: { width: 0, height: 2 },
-          shadowOpacity: 0.05,
-          shadowRadius: 8,
-          elevation: 2
-        }}>
-          <View style={{ flexDirection: 'row', alignItems: 'center' }}>
-            <View style={{ 
-              width: 48, 
-              height: 48, 
-              backgroundColor: '#E8F5E8', 
-              borderRadius: 24, 
-              alignItems: 'center', 
-              justifyContent: 'center', 
-              marginRight: 16 
-            }}>
-              <Ionicons name="checkmark-circle" size={24} color="#28A745" />
-            </View>
-            <View style={{ flex: 1 }}>
-              <Text style={{ color: '#212529', fontSize: 16, fontWeight: '600', marginBottom: 4 }}>
-                Ready for Payment
-              </Text>
-              <Text style={{ color: '#6C757D', fontSize: 14 }}>
-                Please review your order details below
-              </Text>
-            </View>
+        {/* Status Hero */}
+        <View style={styles.heroSection}>
+          <View style={styles.heroIconBox}>
+            <Ionicons name="shield-checkmark" size={28} color="#059669" />
           </View>
+          <Text style={styles.heroTitle}>Ready to Confirm</Text>
+          <Text style={styles.heroSubtitle}>Review the details before completing</Text>
         </View>
 
-        {/* Order Summary Card */}
-        <View style={{ 
-          backgroundColor: '#FFFFFF', 
-          borderRadius: 8, 
-          padding: 20, 
-          marginBottom: 16,
-          borderWidth: 1,
-          borderColor: '#E9ECEF',
-          shadowColor: '#000',
-          shadowOffset: { width: 0, height: 2 },
-          shadowOpacity: 0.05,
-          shadowRadius: 8,
-          elevation: 2
-        }}>
-          <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 16 }}>
-            <View style={{ 
-              width: 40, 
-              height: 40, 
-              backgroundColor: '#E3F2FD', 
-              borderRadius: 20, 
-              alignItems: 'center', 
-              justifyContent: 'center', 
-              marginRight: 12 
-            }}>
-              <Ionicons name="cube" size={20} color="#1976D2" />
+        {/* Order Items */}
+        <View style={styles.card}>
+          <View style={styles.cardHeader}>
+            <Text style={styles.cardTitle}>Order Items</Text>
+            <View style={styles.itemCountBadge}>
+              <Text style={styles.itemCountText}>{itemCount}</Text>
             </View>
-            <Text style={{ color: '#212529', fontSize: 16, fontWeight: '600' }}>
-              Order Summary
-            </Text>
           </View>
           
           {cartItems.length === 0 ? (
-            <View style={{ 
-              backgroundColor: '#F8F9FA', 
-              borderRadius: 8, 
-              padding: 24, 
-              alignItems: 'center',
-              borderWidth: 1,
-              borderColor: '#E9ECEF'
-            }}>
-              <Ionicons name="cart-outline" size={32} color="#6C757D" />
-              <Text style={{ color: '#6C757D', fontSize: 16, marginTop: 8, fontWeight: '500' }}>
-                No items in cart
-              </Text>
+            <View style={styles.emptyItems}>
+              <Ionicons name="cart-outline" size={28} color="#D1D5DB" />
+              <Text style={styles.emptyItemsText}>No items</Text>
             </View>
           ) : (
-            <View style={{ gap: 12 }}>
-              {cartItems.map((item) => {
-                if (!item || !item.name) {
-                  console.error('Invalid cart item in order summary:', item);
-                  return null;
-                }
-                const itemTotal = (item.price * item.quantity).toFixed(2);
-                return (
-                  <View key={item.id} style={{ 
-                    flexDirection: 'row', 
-                    alignItems: 'center', 
-                    backgroundColor: '#F8F9FA', 
-                    borderRadius: 8, 
-                    padding: 12,
-                    borderWidth: 1,
-                    borderColor: '#E9ECEF'
-                  }}>
-                    <View style={{ 
-                      width: 50, 
-                      height: 50, 
-                      borderRadius: 8, 
-                      overflow: 'hidden', 
-                      backgroundColor: '#F8F9FA',
-                      borderWidth: 1,
-                      borderColor: '#E9ECEF'
-                    }}>
-                      <Image
-                        source={item.image || { uri: 'https://via.placeholder.com/150' }}
-                        style={{ width: '100%', height: '100%' }}
-                        resizeMode="cover"
-                      />
-                    </View>
-                    <View style={{ flex: 1, marginLeft: 12 }}>
-                      <Text style={{ color: '#212529', fontSize: 14, fontWeight: '600', marginBottom: 4 }}>
-                        {item.name || 'Unknown Product'}
-                      </Text>
-                      <Text style={{ color: '#6C757D', fontSize: 12 }}>
-                        Qty: {item.quantity} × {item.currency || 'AED'} {item.price || 0}
-                      </Text>
-                    </View>
-                    <Text style={{ color: '#1976D2', fontSize: 16, fontWeight: '700' }}>
-                      {item.currency || 'AED'} {itemTotal}
+            cartItems.filter(item => item?.name).map((item, index) => (
+              <View key={item.id}>
+                <View style={styles.itemRow}>
+                  <View style={styles.itemIconBox}>
+                    <Ionicons name="water" size={14} color="#0EA5E9" />
+                  </View>
+                  <View style={styles.itemInfo}>
+                    <Text style={styles.itemName} numberOfLines={1}>{item.name}</Text>
+                    <Text style={styles.itemMeta}>
+                      {item.quantity} × AED {item.price}
                     </Text>
                   </View>
-                );
-              }).filter(Boolean)}
-            </View>
+                  <Text style={styles.itemTotal}>
+                    AED {(item.price * item.quantity).toFixed(2)}
+                  </Text>
+                </View>
+                {index < cartItems.length - 1 && <View style={styles.itemDivider} />}
+              </View>
+            ))
           )}
         </View>
 
-        {/* Delivery Information Card */}
-        <View style={{ 
-          backgroundColor: '#FFFFFF', 
-          borderRadius: 8, 
-          padding: 20, 
-          marginBottom: 16,
-          borderWidth: 1,
-          borderColor: '#E9ECEF',
-          shadowColor: '#000',
-          shadowOffset: { width: 0, height: 2 },
-          shadowOpacity: 0.05,
-          shadowRadius: 8,
-          elevation: 2
-        }}>
-          <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 16 }}>
-            <View style={{ 
-              width: 40, 
-              height: 40, 
-              backgroundColor: '#E8F5E8', 
-              borderRadius: 20, 
-              alignItems: 'center', 
-              justifyContent: 'center', 
-              marginRight: 12 
-            }}>
-              <Ionicons name="location" size={20} color="#28A745" />
+        {/* Customer */}
+        <View style={styles.card}>
+          <Text style={styles.cardTitle}>Customer</Text>
+          <View style={styles.customerRow}>
+            <View style={styles.customerAvatar}>
+              <Text style={styles.customerInitial}>
+                {customerName.charAt(0).toUpperCase()}
+              </Text>
             </View>
-            <Text style={{ color: '#212529', fontSize: 16, fontWeight: '600' }}>
-              Delivery Information
-            </Text>
+            <View style={styles.customerInfo}>
+              <Text style={styles.customerName}>{customerName}</Text>
+              <Text style={styles.customerPhone}>{customerPhone}</Text>
+            </View>
           </View>
-          
-          <View style={{ gap: 16 }}>
-            <View>
-              <Text style={{ color: '#6C757D', fontSize: 12, fontWeight: '600', marginBottom: 6 }}>
-                CUSTOMER NAME
-              </Text>
-              <View style={{ 
-                backgroundColor: '#F8F9FA', 
-                borderRadius: 6, 
-                padding: 12, 
-                borderWidth: 1, 
-                borderColor: '#E9ECEF' 
-              }}>
-                <Text style={{ color: '#212529', fontSize: 14, fontWeight: '500' }}>
-                  {orderDetail?.customer?.name || orderDetail?.customer_name || 'N/A'}
-                </Text>
-              </View>
+          <View style={styles.addressBox}>
+            <Ionicons name="location" size={14} color="#6B7280" />
+            <Text style={styles.addressText} numberOfLines={2}>{customerAddress}</Text>
+          </View>
+        </View>
+
+        {/* Payment Method */}
+        <View style={styles.card}>
+          <Text style={styles.cardTitle}>Payment Method</Text>
+          <View style={styles.paymentRow}>
+            <View style={styles.paymentIconBox}>
+              <Ionicons name={paymentIcon} size={20} color="#111827" />
             </View>
-            
-            <View>
-              <Text style={{ color: '#6C757D', fontSize: 12, fontWeight: '600', marginBottom: 6 }}>
-                DELIVERY ADDRESS
-              </Text>
-              <View style={{ 
-                backgroundColor: '#F8F9FA', 
-                borderRadius: 6, 
-                padding: 12, 
-                borderWidth: 1, 
-                borderColor: '#E9ECEF' 
-              }}>
-                <Text style={{ color: '#212529', fontSize: 14, fontWeight: '500', lineHeight: 20 }}>
-                  {orderDetail?.customer?.address || orderDetail?.customer_address || 'N/A'}
-                </Text>
-              </View>
+            <View style={styles.paymentInfo}>
+              <Text style={styles.paymentLabel}>{paymentLabel}</Text>
+              <Text style={styles.paymentSublabel}>Selected method</Text>
             </View>
-            
-            <View>
-              <Text style={{ color: '#6C757D', fontSize: 12, fontWeight: '600', marginBottom: 6 }}>
-                CONTACT NUMBER
-              </Text>
-              <View style={{ 
-                backgroundColor: '#F8F9FA', 
-                borderRadius: 6, 
-                padding: 12, 
-                borderWidth: 1, 
-                borderColor: '#E9ECEF' 
-              }}>
-                <Text style={{ color: '#212529', fontSize: 14, fontWeight: '500' }}>
-                  {orderDetail?.customer?.phone || orderDetail?.customer_phone || 'N/A'}
-                </Text>
-              </View>
+            <View style={styles.paymentCheck}>
+              <Ionicons name="checkmark" size={14} color="#059669" />
             </View>
           </View>
         </View>
 
-        {/* Payment Method Card */}
-        <View style={{ 
-          backgroundColor: '#FFFFFF', 
-          borderRadius: 8, 
-          padding: 20, 
-          marginBottom: 16,
-          borderWidth: 1,
-          borderColor: '#E9ECEF',
-          shadowColor: '#000',
-          shadowOffset: { width: 0, height: 2 },
-          shadowOpacity: 0.05,
-          shadowRadius: 8,
-          elevation: 2
-        }}>
-          <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 16 }}>
-            <View style={{ 
-              width: 40, 
-              height: 40, 
-              backgroundColor: '#F3E8FF', 
-              borderRadius: 20, 
-              alignItems: 'center', 
-              justifyContent: 'center', 
-              marginRight: 12 
-            }}>
-              <Ionicons name="card" size={20} color="#8B5CF6" />
-            </View>
-            <Text style={{ color: '#212529', fontSize: 16, fontWeight: '600' }}>
-              Payment Method
-            </Text>
+        {/* Totals */}
+        <View style={styles.card}>
+          <Text style={styles.cardTitle}>Payment Summary</Text>
+          <View style={styles.totalRow}>
+            <Text style={styles.totalLabel}>Subtotal</Text>
+            <Text style={styles.totalValue}>AED {subtotal}</Text>
           </View>
-          
-          <View style={{ 
-            backgroundColor: '#E3F2FD', 
-            borderRadius: 8, 
-            padding: 16, 
-            borderWidth: 1, 
-            borderColor: '#1976D2' 
-          }}>
-            <View style={{ flexDirection: 'row', alignItems: 'center' }}>
-              <View style={{ 
-                width: 40, 
-                height: 40, 
-                backgroundColor: '#1976D2', 
-                borderRadius: 20, 
-                alignItems: 'center', 
-                justifyContent: 'center', 
-                marginRight: 12 
-              }}>
-                <Ionicons 
-                  name={selectedPaymentMethod === 'wallet' ? 'wallet' : 'cash'} 
-                  size={20} 
-                  color="white" 
-                />
-              </View>
-              <View style={{ flex: 1 }}>
-                <Text style={{ color: '#1976D2', fontSize: 16, fontWeight: '600', marginBottom: 2 }}>
-                  {selectedPaymentMethod === 'wallet' ? 'Wallet Payment' : 'Cash Payment'}
-                </Text>
-                <Text style={{ color: '#1565C0', fontSize: 12 }}>
-                  Selected payment method
-                </Text>
-              </View>
-            </View>
+          <View style={styles.totalRow}>
+            <Text style={styles.totalLabel}>VAT (5%)</Text>
+            <Text style={styles.totalValue}>AED {vat}</Text>
+          </View>
+          <View style={styles.totalDivider} />
+          <View style={styles.totalRow}>
+            <Text style={styles.grandTotalLabel}>Total</Text>
+            <Text style={styles.grandTotalValue}>AED {totalWithVat}</Text>
           </View>
         </View>
 
-        {/* Payment Summary Card */}
-        <View style={{ 
-          backgroundColor: '#FFFFFF', 
-          borderRadius: 8, 
-          padding: 20, 
-          marginBottom: 16,
-          borderWidth: 1,
-          borderColor: '#E9ECEF',
-          shadowColor: '#000',
-          shadowOffset: { width: 0, height: 2 },
-          shadowOpacity: 0.05,
-          shadowRadius: 8,
-          elevation: 2
-        }}>
-          <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 16 }}>
-            <View style={{ 
-              width: 40, 
-              height: 40, 
-              backgroundColor: '#FFF3E0', 
-              borderRadius: 20, 
-              alignItems: 'center', 
-              justifyContent: 'center', 
-              marginRight: 12 
-            }}>
-              <Ionicons name="calculator" size={20} color="#F59E0B" />
-            </View>
-            <Text style={{ color: '#212529', fontSize: 16, fontWeight: '600' }}>
-              Payment Summary
-            </Text>
-          </View>
-          
-          <View style={{ gap: 12 }}>
-            <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}>
-              <Text style={{ color: '#6C757D', fontSize: 14, fontWeight: '500' }}>Order ID:</Text>
-              <Text style={{ color: '#212529', fontSize: 14, fontWeight: '600' }}>
-                {orderId}
-              </Text>
-            </View>
-            
-            <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}>
-              <Text style={{ color: '#6C757D', fontSize: 14, fontWeight: '500' }}>Subtotal:</Text>
-              <Text style={{ color: '#212529', fontSize: 14, fontWeight: '600' }}>AED {subtotal}</Text>
-            </View>
-            
-            <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}>
-              <Text style={{ color: '#6C757D', fontSize: 14, fontWeight: '500' }}>VAT (15%):</Text>
-              <Text style={{ color: '#212529', fontSize: 14, fontWeight: '600' }}>AED {vat}</Text>
-            </View>
-            
-            <View style={{ 
-              borderTopWidth: 1, 
-              borderTopColor: '#E9ECEF', 
-              paddingTop: 12, 
-              marginTop: 8 
-            }}>
-              <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}>
-                <Text style={{ color: '#212529', fontSize: 16, fontWeight: '700' }}>Total Amount:</Text>
-                <Text style={{ color: '#1976D2', fontSize: 18, fontWeight: '700' }}>AED {totalWithVat}</Text>
-              </View>
-            </View>
-          </View>
-        </View>
-
-        {/* Action Buttons */}
-        <View style={{ gap: 12 }}>
+        {/* Action Section */}
+        <View style={styles.actionSection}>
           <TouchableOpacity
-            style={{ 
-              backgroundColor: isProcessing ? '#E9ECEF' : '#1976D2',
-              paddingVertical: 16, 
-              paddingHorizontal: 24, 
-              borderRadius: 8,
-              flexDirection: 'row',
-              alignItems: 'center',
-              justifyContent: 'center',
-              borderWidth: 1,
-              borderColor: isProcessing ? '#E9ECEF' : '#1976D2',
-              shadowColor: '#000',
-              shadowOffset: { width: 0, height: 2 },
-              shadowOpacity: isProcessing ? 0.05 : 0.1,
-              shadowRadius: 8,
-              elevation: isProcessing ? 2 : 4
-            }}
-            onPress={handleConfirmPayment}
+            style={styles.editButton}
+            onPress={() => router.back()}
             disabled={isProcessing}
+            activeOpacity={0.7}
+          >
+            <Ionicons name="pencil" size={18} color="#6B7280" />
+            <Text style={styles.editButtonText}>Edit</Text>
+          </TouchableOpacity>
+          
+          <TouchableOpacity
+            style={[styles.confirmButton, isProcessing && styles.confirmButtonDisabled]}
+            onPress={handleConfirmPayment}
+            disabled={isProcessing || cartItems.length === 0}
+            activeOpacity={0.8}
           >
             {isProcessing ? (
               <>
-                <ActivityIndicator color="white" size="small" />
-                <Text style={{ color: 'white', fontSize: 16, fontWeight: '600', marginLeft: 12 }}>
-                  Processing Payment...
-                </Text>
+                <ActivityIndicator size="small" color="#FFFFFF" />
+                <Text style={styles.confirmButtonText}>Processing...</Text>
               </>
             ) : (
               <>
-                <Ionicons name="card" size={20} color="white" />
-                <Text style={{ color: 'white', fontSize: 16, fontWeight: '600', marginLeft: 8 }}>
-                  Confirm & Pay AED {totalWithVat}
-                </Text>
+                <Text style={styles.confirmButtonText}>Pay AED {totalWithVat}</Text>
+                <View style={styles.confirmArrow}>
+                  <Ionicons name="checkmark" size={16} color="#059669" />
+                </View>
               </>
             )}
           </TouchableOpacity>
-
-          <TouchableOpacity
-            style={{ 
-              paddingVertical: 16, 
-              paddingHorizontal: 24, 
-              borderRadius: 8,
-              borderWidth: 1,
-              borderColor: '#E9ECEF',
-              backgroundColor: '#FFFFFF',
-              flexDirection: 'row',
-              alignItems: 'center',
-              justifyContent: 'center',
-              shadowColor: '#000',
-              shadowOffset: { width: 0, height: 1 },
-              shadowOpacity: 0.05,
-              shadowRadius: 4,
-              elevation: 2
-            }}
-            onPress={handleEditOrder}
-            disabled={isProcessing}
-          >
-            <Ionicons name="pencil" size={16} color="#6C757D" />
-            <Text style={{ color: '#6C757D', fontSize: 16, fontWeight: '600', marginLeft: 8 }}>
-              Edit Order
-            </Text>
-          </TouchableOpacity>
         </View>
+
+        <View style={{ height: Math.max(insets.bottom, 20) + 80 }} />
       </ScrollView>
     </View>
   );
 };
+
+const styles = StyleSheet.create({
+  container: {
+    flex: 1,
+    backgroundColor: '#FAFBFC',
+  },
+  header: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingHorizontal: 20,
+    paddingTop: 8,
+    paddingBottom: 12,
+    backgroundColor: '#FFFFFF',
+    borderBottomWidth: 1,
+    borderBottomColor: '#F3F4F6',
+  },
+  backButton: {
+    width: 36,
+    height: 36,
+    borderRadius: 10,
+    backgroundColor: '#F3F4F6',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  headerTitle: {
+    fontSize: 17,
+    fontWeight: '600',
+    color: '#111827',
+    letterSpacing: -0.4,
+  },
+  headerRight: {
+    width: 36,
+  },
+  content: {
+    flex: 1,
+  },
+  contentContainer: {
+    paddingTop: 24,
+    paddingHorizontal: 20,
+  },
+  heroSection: {
+    alignItems: 'center',
+    marginBottom: 28,
+  },
+  heroIconBox: {
+    width: 64,
+    height: 64,
+    borderRadius: 20,
+    backgroundColor: '#ECFDF5',
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginBottom: 16,
+  },
+  heroTitle: {
+    fontSize: 22,
+    fontWeight: '700',
+    color: '#111827',
+    letterSpacing: -0.5,
+    marginBottom: 6,
+  },
+  heroSubtitle: {
+    fontSize: 14,
+    color: '#6B7280',
+  },
+  card: {
+    backgroundColor: '#FFFFFF',
+    borderRadius: 16,
+    padding: 16,
+    marginBottom: 12,
+    ...Platform.select({
+      ios: {
+        shadowColor: '#000',
+        shadowOffset: { width: 0, height: 2 },
+        shadowOpacity: 0.04,
+        shadowRadius: 8,
+      },
+      android: {
+        elevation: 2,
+      },
+    }),
+  },
+  cardHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginBottom: 14,
+  },
+  cardTitle: {
+    fontSize: 11,
+    fontWeight: '600',
+    color: '#9CA3AF',
+    textTransform: 'uppercase',
+    letterSpacing: 0.8,
+    marginBottom: 14,
+  },
+  itemCountBadge: {
+    backgroundColor: '#F3F4F6',
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+    borderRadius: 6,
+  },
+  itemCountText: {
+    fontSize: 12,
+    fontWeight: '600',
+    color: '#4B5563',
+  },
+  emptyItems: {
+    alignItems: 'center',
+    paddingVertical: 20,
+    gap: 8,
+  },
+  emptyItemsText: {
+    fontSize: 13,
+    color: '#9CA3AF',
+  },
+  itemRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingVertical: 10,
+  },
+  itemIconBox: {
+    width: 32,
+    height: 32,
+    borderRadius: 8,
+    backgroundColor: '#E0F2FE',
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginRight: 12,
+  },
+  itemInfo: {
+    flex: 1,
+  },
+  itemName: {
+    fontSize: 14,
+    fontWeight: '500',
+    color: '#111827',
+    marginBottom: 2,
+  },
+  itemMeta: {
+    fontSize: 12,
+    color: '#6B7280',
+  },
+  itemTotal: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: '#111827',
+  },
+  itemDivider: {
+    height: 1,
+    backgroundColor: '#F3F4F6',
+    marginLeft: 44,
+  },
+  customerRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginBottom: 12,
+  },
+  customerAvatar: {
+    width: 40,
+    height: 40,
+    borderRadius: 12,
+    backgroundColor: '#F3F4F6',
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginRight: 12,
+  },
+  customerInitial: {
+    fontSize: 16,
+    fontWeight: '600',
+    color: '#6B7280',
+  },
+  customerInfo: {
+    flex: 1,
+  },
+  customerName: {
+    fontSize: 15,
+    fontWeight: '600',
+    color: '#111827',
+  },
+  customerPhone: {
+    fontSize: 13,
+    color: '#6B7280',
+    marginTop: 2,
+  },
+  addressBox: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    backgroundColor: '#F9FAFB',
+    borderRadius: 10,
+    padding: 12,
+    gap: 10,
+  },
+  addressText: {
+    flex: 1,
+    fontSize: 13,
+    color: '#4B5563',
+    lineHeight: 18,
+  },
+  paymentRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  paymentIconBox: {
+    width: 44,
+    height: 44,
+    borderRadius: 12,
+    backgroundColor: '#F3F4F6',
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginRight: 12,
+  },
+  paymentInfo: {
+    flex: 1,
+  },
+  paymentLabel: {
+    fontSize: 15,
+    fontWeight: '600',
+    color: '#111827',
+  },
+  paymentSublabel: {
+    fontSize: 12,
+    color: '#6B7280',
+    marginTop: 2,
+  },
+  paymentCheck: {
+    width: 26,
+    height: 26,
+    borderRadius: 13,
+    backgroundColor: '#ECFDF5',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  totalRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    paddingVertical: 9,
+  },
+  totalLabel: {
+    fontSize: 14,
+    color: '#6B7280',
+  },
+  totalValue: {
+    fontSize: 14,
+    fontWeight: '500',
+    color: '#111827',
+  },
+  totalDivider: {
+    height: 1,
+    backgroundColor: '#E5E7EB',
+    marginVertical: 4,
+  },
+  grandTotalLabel: {
+    fontSize: 15,
+    fontWeight: '600',
+    color: '#111827',
+  },
+  grandTotalValue: {
+    fontSize: 20,
+    fontWeight: '700',
+    color: '#059669',
+  },
+  actionSection: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#FFFFFF',
+    borderRadius: 16,
+    padding: 16,
+    marginTop: 8,
+    gap: 12,
+    ...Platform.select({
+      ios: {
+        shadowColor: '#000',
+        shadowOffset: { width: 0, height: 2 },
+        shadowOpacity: 0.04,
+        shadowRadius: 8,
+      },
+      android: {
+        elevation: 2,
+      },
+    }),
+  },
+  editButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    height: 52,
+    paddingHorizontal: 16,
+    borderRadius: 14,
+    backgroundColor: '#F3F4F6',
+    gap: 8,
+  },
+  editButtonText: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: '#6B7280',
+  },
+  confirmButton: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#059669',
+    height: 52,
+    borderRadius: 14,
+    gap: 10,
+  },
+  confirmButtonDisabled: {
+    backgroundColor: '#9CA3AF',
+  },
+  confirmButtonText: {
+    fontSize: 15,
+    fontWeight: '600',
+    color: '#FFFFFF',
+  },
+  confirmArrow: {
+    width: 26,
+    height: 26,
+    borderRadius: 7,
+    backgroundColor: '#FFFFFF',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+});
 
 export default PaymentConfirmation;

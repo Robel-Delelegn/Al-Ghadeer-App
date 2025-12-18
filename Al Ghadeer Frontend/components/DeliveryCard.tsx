@@ -135,9 +135,9 @@ const DeliveryCard = ({ item, onPress }: { item: Order; onPress?: () => void }) 
                   }}>
             </View>
           )}
-          <Text className={`px-3 py-1 rounded-full text-xs font-JakartaSemiBold border ${getStatusChipStyle(item.status)}`}>
-            {item.status.charAt(0).toUpperCase() + item.status.slice(1).replace('_', ' ')}
-          </Text>
+        <Text className={`px-3 py-1 rounded-full text-xs font-JakartaSemiBold border ${getStatusChipStyle(item.status)}`}>
+          {item.status.charAt(0).toUpperCase() + item.status.slice(1).replace('_', ' ')}
+        </Text>
         </View>
       </View>
       <View className="flex-row items-center gap-2 mb-1">

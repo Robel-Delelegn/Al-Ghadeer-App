@@ -185,7 +185,7 @@ const FailedDeliveries = () => {
 
       <ScrollView 
         style={{ flex: 1 }}
-        contentContainerStyle={{ padding: 20, paddingBottom: 120 }}
+        contentContainerStyle={{ padding: 20, paddingBottom: 150 }}
         showsVerticalScrollIndicator={false}
       >
         {/* Order Information Card */}
@@ -362,21 +362,37 @@ const FailedDeliveries = () => {
         </View>
 
         {/* Action Buttons */}
-        <View style={{ flexDirection: 'row', gap: 12 }}>
+        <View style={{ 
+          flexDirection: 'row', 
+          gap: 12, 
+          backgroundColor: '#FFFFFF',
+          borderRadius: 16,
+          padding: 16,
+          marginTop: 8,
+          shadowColor: '#000',
+          shadowOffset: { width: 0, height: 2 },
+          shadowOpacity: 0.04,
+          shadowRadius: 8,
+          elevation: 2
+        }}>
           <TouchableOpacity
             style={{ 
-              flex: 1, 
-              backgroundColor: '#F8F9FA', 
-              borderRadius: 12, 
-              paddingVertical: 16,
+              flexDirection: 'row',
               alignItems: 'center',
+              justifyContent: 'center',
+              height: 52,
+              paddingHorizontal: 20,
+              backgroundColor: '#F8F9FA', 
+              borderRadius: 14,
               borderWidth: 1,
-              borderColor: '#E9ECEF'
+              borderColor: '#E9ECEF',
+              gap: 8
             }}
             onPress={handleCancel}
             disabled={isSubmitting}
           >
-            <Text style={{ color: '#6C757D', fontSize: 16, fontWeight: '600' }}>
+            <Ionicons name="close" size={18} color="#6C757D" />
+            <Text style={{ color: '#6C757D', fontSize: 15, fontWeight: '600' }}>
               Cancel
             </Text>
           </TouchableOpacity>
@@ -384,33 +400,45 @@ const FailedDeliveries = () => {
           <TouchableOpacity
             style={{ 
               flex: 1, 
-              backgroundColor: selectedReason && !isSubmitting ? '#DC3545' : '#94A3B8', 
-              borderRadius: 12, 
-              paddingVertical: 16,
+              flexDirection: 'row',
               alignItems: 'center',
-              shadowColor: selectedReason && !isSubmitting ? '#DC3545' : 'transparent',
-              shadowOffset: { width: 0, height: 4 },
-              shadowOpacity: selectedReason && !isSubmitting ? 0.3 : 0,
-              shadowRadius: 8,
-              elevation: selectedReason && !isSubmitting ? 6 : 0
+              justifyContent: 'center',
+              height: 52,
+              backgroundColor: selectedReason && !isSubmitting ? '#DC3545' : '#94A3B8', 
+              borderRadius: 14,
+              gap: 10
             }}
             onPress={handleSubmitFailedDelivery}
             disabled={!selectedReason || isSubmitting}
           >
             {isSubmitting ? (
-              <View style={{ flexDirection: 'row', alignItems: 'center' }}>
-                <ActivityIndicator size="small" color="white" style={{ marginRight: 8 }} />
-                <Text style={{ color: 'white', fontSize: 16, fontWeight: '600' }}>
+              <>
+                <ActivityIndicator size="small" color="white" />
+                <Text style={{ color: 'white', fontSize: 15, fontWeight: '600' }}>
                   Submitting...
                 </Text>
-              </View>
+              </>
             ) : (
-              <Text style={{ color: 'white', fontSize: 16, fontWeight: '600' }}>
-                Submit Report
-              </Text>
+              <>
+                <Text style={{ color: 'white', fontSize: 15, fontWeight: '600' }}>
+                  Submit Report
+                </Text>
+                <View style={{ 
+                  width: 26, 
+                  height: 26, 
+                  borderRadius: 7, 
+                  backgroundColor: 'rgba(255,255,255,0.2)',
+                  justifyContent: 'center',
+                  alignItems: 'center'
+                }}>
+                  <Ionicons name="arrow-forward" size={16} color="#FFFFFF" />
+                </View>
+              </>
             )}
           </TouchableOpacity>
         </View>
+
+        <View style={{ height: 100 }} />
       </ScrollView>
 
       {/* Reason Selection Modal */}

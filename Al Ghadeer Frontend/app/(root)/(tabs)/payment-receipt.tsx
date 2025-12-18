@@ -12,7 +12,7 @@ const PaymentReceipt: React.FC = () => {
   const router = useRouter();
   const { selectedOrder, assignedOrders, cartItems } = useOrderStore();
   const orderDetail = assignedOrders.find(item => selectedOrder === item.id) as Order | undefined;
-  
+
   // Loading states for buttons
   const [isDownloading, setIsDownloading] = useState(false);
   const [isPrinting, setIsPrinting] = useState(false);
@@ -24,7 +24,10 @@ const PaymentReceipt: React.FC = () => {
     address: orderDetail.customer?.address || orderDetail.customer_address || 'N/A',
     contact: orderDetail.customer?.phone || orderDetail.customer_phone || 'N/A'
   } : { name: 'N/A', address: 'N/A', contact: 'N/A' };
-  const selectedPaymentMethod = 'Cash';
+  const selectedPaymentMethod = orderDetail?.payment_method || orderDetail?.pricing?.payment_method || 'cash';
+  const paymentMethodDisplay = selectedPaymentMethod === 'credit_card' ? 'Credit Card' : 
+                                selectedPaymentMethod === 'wallet' ? 'Wallet' : 
+                                'Cash';
   // Debug logging
   console.log('Payment Receipt - orderDetail:', orderDetail);
   console.log('Payment Receipt - cartItems:', cartItems);
@@ -181,7 +184,7 @@ const PaymentReceipt: React.FC = () => {
               <div class="company-name">Al Ghadeer Water Drinking</div>
               <div class="company-name">Factory</div>
               <div class="company-location">Al Ain, UAE</div>
-            </div>
+          </div>
 
             <div class="invoice-title">Tax Invoice</div>
             <div class="trn">TRN: 100234134300003</div>
@@ -220,42 +223,42 @@ const PaymentReceipt: React.FC = () => {
               </div>
               <div class="info-row">
                 <span class="info-label">Payment Mode:</span>
-                <span>${selectedPaymentMethod}</span>
-              </div>
+                <span>${paymentMethodDisplay}</span>
+            </div>
               <div class="info-row">
                 <span class="info-label">Customer ID:</span>
                 <span>DB-${orderId}</span>
-              </div>
             </div>
+          </div>
 
             <table class="items-table">
-              <thead>
-                <tr>
+            <thead>
+              <tr>
                   <th style="text-align: left;">Product</th>
                   <th style="text-align: center;">Qty</th>
-                  <th style="text-align: right;">Unit Price</th>
+                <th style="text-align: right;">Unit Price</th>
                   <th style="text-align: right;">Price</th>
-                </tr>
-              </thead>
-              <tbody>
-                ${itemsHTML}
-              </tbody>
-            </table>
+              </tr>
+            </thead>
+            <tbody>
+              ${itemsHTML}
+            </tbody>
+          </table>
 
-            <div class="total-section">
-              <div class="total-row">
+          <div class="total-section">
+            <div class="total-row">
                 <span>Total Amount:</span>
                 <span>${subtotal}</span>
-              </div>
-              <div class="total-row">
+            </div>
+            <div class="total-row">
                 <span>Vat (15%):</span>
                 <span>${vat}</span>
-              </div>
-              <div class="total-row final-total">
+            </div>
+            <div class="total-row final-total">
                 <span>Net Total (Incl. Vat):</span>
                 <span>${totalWithVat}</span>
-              </div>
             </div>
+          </div>
 
             <div class="contact-section">
               <div class="contact-row">Tel: +97137211353</div>
@@ -382,7 +385,7 @@ const PaymentReceipt: React.FC = () => {
     } catch (error) {
       console.error('Navigation error:', error);
       // Fallback navigation method
-      router.push('/(root)/(tabs)/home');
+    router.push('/(root)/(tabs)/home');
     } finally {
       setIsNavigating(false);
     }
@@ -390,7 +393,7 @@ const PaymentReceipt: React.FC = () => {
 
   return (
     <View style={{ flex: 1, backgroundColor: '#F8F9FA' }}>
-      {/* Header */}
+          {/* Header */}
       <View style={{ 
         backgroundColor: '#FFFFFF', 
         paddingHorizontal: 20, 
@@ -402,11 +405,11 @@ const PaymentReceipt: React.FC = () => {
         <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 12 }}>
           <TouchableOpacity onPress={handleBackToHome} style={{ padding: 8 }}>
             <Ionicons name="home" size={24} color="#495057" />
-          </TouchableOpacity>
+            </TouchableOpacity>
           <Text style={{ color: '#212529', fontSize: 18, fontWeight: '600' }}>Payment Receipt</Text>
           <View style={{ width: 40 }} />
-        </View>
-        
+          </View>
+    
         {orderDetail && (
           <View style={{ 
             backgroundColor: '#E8F5E8', 
@@ -420,20 +423,20 @@ const PaymentReceipt: React.FC = () => {
               <Text style={{ color: '#28A745', fontSize: 14, fontWeight: '600', marginLeft: 6 }}>
                 Order #{orderDetail.order_number}
               </Text>
-            </View>
+                  </View>
             <View style={{ flexDirection: 'row', alignItems: 'center' }}>
               <Ionicons name="time" size={14} color="#28A745" />
               <Text style={{ color: '#28A745', fontSize: 12, marginLeft: 6 }}>
                 Payment completed successfully
               </Text>
-            </View>
-          </View>
+                  </View>
+                </View>
         )}
-      </View>
-
+              </View>
+    
       {/* Content */}
       <ScrollView 
-        contentContainerStyle={{ padding: 20, paddingBottom: 120 }} 
+        contentContainerStyle={{ padding: 20, paddingBottom: 150 }} 
         showsVerticalScrollIndicator={false}
       >
         {/* Receipt Preview */}
@@ -450,7 +453,7 @@ const PaymentReceipt: React.FC = () => {
           shadowRadius: 8,
           elevation: 2
         }}>
-          {/* Company Header */}
+              {/* Company Header */}
           <View style={{ alignItems: 'center', marginBottom: 16, borderBottomWidth: 1, borderBottomColor: '#E9ECEF', paddingBottom: 12 }}>
             <Text style={{ color: '#212529', fontSize: 16, fontWeight: '700', marginBottom: 2 }}>
               Al Ghadeer Water Drinking
@@ -467,8 +470,8 @@ const PaymentReceipt: React.FC = () => {
             <Text style={{ color: '#6C757D', fontSize: 10 }}>
               TRN: 100234134300003
             </Text>
-          </View>
-
+              </View>
+    
           {/* Transaction Details */}
           <View style={{ marginBottom: 16 }}>
             <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginBottom: 4 }}>
@@ -490,9 +493,9 @@ const PaymentReceipt: React.FC = () => {
             <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginBottom: 4 }}>
               <Text style={{ color: '#6C757D', fontSize: 11, fontWeight: '600' }}>Customer:</Text>
               <Text style={{ color: '#212529', fontSize: 11 }}>{shippingDetails.name || 'N/A'}</Text>
-            </View>
-          </View>
-
+                  </View>
+                </View>
+    
           {/* Order Details */}
           <View style={{ marginBottom: 16 }}>
             <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginBottom: 4 }}>
@@ -505,14 +508,14 @@ const PaymentReceipt: React.FC = () => {
             </View>
             <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginBottom: 4 }}>
               <Text style={{ color: '#6C757D', fontSize: 11, fontWeight: '600' }}>Payment Mode:</Text>
-              <Text style={{ color: '#212529', fontSize: 11 }}>{selectedPaymentMethod}</Text>
-            </View>
+              <Text style={{ color: '#212529', fontSize: 11 }}>{paymentMethodDisplay}</Text>
+                  </View>
             <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginBottom: 4 }}>
               <Text style={{ color: '#6C757D', fontSize: 11, fontWeight: '600' }}>Customer ID:</Text>
               <Text style={{ color: '#212529', fontSize: 11 }}>DB-{orderId}</Text>
-            </View>
-          </View>
-
+                </View>
+              </View>
+    
           {/* Items Table */}
           <View style={{ marginBottom: 16 }}>
             <View style={{ 
@@ -526,12 +529,12 @@ const PaymentReceipt: React.FC = () => {
               <Text style={{ width: 40, color: '#6C757D', fontSize: 11, fontWeight: '600', textAlign: 'center' }}>Qty</Text>
               <Text style={{ width: 60, color: '#6C757D', fontSize: 11, fontWeight: '600', textAlign: 'right' }}>Unit Price</Text>
               <Text style={{ width: 60, color: '#6C757D', fontSize: 11, fontWeight: '600', textAlign: 'right' }}>Price</Text>
-            </View>
-            
-            {cartItems.map((item, index) => {
+                  </View>
+    
+                  {cartItems.map((item, index) => {
               if (!item || !item.name) return null;
-              const itemTotal = (item.price * item.quantity).toFixed(2);
-              return (
+                    const itemTotal = (item.price * item.quantity).toFixed(2);
+                    return (
                 <View key={item.id} style={{ 
                   flexDirection: 'row', 
                   marginBottom: 4,
@@ -543,21 +546,21 @@ const PaymentReceipt: React.FC = () => {
                   <Text style={{ width: 40, color: '#212529', fontSize: 11, textAlign: 'center' }}>{item.quantity}</Text>
                   <Text style={{ width: 60, color: '#212529', fontSize: 11, textAlign: 'right' }}>{item.price}</Text>
                   <Text style={{ width: 60, color: '#212529', fontSize: 11, fontWeight: '600', textAlign: 'right' }}>{itemTotal}</Text>
-                </View>
-              );
-            })}
-          </View>
-
+                      </View>
+                    );
+                  })}
+              </View>
+    
           {/* Totals */}
           <View style={{ borderTopWidth: 1, borderTopColor: '#E9ECEF', paddingTop: 12 }}>
             <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginBottom: 4 }}>
               <Text style={{ color: '#6C757D', fontSize: 11 }}>Total Amount:</Text>
               <Text style={{ color: '#212529', fontSize: 11 }}>{subtotal}</Text>
-            </View>
+                  </View>
             <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginBottom: 4 }}>
               <Text style={{ color: '#6C757D', fontSize: 11 }}>Vat (15%):</Text>
               <Text style={{ color: '#212529', fontSize: 11 }}>{vat}</Text>
-            </View>
+                  </View>
             <View style={{ 
               flexDirection: 'row', 
               justifyContent: 'space-between', 
@@ -568,8 +571,8 @@ const PaymentReceipt: React.FC = () => {
             }}>
               <Text style={{ color: '#212529', fontSize: 12, fontWeight: '700' }}>Net Total (Incl. Vat):</Text>
               <Text style={{ color: '#212529', fontSize: 12, fontWeight: '700' }}>{totalWithVat}</Text>
-            </View>
-          </View>
+                    </View>
+                  </View>
 
           {/* Contact Info */}
           <View style={{ 
@@ -582,12 +585,12 @@ const PaymentReceipt: React.FC = () => {
             <Text style={{ color: '#6C757D', fontSize: 10, marginBottom: 2 }}>Tel: +97137211353</Text>
             <Text style={{ color: '#6C757D', fontSize: 10, marginBottom: 2 }}>Website: www.alghadeerwater.com</Text>
             <Text style={{ color: '#6C757D', fontSize: 10 }}>Email: Info@alghadeerwater.com</Text>
-          </View>
-        </View>
-
+                </View>
+              </View>
+    
         {/* Action Buttons */}
         <View style={{ gap: 12 }}>
-          <TouchableOpacity
+              <TouchableOpacity
             style={{ 
               backgroundColor: isDownloading ? '#E9ECEF' : '#1976D2',
               paddingVertical: 16, 
@@ -604,7 +607,7 @@ const PaymentReceipt: React.FC = () => {
               shadowRadius: 8,
               elevation: isDownloading ? 2 : 4
             }}
-            onPress={handleDownloadInvoice}
+                onPress={handleDownloadInvoice}
             disabled={isDownloading}
           >
             {isDownloading ? (
@@ -622,9 +625,9 @@ const PaymentReceipt: React.FC = () => {
                 </Text>
               </>
             )}
-          </TouchableOpacity>
-
-          <TouchableOpacity
+              </TouchableOpacity>
+    
+              <TouchableOpacity
             style={{ 
               paddingVertical: 16, 
               paddingHorizontal: 24, 
@@ -641,7 +644,7 @@ const PaymentReceipt: React.FC = () => {
               shadowRadius: 4,
               elevation: 2
             }}
-            onPress={handlePrintInvoice}
+                onPress={handlePrintInvoice}
             disabled={isPrinting}
           >
             {isPrinting ? (
@@ -659,9 +662,9 @@ const PaymentReceipt: React.FC = () => {
                 </Text>
               </>
             )}
-          </TouchableOpacity>
-
-          <TouchableOpacity
+              </TouchableOpacity>
+    
+              <TouchableOpacity
             style={{ 
               paddingVertical: 16, 
               paddingHorizontal: 24, 
@@ -673,7 +676,7 @@ const PaymentReceipt: React.FC = () => {
               alignItems: 'center',
               justifyContent: 'center'
             }}
-            onPress={handleBackToHome}
+                onPress={handleBackToHome}
             disabled={isNavigating}
           >
             {isNavigating ? (
@@ -691,11 +694,11 @@ const PaymentReceipt: React.FC = () => {
                 </Text>
               </>
             )}
-          </TouchableOpacity>
-        </View>
+              </TouchableOpacity>
+            </View>
       </ScrollView>
-    </View>
-  );
+        </View>
+      );
     };
 
 export default PaymentReceipt;

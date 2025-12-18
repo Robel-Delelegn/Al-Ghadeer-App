@@ -54,7 +54,7 @@ export interface Order {
     delivery_fee: number;
     vat: number;
     total_amount: number;
-    payment_method: 'cash' | 'wallet';
+    payment_method: 'cash' | 'wallet' | 'credit_card';
     payment_status: 'pending' | 'paid' | 'failed';
     driver_commission?: number;
   };
@@ -65,7 +65,7 @@ export interface Order {
   vat?: number;
   total_amount?: number;
   wallet_balance?: number;
-  payment_method?: 'cash' | 'card' | 'wallet';
+  payment_method?: 'cash' | 'wallet' | 'credit_card';
   payment_status?: 'pending' | 'paid' | 'failed';
   driver_commission?: number;
   
@@ -129,7 +129,7 @@ export interface Driver {
   id: string;
   clerk_id: string;
   name: string;
-  email: string;
+  helper_name?: string;
   phone: string;
   profile_image?: string;
   

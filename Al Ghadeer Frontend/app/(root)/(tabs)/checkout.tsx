@@ -2,12 +2,39 @@ import { useOrderStore } from '@/store/index';
 import { Order } from '@/types/order';
 import { Ionicons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
-import React, { useCallback, useState } from 'react';
-import { ActivityIndicator, Alert, Image, ScrollView, Text, TouchableOpacity, View } from 'react-native';
+import React, { useCallback, useState, useMemo } from 'react';
+import { 
+  ActivityIndicator, 
+  Alert, 
+  ScrollView, 
+  Text, 
+  TouchableOpacity, 
+  View,
+  StyleSheet,
+  Dimensions,
+  Platform,
+} from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
+const { width } = Dimensions.get('window');
 const IP_ADDRESS = process.env.EXPO_PUBLIC_IP_ADDRESS || 'http://localhost:3000/api';
 
+type PaymentMethod = 'cash' | 'wallet';
+
+interface PaymentOption {
+  id: PaymentMethod;
+  label: string;
+  icon: keyof typeof Ionicons.glyphMap;
+  description: string;
+}
+
+const paymentOptions: PaymentOption[] = [
+  { id: 'cash', label: 'Cash', icon: 'cash', description: 'Pay with cash on delivery' },
+  { id: 'wallet', label: 'Wallet', icon: 'wallet', description: 'Use customer wallet balance' },
+];
+
 const Checkout: React.FC = () => {
+  const insets = useSafeAreaInsets();
   const router = useRouter();
   const { 
     selectedOrder, 
@@ -16,36 +43,28 @@ const Checkout: React.FC = () => {
     selectedPaymentMethod,
     setPaymentMethod
   } = useOrderStore();
+  
   const orderDetail = assignedOrders.find(item => selectedOrder === item.id) as Order | undefined;
   const [isLoading, setIsLoading] = useState(false);
   
-  // Debug logging
-  console.log('Checkout - cartItems:', cartItems);
-  console.log('Checkout - cartItems length:', cartItems.length);
-  console.log('Checkout - orderDetail:', orderDetail);
-  
-  // Additional debugging for cart items
-  cartItems.forEach((item, index) => {
-    console.log(`Cart item ${index}:`, {
-      id: item?.id,
-      name: item?.name,
-      price: item?.price,
-      quantity: item?.quantity,
-      hasImage: !!item?.image
-    });
-  });
-  
-  const subtotal = cartItems.reduce((sum, item) => {
-    if (!item || typeof item.price !== 'number' || typeof item.quantity !== 'number') {
-      console.error('Invalid cart item for calculation:', item);
-      return sum;
-    }
-    return sum + item.price * item.quantity;
-  }, 0).toFixed(2);
-  const vat = (Number(subtotal) * 0.15).toFixed(2); // 15% VAT
-  const totalWithVat = (Number(subtotal) + Number(vat)).toFixed(2);
-
-
+  const { subtotal, vat, totalWithVat, itemCount } = useMemo(() => {
+    const sub = cartItems.reduce((sum, item) => {
+      if (!item || typeof item.price !== 'number' || typeof item.quantity !== 'number') {
+        return sum;
+      }
+      return sum + item.price * item.quantity;
+    }, 0);
+    const vatAmount = sub * 0.05;
+    const total = sub + vatAmount;
+    const count = cartItems.reduce((sum, item) => sum + (item?.quantity || 0), 0);
+    
+    return {
+      subtotal: sub.toFixed(2),
+      vat: vatAmount.toFixed(2),
+      totalWithVat: total.toFixed(2),
+      itemCount: count
+    };
+  }, [cartItems]);
 
   const handleContinueToPayment = useCallback(async () => {
     if (cartItems.length === 0) {
@@ -54,14 +73,13 @@ const Checkout: React.FC = () => {
     }
     
     if (!selectedPaymentMethod) {
-      Alert.alert('Payment Method Required', 'Please select a payment method.');
+      Alert.alert('Payment Required', 'Please select a payment method.');
       return;
     }
     
     setIsLoading(true);
     
     try {
-      // Prepare validation data
       const validationData = {
         payment_method: selectedPaymentMethod.toLowerCase(),
         amount: parseFloat(totalWithVat),
@@ -69,524 +87,586 @@ const Checkout: React.FC = () => {
         customer_id: orderDetail?.customer_id || orderDetail?.customer?.id || null
       };
 
-      console.log('Validating payment:', validationData);
-
-      // Call validation endpoint
       const response = await fetch(`${IP_ADDRESS}/driver/orders/validate-payment`, {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
+        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(validationData),
       });
 
       const result = await response.json();
-      console.log('Payment validation response:', result);
 
       if (!response.ok || !result.success) {
-        // Validation failed - show popup and go back
         Alert.alert(
-          'Payment Validation Failed',
-          result.message || 'Payment method or amount is invalid. Please check and try again.',
-          [
-            {
-              text: 'OK',
-              onPress: () => router.back()
-            }
-          ]
+          'Validation Failed',
+          result.message || 'Payment validation failed.',
+          [{ text: 'OK', onPress: () => router.back() }]
         );
         return;
       }
 
-      // Validation successful - proceed to payment confirmation
-      console.log('✅ Payment validated, proceeding to confirmation');
       router.push('/(root)/(tabs)/payment-confirmation');
     } catch (error) {
-      console.error('Payment validation error:', error);
       Alert.alert(
-        'Validation Error',
-        error instanceof Error ? error.message : 'Failed to validate payment. Please try again.',
-        [
-          {
-            text: 'OK',
-            onPress: () => router.back()
-          }
-        ]
+        'Error',
+        error instanceof Error ? error.message : 'Failed to validate payment.',
+        [{ text: 'OK', onPress: () => router.back() }]
       );
     } finally {
       setIsLoading(false);
     }
   }, [cartItems, router, selectedPaymentMethod, totalWithVat, orderDetail]);
 
+  const customerName = orderDetail?.customer?.name || orderDetail?.customer_name || 'Customer';
+  const customerAddress = orderDetail?.customer?.address || orderDetail?.customer_address || '—';
+  const customerPhone = orderDetail?.customer?.phone || orderDetail?.customer_phone || '—';
+
   return (
-    <View style={{ flex: 1, backgroundColor: '#F8F9FA' }}>
+    <View style={[styles.container, { paddingTop: insets.top }]}>
       {/* Header */}
-      <View style={{ 
-        backgroundColor: '#FFFFFF', 
-        paddingHorizontal: 20, 
-        paddingTop: 16, 
-        paddingBottom: 20,
-        borderBottomWidth: 1,
-        borderBottomColor: '#E9ECEF'
-      }}>
-        <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 12 }}>
-          <TouchableOpacity onPress={() => router.back()} style={{ padding: 8 }}>
-            <Ionicons name="arrow-back" size={24} color="#495057" />
-          </TouchableOpacity>
-          <Text style={{ color: '#212529', fontSize: 18, fontWeight: '600' }}>Checkout</Text>
-          <View style={{ width: 40 }} />
+      <View style={styles.header}>
+        <TouchableOpacity 
+          style={styles.backButton} 
+          onPress={() => router.back()}
+          activeOpacity={0.7}
+        >
+          <Ionicons name="chevron-back" size={20} color="#0F172A" />
+        </TouchableOpacity>
+        <View style={styles.headerCenter}>
+          <Text style={styles.headerTitle}>Checkout</Text>
+          {orderDetail && (
+            <Text style={styles.headerSubtitle}>{orderDetail.order_number}</Text>
+          )}
         </View>
-        
-        {orderDetail && (
-          <View style={{ 
-            backgroundColor: '#E3F2FD', 
-            borderRadius: 8, 
-            padding: 12,
-            borderWidth: 1,
-            borderColor: '#BBDEFB'
-          }}>
-            <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 4 }}>
-              <Ionicons name="receipt" size={16} color="#1976D2" />
-              <Text style={{ color: '#1976D2', fontSize: 14, fontWeight: '600', marginLeft: 6 }}>
-                Order #{orderDetail.order_number}
-              </Text>
-            </View>
-            <View style={{ flexDirection: 'row', alignItems: 'center' }}>
-              <Ionicons name="person" size={14} color="#1976D2" />
-              <Text style={{ color: '#1976D2', fontSize: 12, marginLeft: 6 }}>
-                {orderDetail.customer?.name || orderDetail.customer_name || 'Customer'}
-              </Text>
-            </View>
-          </View>
-        )}
+        <View style={styles.cartBadge}>
+          <Text style={styles.cartBadgeText}>{itemCount}</Text>
+        </View>
       </View>
 
-      {/* Content */}
       <ScrollView 
-        contentContainerStyle={{ padding: 20, paddingBottom: 120 }} 
+        style={styles.content}
+        contentContainerStyle={styles.contentContainer}
         showsVerticalScrollIndicator={false}
       >
-        {/* Order Summary Card */}
-        <View style={{ 
-          backgroundColor: '#FFFFFF', 
-          borderRadius: 8, 
-          padding: 20, 
-          marginBottom: 16,
-          borderWidth: 1,
-          borderColor: '#E9ECEF',
-          shadowColor: '#000',
-          shadowOffset: { width: 0, height: 2 },
-          shadowOpacity: 0.05,
-          shadowRadius: 8,
-          elevation: 2
-        }}>
-          <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 16 }}>
-            <View style={{ 
-              width: 40, 
-              height: 40, 
-              backgroundColor: '#E3F2FD', 
-              borderRadius: 20, 
-              alignItems: 'center', 
-              justifyContent: 'center', 
-              marginRight: 12 
-            }}>
-              <Ionicons name="cube" size={20} color="#1976D2" />
-            </View>
-            <Text style={{ color: '#212529', fontSize: 16, fontWeight: '600' }}>
-              Order Summary
-            </Text>
+        {/* Order Items */}
+        <View style={styles.card}>
+          <View style={styles.cardHeader}>
+            <Text style={styles.cardTitle}>Items</Text>
+            <TouchableOpacity onPress={() => router.back()} activeOpacity={0.7}>
+              <Text style={styles.editLink}>Edit</Text>
+            </TouchableOpacity>
           </View>
           
           {cartItems.length === 0 ? (
-            <View style={{ 
-              backgroundColor: '#F8F9FA', 
-              borderRadius: 8, 
-              padding: 24, 
-              alignItems: 'center',
-              borderWidth: 1,
-              borderColor: '#E9ECEF'
-            }}>
-              <Ionicons name="cart-outline" size={32} color="#6C757D" />
-              <Text style={{ color: '#6C757D', fontSize: 16, marginTop: 8, fontWeight: '500' }}>
-                No items in cart
-              </Text>
+            <View style={styles.emptyState}>
+              <View style={styles.emptyIconBox}>
+                <Ionicons name="cart-outline" size={28} color="#D1D5DB" />
+              </View>
+              <Text style={styles.emptyText}>No items in cart</Text>
             </View>
           ) : (
-            <View style={{ gap: 12 }}>
-              {cartItems.map((item) => {
-                if (!item || !item.name) {
-                  console.error('Invalid cart item:', item);
-                  return null;
-                }
-                const itemTotal = (item.price * item.quantity).toFixed(2);
-                return (
-                  <View key={item.id} style={{ 
-                    flexDirection: 'row', 
-                    alignItems: 'center', 
-                    backgroundColor: '#F8F9FA', 
-                    borderRadius: 8, 
-                    padding: 12,
-                    borderWidth: 1,
-                    borderColor: '#E9ECEF'
-                  }}>
-                    <View style={{ 
-                      width: 50, 
-                      height: 50, 
-                      borderRadius: 8, 
-                      overflow: 'hidden', 
-                      backgroundColor: '#F8F9FA',
-                      borderWidth: 1,
-                      borderColor: '#E9ECEF'
-                    }}>
-                      <Image
-                        source={item.image || { uri: 'https://via.placeholder.com/150' }}
-                        style={{ width: '100%', height: '100%' }}
-                        resizeMode="cover"
-                      />
-                    </View>
-                    <View style={{ flex: 1, marginLeft: 12 }}>
-                      <Text style={{ color: '#212529', fontSize: 14, fontWeight: '600', marginBottom: 4 }}>
-                        {item.name || 'Unknown Product'}
-                      </Text>
-                      <Text style={{ color: '#6C757D', fontSize: 12 }}>
-                        Qty: {item.quantity} × {item.currency || 'AED'} {item.price || 0}
-                      </Text>
-                    </View>
-                    <Text style={{ color: '#1976D2', fontSize: 16, fontWeight: '700' }}>
-                      {item.currency || 'AED'} {itemTotal}
-                    </Text>
+            cartItems.filter(item => item?.name).map((item, index) => (
+              <View key={item.id}>
+                <View style={styles.itemRow}>
+                  <View style={styles.itemIconBox}>
+                    <Ionicons name="water" size={14} color="#0EA5E9" />
                   </View>
-                );
-              })}
-            </View>
+                  <View style={styles.itemDetails}>
+                    <Text style={styles.itemName} numberOfLines={1}>{item.name}</Text>
+                    <Text style={styles.itemQuantity}>Qty: {item.quantity}</Text>
+                  </View>
+                  <View style={styles.itemPricing}>
+                    <Text style={styles.itemPrice}>AED {(item.price * item.quantity).toFixed(2)}</Text>
+                    <Text style={styles.itemUnitPrice}>@ {item.price}</Text>
+                  </View>
+                </View>
+                {index < cartItems.length - 1 && <View style={styles.itemDivider} />}
+              </View>
+            ))
           )}
         </View>
 
-        {/* Delivery Information Card */}
-        <View style={{ 
-          backgroundColor: '#FFFFFF', 
-          borderRadius: 8, 
-          padding: 20, 
-          marginBottom: 16,
-          borderWidth: 1,
-          borderColor: '#E9ECEF',
-          shadowColor: '#000',
-          shadowOffset: { width: 0, height: 2 },
-          shadowOpacity: 0.05,
-          shadowRadius: 8,
-          elevation: 2
-        }}>
-          <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 16 }}>
-            <View style={{ 
-              width: 40, 
-              height: 40, 
-              backgroundColor: '#E8F5E8', 
-              borderRadius: 20, 
-              alignItems: 'center', 
-              justifyContent: 'center', 
-              marginRight: 12 
-            }}>
-              <Ionicons name="location" size={20} color="#28A745" />
+        {/* Delivery To */}
+        <View style={styles.card}>
+          <Text style={styles.cardTitle}>Deliver To</Text>
+          <View style={styles.customerRow}>
+            <View style={styles.customerAvatar}>
+              <Text style={styles.customerInitial}>
+                {customerName.charAt(0).toUpperCase()}
+              </Text>
             </View>
-            <Text style={{ color: '#212529', fontSize: 16, fontWeight: '600' }}>
-              Delivery Information
-            </Text>
+            <View style={styles.customerDetails}>
+              <Text style={styles.customerName}>{customerName}</Text>
+              <Text style={styles.customerPhone}>{customerPhone}</Text>
+            </View>
           </View>
           
-          <View style={{ gap: 16 }}>
-            <View>
-              <Text style={{ color: '#6C757D', fontSize: 12, fontWeight: '600', marginBottom: 6 }}>
-                CUSTOMER NAME
-              </Text>
-              <View style={{ 
-                backgroundColor: '#F8F9FA', 
-                borderRadius: 6, 
-                padding: 12, 
-                borderWidth: 1, 
-                borderColor: '#E9ECEF' 
-              }}>
-                <Text style={{ color: '#212529', fontSize: 14, fontWeight: '500' }}>
-                  {orderDetail?.customer?.name || orderDetail?.customer_name || 'N/A'}
-                </Text>
-              </View>
+          <View style={styles.addressBox}>
+            <View style={styles.addressIcon}>
+              <Ionicons name="location" size={12} color="#6B7280" />
             </View>
-            
-            <View>
-              <Text style={{ color: '#6C757D', fontSize: 12, fontWeight: '600', marginBottom: 6 }}>
-                DELIVERY ADDRESS
-              </Text>
-              <View style={{ 
-                backgroundColor: '#F8F9FA', 
-                borderRadius: 6, 
-                padding: 12, 
-                borderWidth: 1, 
-                borderColor: '#E9ECEF' 
-              }}>
-                <Text style={{ color: '#212529', fontSize: 14, fontWeight: '500', lineHeight: 20 }}>
-                  {orderDetail?.customer?.address || orderDetail?.customer_address || 'N/A'}
-                </Text>
-              </View>
-            </View>
-            
-            <View>
-              <Text style={{ color: '#6C757D', fontSize: 12, fontWeight: '600', marginBottom: 6 }}>
-                CONTACT NUMBER
-              </Text>
-              <View style={{ 
-                backgroundColor: '#F8F9FA', 
-                borderRadius: 6, 
-                padding: 12, 
-                borderWidth: 1, 
-                borderColor: '#E9ECEF' 
-              }}>
-                <Text style={{ color: '#212529', fontSize: 14, fontWeight: '500' }}>
-                  {orderDetail?.customer?.phone || orderDetail?.customer_phone || 'N/A'}
-                </Text>
-              </View>
-            </View>
+            <Text style={styles.addressText} numberOfLines={2}>{customerAddress}</Text>
           </View>
         </View>
 
-        {/* Payment Method Card */}
-        <View style={{ 
-          backgroundColor: '#FFFFFF', 
-          borderRadius: 8, 
-          padding: 20, 
-          marginBottom: 16,
-          borderWidth: 1,
-          borderColor: '#E9ECEF',
-          shadowColor: '#000',
-          shadowOffset: { width: 0, height: 2 },
-          shadowOpacity: 0.05,
-          shadowRadius: 8,
-          elevation: 2
-        }}>
-          <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 16 }}>
-            <View style={{ 
-              width: 40, 
-              height: 40, 
-              backgroundColor: '#F3E8FF', 
-              borderRadius: 20, 
-              alignItems: 'center', 
-              justifyContent: 'center', 
-              marginRight: 12 
-            }}>
-              <Ionicons name="card" size={20} color="#8B5CF6" />
-            </View>
-            <Text style={{ color: '#212529', fontSize: 16, fontWeight: '600' }}>
-              Payment Method
-            </Text>
-          </View>
-          
-          <View style={{ flexDirection: 'row', gap: 12 }}>
-            <TouchableOpacity 
-              style={{ 
-                flex: 1, 
-                flexDirection: 'row', 
-                alignItems: 'center', 
-                justifyContent: 'center', 
-                padding: 16, 
-                borderRadius: 8, 
-                borderWidth: 2, 
-                backgroundColor: selectedPaymentMethod === 'cash' ? '#E3F2FD' : '#F8F9FA',
-                borderColor: selectedPaymentMethod === 'cash' ? '#1976D2' : '#E9ECEF'
-              }}
-              onPress={() => setPaymentMethod('cash')}
-            >
-              <View style={{ 
-                width: 20, 
-                height: 20, 
-                borderRadius: 10, 
-                borderWidth: 2, 
-                marginRight: 8,
-                backgroundColor: selectedPaymentMethod === 'cash' ? '#1976D2' : 'transparent',
-                borderColor: selectedPaymentMethod === 'cash' ? '#1976D2' : '#6C757D',
-                alignItems: 'center',
-                justifyContent: 'center'
-              }}>
-                {selectedPaymentMethod === 'cash' && (
-                  <View style={{ 
-                    width: 8, 
-                    height: 8, 
-                    borderRadius: 4, 
-                    backgroundColor: 'white' 
-                  }} />
-                )}
-              </View>
-              <Ionicons 
-                name="cash" 
-                size={20} 
-                color={selectedPaymentMethod === 'cash' ? '#1976D2' : '#6C757D'} 
-              />
-              <Text style={{ 
-                color: selectedPaymentMethod === 'cash' ? '#1976D2' : '#6C757D', 
-                fontSize: 14, 
-                fontWeight: '600', 
-                marginLeft: 8 
-              }}>
-                Cash
-              </Text>
-            </TouchableOpacity>
-            
-            <TouchableOpacity 
-              style={{ 
-                flex: 1, 
-                flexDirection: 'row', 
-                alignItems: 'center', 
-                justifyContent: 'center', 
-                padding: 16, 
-                borderRadius: 8, 
-                borderWidth: 2, 
-                backgroundColor: selectedPaymentMethod === 'wallet' ? '#E3F2FD' : '#F8F9FA',
-                borderColor: selectedPaymentMethod === 'wallet' ? '#1976D2' : '#E9ECEF'
-              }}
-              onPress={() => setPaymentMethod('wallet')}
-            >
-              <View style={{ 
-                width: 20, 
-                height: 20, 
-                borderRadius: 10, 
-                borderWidth: 2, 
-                marginRight: 8,
-                backgroundColor: selectedPaymentMethod === 'wallet' ? '#1976D2' : 'transparent',
-                borderColor: selectedPaymentMethod === 'wallet' ? '#1976D2' : '#6C757D',
-                alignItems: 'center',
-                justifyContent: 'center'
-              }}>
-                {selectedPaymentMethod === 'wallet' && (
-                  <View style={{ 
-                    width: 8, 
-                    height: 8, 
-                    borderRadius: 4, 
-                    backgroundColor: 'white' 
-                  }} />
-                )}
-              </View>
-              <Ionicons 
-                name="wallet" 
-                size={20} 
-                color={selectedPaymentMethod === 'wallet' ? '#1976D2' : '#6C757D'} 
-              />
-              <Text style={{ 
-                color: selectedPaymentMethod === 'wallet' ? '#1976D2' : '#6C757D', 
-                fontSize: 14, 
-                fontWeight: '600', 
-                marginLeft: 8 
-              }}>
-                Wallet
-              </Text>
-            </TouchableOpacity>
+        {/* Payment Method */}
+        <View style={styles.card}>
+          <Text style={styles.cardTitle}>Payment Method</Text>
+          <View style={styles.paymentGrid}>
+            {paymentOptions.map((option) => {
+              const isSelected = selectedPaymentMethod === option.id;
+              return (
+                <TouchableOpacity
+                  key={option.id}
+                  style={[
+                    styles.paymentOption,
+                    isSelected && styles.paymentOptionSelected
+                  ]}
+                  onPress={() => setPaymentMethod(option.id)}
+                  activeOpacity={0.7}
+                >
+                  <View style={[
+                    styles.paymentIconBox,
+                    isSelected && styles.paymentIconBoxSelected
+                  ]}>
+                    <Ionicons 
+                      name={option.icon} 
+                      size={20} 
+                      color={isSelected ? '#FFFFFF' : '#6B7280'} 
+                    />
+                  </View>
+                  <Text style={[
+                    styles.paymentLabel,
+                    isSelected && styles.paymentLabelSelected
+                  ]}>
+                    {option.label}
+                  </Text>
+                  {isSelected && (
+                    <View style={styles.paymentCheck}>
+                      <Ionicons name="checkmark" size={10} color="#059669" />
+                    </View>
+                  )}
+                </TouchableOpacity>
+              );
+            })}
           </View>
         </View>
 
-        {/* Payment Summary Card */}
-        <View style={{ 
-          backgroundColor: '#FFFFFF', 
-          borderRadius: 8, 
-          padding: 20, 
-          marginBottom: 16,
-          borderWidth: 1,
-          borderColor: '#E9ECEF',
-          shadowColor: '#000',
-          shadowOffset: { width: 0, height: 2 },
-          shadowOpacity: 0.05,
-          shadowRadius: 8,
-          elevation: 2
-        }}>
-          <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 16 }}>
-            <View style={{ 
-              width: 40, 
-              height: 40, 
-              backgroundColor: '#FFF3E0', 
-              borderRadius: 20, 
-              alignItems: 'center', 
-              justifyContent: 'center', 
-              marginRight: 12 
-            }}>
-              <Ionicons name="calculator" size={20} color="#F59E0B" />
-            </View>
-            <Text style={{ color: '#212529', fontSize: 16, fontWeight: '600' }}>
-              Payment Summary
-            </Text>
+        {/* Summary */}
+        <View style={styles.card}>
+          <Text style={styles.cardTitle}>Summary</Text>
+          <View style={styles.summaryRow}>
+            <Text style={styles.summaryLabel}>Subtotal</Text>
+            <Text style={styles.summaryValue}>AED {subtotal}</Text>
           </View>
-          
-          <View style={{ gap: 12 }}>
-            <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}>
-              <Text style={{ color: '#6C757D', fontSize: 14, fontWeight: '500' }}>Order ID:</Text>
-              <Text style={{ color: '#212529', fontSize: 14, fontWeight: '600' }}>
-                {orderDetail?.order_number || 'N/A'}
-              </Text>
-            </View>
-            
-            <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}>
-              <Text style={{ color: '#6C757D', fontSize: 14, fontWeight: '500' }}>Subtotal:</Text>
-              <Text style={{ color: '#212529', fontSize: 14, fontWeight: '600' }}>AED {subtotal}</Text>
-            </View>
-            
-            <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}>
-              <Text style={{ color: '#6C757D', fontSize: 14, fontWeight: '500' }}>VAT (15%):</Text>
-              <Text style={{ color: '#212529', fontSize: 14, fontWeight: '600' }}>AED {vat}</Text>
-            </View>
-            
-            <View style={{ 
-              borderTopWidth: 1, 
-              borderTopColor: '#E9ECEF', 
-              paddingTop: 12, 
-              marginTop: 8 
-            }}>
-              <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}>
-                <Text style={{ color: '#212529', fontSize: 16, fontWeight: '700' }}>Total Amount:</Text>
-                <Text style={{ color: '#1976D2', fontSize: 18, fontWeight: '700' }}>AED {totalWithVat}</Text>
-              </View>
-            </View>
+          <View style={styles.summaryRow}>
+            <Text style={styles.summaryLabel}>VAT (5%)</Text>
+            <Text style={styles.summaryValue}>AED {vat}</Text>
+          </View>
+          <View style={styles.summaryDivider} />
+          <View style={styles.summaryRow}>
+            <Text style={styles.totalLabel}>Total</Text>
+            <Text style={styles.totalValue}>AED {totalWithVat}</Text>
           </View>
         </View>
 
-        {/* Continue Button */}
-        <TouchableOpacity
-          style={{ 
-            backgroundColor: cartItems.length === 0 ? '#E9ECEF' : '#1976D2',
-            paddingVertical: 16, 
-            paddingHorizontal: 24, 
-            borderRadius: 8,
-            flexDirection: 'row',
-            alignItems: 'center',
-            justifyContent: 'center',
-            borderWidth: 1,
-            borderColor: cartItems.length === 0 ? '#E9ECEF' : '#1976D2',
-            shadowColor: '#000',
-            shadowOffset: { width: 0, height: 2 },
-            shadowOpacity: cartItems.length === 0 ? 0.05 : 0.1,
-            shadowRadius: 8,
-            elevation: cartItems.length === 0 ? 2 : 4
-          }}
-          onPress={handleContinueToPayment}
-          disabled={isLoading || cartItems.length === 0}
-        >
-          {isLoading ? (
-            <>
-              <ActivityIndicator color="white" size="small" />
-              <Text style={{ color: 'white', fontSize: 16, fontWeight: '600', marginLeft: 12 }}>
-                Processing...
-              </Text>
-            </>
-          ) : (
-            <>
-              <Ionicons name="arrow-forward" size={20} color={cartItems.length === 0 ? '#6C757D' : 'white'} />
-              <Text style={{ 
-                color: cartItems.length === 0 ? '#6C757D' : 'white', 
-                fontSize: 16, 
-                fontWeight: '600', 
-                marginLeft: 8 
-              }}>
-                Continue to Payment
-              </Text>
-            </>
-          )}
-        </TouchableOpacity>
+        {/* Action Section */}
+        <View style={styles.actionSection}>
+          <View style={styles.actionSummary}>
+            <Text style={styles.actionLabel}>Total</Text>
+            <Text style={styles.actionTotal}>AED {totalWithVat}</Text>
+          </View>
+          
+          <TouchableOpacity
+            style={[
+              styles.continueButton,
+              (cartItems.length === 0 || isLoading || !selectedPaymentMethod) && styles.continueButtonDisabled
+            ]}
+            onPress={handleContinueToPayment}
+            disabled={isLoading || cartItems.length === 0 || !selectedPaymentMethod}
+            activeOpacity={0.8}
+          >
+            {isLoading ? (
+              <ActivityIndicator size="small" color="#FFFFFF" />
+            ) : (
+              <>
+                <Text style={styles.continueButtonText}>Continue</Text>
+                <View style={[
+                  styles.continueArrow,
+                  (cartItems.length === 0 || !selectedPaymentMethod) && styles.continueArrowDisabled
+                ]}>
+                  <Ionicons 
+                    name="arrow-forward" 
+                    size={16} 
+                    color={(cartItems.length === 0 || !selectedPaymentMethod) ? '#9CA3AF' : '#111827'} 
+                  />
+                </View>
+              </>
+            )}
+          </TouchableOpacity>
+        </View>
+
+        <View style={{ height: Math.max(insets.bottom, 20) + 80 }} />
       </ScrollView>
     </View>
   );
 };
+
+const styles = StyleSheet.create({
+  container: {
+    flex: 1,
+    backgroundColor: '#FAFBFC',
+  },
+  header: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingHorizontal: 20,
+    paddingTop: 8,
+    paddingBottom: 12,
+    backgroundColor: '#FFFFFF',
+    borderBottomWidth: 1,
+    borderBottomColor: '#F3F4F6',
+  },
+  backButton: {
+    width: 36,
+    height: 36,
+    borderRadius: 10,
+    backgroundColor: '#F3F4F6',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  headerCenter: {
+    alignItems: 'center',
+  },
+  headerTitle: {
+    fontSize: 17,
+    fontWeight: '600',
+    color: '#111827',
+    letterSpacing: -0.4,
+  },
+  headerSubtitle: {
+    fontSize: 12,
+    fontWeight: '500',
+    color: '#9CA3AF',
+    marginTop: 2,
+  },
+  cartBadge: {
+    minWidth: 36,
+    height: 36,
+    borderRadius: 10,
+    backgroundColor: '#111827',
+    justifyContent: 'center',
+    alignItems: 'center',
+    paddingHorizontal: 10,
+  },
+  cartBadgeText: {
+    fontSize: 14,
+    fontWeight: '700',
+    color: '#FFFFFF',
+  },
+  content: {
+    flex: 1,
+  },
+  contentContainer: {
+    paddingTop: 20,
+    paddingHorizontal: 20,
+  },
+  card: {
+    backgroundColor: '#FFFFFF',
+    borderRadius: 16,
+    padding: 16,
+    marginBottom: 12,
+    ...Platform.select({
+      ios: {
+        shadowColor: '#000',
+        shadowOffset: { width: 0, height: 2 },
+        shadowOpacity: 0.04,
+        shadowRadius: 8,
+      },
+      android: {
+        elevation: 2,
+      },
+    }),
+  },
+  cardHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginBottom: 14,
+  },
+  cardTitle: {
+    fontSize: 11,
+    fontWeight: '600',
+    color: '#9CA3AF',
+    textTransform: 'uppercase',
+    letterSpacing: 0.8,
+    marginBottom: 14,
+  },
+  editLink: {
+    fontSize: 13,
+    fontWeight: '600',
+    color: '#2563EB',
+  },
+  emptyState: {
+    alignItems: 'center',
+    paddingVertical: 24,
+  },
+  emptyIconBox: {
+    width: 56,
+    height: 56,
+    borderRadius: 16,
+    backgroundColor: '#F9FAFB',
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginBottom: 10,
+  },
+  emptyText: {
+    fontSize: 13,
+    color: '#9CA3AF',
+  },
+  itemRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingVertical: 10,
+  },
+  itemIconBox: {
+    width: 36,
+    height: 36,
+    borderRadius: 10,
+    backgroundColor: '#E0F2FE',
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginRight: 12,
+  },
+  itemDetails: {
+    flex: 1,
+  },
+  itemName: {
+    fontSize: 14,
+    fontWeight: '500',
+    color: '#111827',
+    marginBottom: 2,
+  },
+  itemQuantity: {
+    fontSize: 12,
+    color: '#6B7280',
+  },
+  itemPricing: {
+    alignItems: 'flex-end',
+  },
+  itemPrice: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: '#111827',
+  },
+  itemUnitPrice: {
+    fontSize: 11,
+    color: '#9CA3AF',
+    marginTop: 2,
+  },
+  itemDivider: {
+    height: 1,
+    backgroundColor: '#F3F4F6',
+    marginLeft: 48,
+  },
+  customerRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginBottom: 12,
+  },
+  customerAvatar: {
+    width: 40,
+    height: 40,
+    borderRadius: 12,
+    backgroundColor: '#F3F4F6',
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginRight: 12,
+  },
+  customerInitial: {
+    fontSize: 16,
+    fontWeight: '600',
+    color: '#6B7280',
+  },
+  customerDetails: {
+    flex: 1,
+  },
+  customerName: {
+    fontSize: 15,
+    fontWeight: '600',
+    color: '#111827',
+  },
+  customerPhone: {
+    fontSize: 13,
+    color: '#6B7280',
+    marginTop: 2,
+  },
+  addressBox: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    backgroundColor: '#F9FAFB',
+    borderRadius: 10,
+    padding: 12,
+  },
+  addressIcon: {
+    width: 22,
+    height: 22,
+    borderRadius: 6,
+    backgroundColor: '#FFFFFF',
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginRight: 10,
+  },
+  addressText: {
+    flex: 1,
+    fontSize: 13,
+    color: '#4B5563',
+    lineHeight: 18,
+  },
+  paymentGrid: {
+    flexDirection: 'row',
+    gap: 12,
+  },
+  paymentOption: {
+    flex: 1,
+    alignItems: 'center',
+    backgroundColor: '#F9FAFB',
+    borderRadius: 14,
+    padding: 16,
+    borderWidth: 2,
+    borderColor: 'transparent',
+  },
+  paymentOptionSelected: {
+    backgroundColor: '#FFFFFF',
+    borderColor: '#111827',
+  },
+  paymentIconBox: {
+    width: 44,
+    height: 44,
+    borderRadius: 12,
+    backgroundColor: '#FFFFFF',
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginBottom: 10,
+  },
+  paymentIconBoxSelected: {
+    backgroundColor: '#111827',
+  },
+  paymentLabel: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: '#6B7280',
+  },
+  paymentLabelSelected: {
+    color: '#111827',
+  },
+  paymentCheck: {
+    position: 'absolute',
+    top: 10,
+    right: 10,
+    width: 18,
+    height: 18,
+    borderRadius: 9,
+    backgroundColor: '#ECFDF5',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  summaryRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    paddingVertical: 9,
+  },
+  summaryLabel: {
+    fontSize: 14,
+    color: '#6B7280',
+  },
+  summaryValue: {
+    fontSize: 14,
+    fontWeight: '500',
+    color: '#111827',
+  },
+  summaryDivider: {
+    height: 1,
+    backgroundColor: '#E5E7EB',
+    marginVertical: 4,
+  },
+  totalLabel: {
+    fontSize: 15,
+    fontWeight: '600',
+    color: '#111827',
+  },
+  totalValue: {
+    fontSize: 20,
+    fontWeight: '700',
+    color: '#111827',
+  },
+  actionSection: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#FFFFFF',
+    borderRadius: 16,
+    padding: 16,
+    marginTop: 8,
+    gap: 16,
+    ...Platform.select({
+      ios: {
+        shadowColor: '#000',
+        shadowOffset: { width: 0, height: 2 },
+        shadowOpacity: 0.04,
+        shadowRadius: 8,
+      },
+      android: {
+        elevation: 2,
+      },
+    }),
+  },
+  actionSummary: {
+    flex: 1,
+  },
+  actionLabel: {
+    fontSize: 11,
+    fontWeight: '500',
+    color: '#9CA3AF',
+    textTransform: 'uppercase',
+    letterSpacing: 0.5,
+    marginBottom: 2,
+  },
+  actionTotal: {
+    fontSize: 20,
+    fontWeight: '700',
+    color: '#111827',
+    letterSpacing: -0.5,
+  },
+  continueButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#111827',
+    height: 52,
+    paddingHorizontal: 28,
+    borderRadius: 14,
+    gap: 10,
+  },
+  continueButtonDisabled: {
+    backgroundColor: '#E5E7EB',
+  },
+  continueButtonText: {
+    fontSize: 15,
+    fontWeight: '600',
+    color: '#FFFFFF',
+  },
+  continueArrow: {
+    width: 26,
+    height: 26,
+    borderRadius: 7,
+    backgroundColor: '#FFFFFF',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  continueArrowDisabled: {
+    backgroundColor: '#F3F4F6',
+  },
+});
 
 export default Checkout;

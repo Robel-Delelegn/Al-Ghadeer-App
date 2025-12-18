@@ -33,6 +33,7 @@ interface AuthStore {
 }
 
 // API Base URL - Update with your actual server URL
+// Note: Should include /api at the end (e.g., http://192.168.100.249:3000/api)
 const API_BASE_URL = process.env.EXPO_PUBLIC_IP_ADDRESS || process.env.EXPO_PUBLIC_API_URL || 'http://localhost:3000/api';
 
 export const useAuthStore = create<AuthStore>()(
@@ -51,9 +52,12 @@ export const useAuthStore = create<AuthStore>()(
         set({ isLoading: true });
         try {
           console.log('Requesting OTP for phone:', phone);
-          console.log('API URL:', `${API_BASE_URL}/auth/request-otp`);
+          // Ensure API_BASE_URL ends with /api, then append /auth/request-otp
+          const baseUrl = API_BASE_URL.endsWith('/api') ? API_BASE_URL : `${API_BASE_URL}/api`;
+          const url = `${baseUrl}/auth/request-otp`;
+          console.log('API URL:', url);
 
-          const response = await fetch(`${API_BASE_URL}/auth/request-otp`, {
+          const response = await fetch(url, {
             method: 'POST',
             headers: {
               'Content-Type': 'application/json',
@@ -144,7 +148,8 @@ export const useAuthStore = create<AuthStore>()(
       verifyOtp: async (phone: string, otp: string, tempToken: string) => {
         set({ isLoading: true });
         try {
-          const response = await fetch(`${API_BASE_URL}/auth/verify-otp`, {
+          const baseUrl = API_BASE_URL.endsWith('/api') ? API_BASE_URL : `${API_BASE_URL}/api`;
+          const response = await fetch(`${baseUrl}/auth/verify-otp`, {
             method: 'POST',
             headers: {
               'Content-Type': 'application/json',
@@ -199,7 +204,8 @@ export const useAuthStore = create<AuthStore>()(
       resendOtp: async (phone: string, tempToken: string) => {
         set({ isLoading: true });
         try {
-          const response = await fetch(`${API_BASE_URL}/auth/resend-otp`, {
+          const baseUrl = API_BASE_URL.endsWith('/api') ? API_BASE_URL : `${API_BASE_URL}/api`;
+          const response = await fetch(`${baseUrl}/auth/resend-otp`, {
             method: 'POST',
             headers: {
               'Content-Type': 'application/json',
@@ -242,7 +248,8 @@ export const useAuthStore = create<AuthStore>()(
           // Call logout endpoint if token exists
           if (token) {
             try {
-              await fetch(`${API_BASE_URL}/auth/logout`, {
+              const baseUrl = API_BASE_URL.endsWith('/api') ? API_BASE_URL : `${API_BASE_URL}/api`;
+              await fetch(`${baseUrl}/auth/logout`, {
                 method: 'POST',
                 headers: {
                   'Authorization': `Bearer ${token}`,
@@ -290,7 +297,8 @@ export const useAuthStore = create<AuthStore>()(
           }
 
           // Verify token with backend
-          const response = await fetch(`${API_BASE_URL}/auth/me`, {
+          const baseUrl = API_BASE_URL.endsWith('/api') ? API_BASE_URL : `${API_BASE_URL}/api`;
+          const response = await fetch(`${baseUrl}/auth/me`, {
             method: 'GET',
             headers: {
               'Authorization': `Bearer ${token}`,

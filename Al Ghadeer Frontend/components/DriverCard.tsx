@@ -41,6 +41,12 @@ const DriverCard = ({item, selected, setSelected}: DriverCardProps) => {
                         <Text className="text-sm font-JakartaRegular">{item.metrics.average_rating.toFixed(1)}</Text>
                     </View>
                 </View>
+                
+                {item.helper_name && (
+                    <Text className="text-sm font-JakartaRegular text-gray-600 mt-0.5">
+                        Helper: {item.helper_name}
+                    </Text>
+                )}
 
                 <View className="flex flex-row items-center justify-start">
                     <View className="flex flex-row items-center">
