@@ -232,28 +232,28 @@ const Expenses = () => {
         <View>
           <Text style={styles.headerTitle}>Expenses</Text>
           <Text style={styles.headerSubtitle}>Submit reimbursement requests</Text>
-        </View>
+          </View>
         <TouchableOpacity style={styles.historyButton} onPress={() => setShowHistory(true)}>
           <Ionicons name="time-outline" size={20} color="#0F172A" />
-        </TouchableOpacity>
+          </TouchableOpacity>
       </View>
 
       <KeyboardAvoidingView 
         style={{ flex: 1 }} 
         behavior={Platform.OS === 'ios' ? 'padding' : undefined}
       >
-        <ScrollView 
+      <ScrollView 
           style={styles.content}
           contentContainerStyle={styles.contentContainer}
-          showsVerticalScrollIndicator={false}
+        showsVerticalScrollIndicator={false}
           keyboardShouldPersistTaps="handled"
-        >
+      >
           {/* Expense Type Selection */}
           <View style={styles.section}>
             <Text style={styles.sectionLabel}>Type</Text>
             <View style={styles.typeGrid}>
               {EXPENSE_TYPES.map((type) => (
-                <TouchableOpacity
+          <TouchableOpacity
                   key={type.id}
                   style={[
                     styles.typeCard,
@@ -261,7 +261,7 @@ const Expenses = () => {
                   ]}
                   onPress={() => setSelectedType(type.label)}
                   activeOpacity={0.7}
-                >
+          >
                   <View style={[
                     styles.typeIcon,
                     selectedType === type.label && styles.typeIconSelected
@@ -277,32 +277,32 @@ const Expenses = () => {
                     selectedType === type.label && styles.typeLabelSelected
                   ]}>
                     {type.label}
-                  </Text>
-                </TouchableOpacity>
+            </Text>
+          </TouchableOpacity>
               ))}
-            </View>
+        </View>
           </View>
-
+          
           {/* Amount Input */}
           <View style={styles.section}>
             <Text style={styles.sectionLabel}>Amount</Text>
             <View style={styles.amountContainer}>
               <Text style={styles.currency}>AED</Text>
-              <TextInput
+            <TextInput
                 style={styles.amountInput}
-                placeholder="0.00"
+              placeholder="0.00"
                 placeholderTextColor="#CBD5E1"
-                keyboardType="decimal-pad"
-                value={formattedAmount}
-                onChangeText={setAmount}
-              />
-            </View>
+              keyboardType="decimal-pad"
+              value={formattedAmount}
+              onChangeText={setAmount}
+            />
           </View>
+        </View>
 
           {/* Receipt Upload */}
           <View style={styles.section}>
             <Text style={styles.sectionLabel}>Receipt <Text style={styles.optional}>(optional)</Text></Text>
-            {receiptUri ? (
+          {receiptUri ? (
               <View style={styles.receiptPreview}>
                 <Image source={{ uri: receiptUri }} style={styles.receiptImage} />
                 <TouchableOpacity 
@@ -311,14 +311,14 @@ const Expenses = () => {
                 >
                   <Ionicons name="close" size={16} color="#FFFFFF" />
                 </TouchableOpacity>
-              </View>
-            ) : (
+            </View>
+          ) : (
               <TouchableOpacity style={styles.uploadButton} onPress={pickReceipt}>
                 <Ionicons name="cloud-upload-outline" size={24} color="#94A3B8" />
                 <Text style={styles.uploadText}>Upload receipt</Text>
-              </TouchableOpacity>
-            )}
-          </View>
+            </TouchableOpacity>
+          )}
+        </View>
 
           {/* Description */}
           <View style={styles.section}>
@@ -337,25 +337,25 @@ const Expenses = () => {
 
           {/* Submit Button */}
           <View style={styles.actionSection}>
-            <TouchableOpacity
+          <TouchableOpacity
               style={[styles.submitButton, !isFormValid && styles.submitButtonDisabled]}
-              onPress={handleSubmit}
+            onPress={handleSubmit}
               disabled={!isFormValid || submitting}
               activeOpacity={0.8}
-            >
-              {submitting ? (
+          >
+            {submitting ? (
                 <ActivityIndicator size="small" color="#FFFFFF" />
               ) : (
                 <>
                   <Ionicons name="paper-plane-outline" size={20} color="#FFFFFF" />
                   <Text style={styles.submitText}>Submit Expense</Text>
                 </>
-              )}
-            </TouchableOpacity>
-          </View>
+            )}
+          </TouchableOpacity>
+        </View>
 
           <View style={{ height: Math.max(insets.bottom, 16) + 80 }} />
-        </ScrollView>
+      </ScrollView>
       </KeyboardAvoidingView>
 
       {/* History Modal */}
@@ -368,43 +368,43 @@ const Expenses = () => {
             </View>
             <TouchableOpacity style={styles.closeButton} onPress={() => setShowHistory(false)}>
               <Ionicons name="close" size={22} color="#64748B" />
-            </TouchableOpacity>
-          </View>
+              </TouchableOpacity>
+            </View>
 
-          {/* Tabs */}
+            {/* Tabs */}
           <View style={styles.tabContainer}>
-            <TouchableOpacity
+              <TouchableOpacity
               style={[styles.tab, activeTab === 'pending' && styles.tabActive]}
-              onPress={() => setActiveTab('pending')}
-            >
+                onPress={() => setActiveTab('pending')}
+              >
               <Text style={[styles.tabText, activeTab === 'pending' && styles.tabTextActive]}>
-                Pending
-              </Text>
-            </TouchableOpacity>
-            <TouchableOpacity
+                  Pending
+                </Text>
+              </TouchableOpacity>
+              <TouchableOpacity
               style={[styles.tab, activeTab === 'all' && styles.tabActive]}
-              onPress={() => setActiveTab('all')}
-            >
+                onPress={() => setActiveTab('all')}
+              >
               <Text style={[styles.tabText, activeTab === 'all' && styles.tabTextActive]}>
                 All
-              </Text>
-            </TouchableOpacity>
-          </View>
+                </Text>
+              </TouchableOpacity>
+            </View>
 
           <ScrollView style={styles.historyList} showsVerticalScrollIndicator={false}>
-            {loadingHistory ? (
+              {loadingHistory ? (
               <View style={styles.emptyState}>
                 <ActivityIndicator size="large" color="#0F172A" />
-              </View>
-            ) : expenseHistory.length === 0 ? (
+                </View>
+              ) : expenseHistory.length === 0 ? (
               <View style={styles.emptyState}>
                 <View style={styles.emptyIcon}>
                   <Ionicons name="receipt-outline" size={32} color="#CBD5E1" />
-                </View>
+                  </View>
                 <Text style={styles.emptyTitle}>No expenses yet</Text>
                 <Text style={styles.emptySubtitle}>Your submitted expenses will appear here</Text>
-              </View>
-            ) : (
+                </View>
+              ) : (
               expenseHistory.map((expense) => {
                 const statusStyle = getStatusStyle(expense.status);
                 return (
@@ -427,15 +427,15 @@ const Expenses = () => {
                     <Text style={styles.historyAmount}>AED {expense.amount.toFixed(2)}</Text>
                     {expense.description && (
                       <Text style={styles.historyDescription} numberOfLines={2}>
-                        {expense.description}
+                          {expense.description}
                       </Text>
                     )}
                   </View>
                 );
               })
-            )}
+              )}
             <View style={{ height: 40 }} />
-          </ScrollView>
+            </ScrollView>
         </View>
       </Modal>
     </View>

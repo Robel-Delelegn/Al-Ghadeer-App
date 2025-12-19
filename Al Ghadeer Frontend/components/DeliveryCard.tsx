@@ -22,6 +22,25 @@ const getStatusChipStyle = (status: string) => {
     }
   };
 
+const getCustomerTypeStyle = (customerType?: string) => {
+  if (customerType === 'organization') {
+    return {
+      badge: 'bg-purple-100 border-purple-300',
+      text: 'text-purple-700',
+      label: 'Organization',
+      borderColor: '#A855F7',
+      bgColor: '#FAF5FF',
+    };
+  }
+  return {
+    badge: 'bg-emerald-100 border-emerald-300',
+    text: 'text-emerald-700',
+    label: 'Individual',
+    borderColor: '#10B981',
+    bgColor: '#ECFDF5',
+  };
+};
+
 const DeliveryCard = ({ item, onPress }: { item: Order; onPress?: () => void }) => {
   // Handle both nested and flat structures for backward compatibility
   const customerName = item.customer?.name || item.customer_name || 'N/A';
@@ -29,6 +48,9 @@ const DeliveryCard = ({ item, onPress }: { item: Order; onPress?: () => void }) 
   const totalAmount = item.pricing?.total_amount || item.total_amount || 0;
   const distanceKm = item.delivery?.distance_km || 0;
   const scheduledTime = item.delivery?.scheduled_time || 'Time N/A';
+  const customerType = item.customer_type || 'individual';
+  const customerTypeStyle = getCustomerTypeStyle(customerType);
+  const walletBalance = item.wallet_balance ?? 0;
   
   // Format availability times (expects "18:30" format)
   const formatAvailabilityTime = (timeString?: string) => {
@@ -112,17 +134,29 @@ const DeliveryCard = ({ item, onPress }: { item: Order; onPress?: () => void }) 
     <TouchableOpacity
       onPress={async () => { try { await Haptics.selectionAsync(); } catch {}; onPress?.(); }}
       activeOpacity={0.9}
-      className="mb-4 rounded-2xl bg-white px-5 py-4 flex flex-col gap-2 border border-gray-100"
+      className="mb-4 rounded-2xl bg-white px-5 py-4 flex flex-col gap-2"
       style={{
         shadowColor: '#0F172A',
         shadowOpacity: 0.08,
         shadowRadius: 16,
         shadowOffset: { width: 0, height: 10 },
         elevation: 6,
+        borderLeftWidth: 4,
+        borderLeftColor: customerTypeStyle.borderColor,
+        borderWidth: 1,
+        borderColor: '#F3F4F6',
       }}
     >
+      {/* Header Row */}
       <View className="flex-row items-center justify-between mb-1">
-        <Text className="text-base font-JakartaSemiBold text-gray-900 flex-1" numberOfLines={1}>{customerName}</Text>
+        <View className="flex-row items-center flex-1 gap-2">
+          <Text className="text-base font-JakartaSemiBold text-gray-900 flex-shrink" numberOfLines={1}>{customerName}</Text>
+          <View className={`px-2 py-0.5 rounded-md border ${customerTypeStyle.badge}`}>
+            <Text className={`text-[10px] font-JakartaSemiBold ${customerTypeStyle.text}`}>
+              {customerTypeStyle.label}
+            </Text>
+          </View>
+        </View>
         <View className="flex-row items-center gap-2">
           {currentlyAvailable && (
             <View className="w-3 h-3 bg-green-500 rounded-full shadow-sm" 
@@ -135,15 +169,19 @@ const DeliveryCard = ({ item, onPress }: { item: Order; onPress?: () => void }) 
                   }}>
             </View>
           )}
-        <Text className={`px-3 py-1 rounded-full text-xs font-JakartaSemiBold border ${getStatusChipStyle(item.status)}`}>
-          {item.status.charAt(0).toUpperCase() + item.status.slice(1).replace('_', ' ')}
-        </Text>
+          <Text className={`px-3 py-1 rounded-full text-xs font-JakartaSemiBold border ${getStatusChipStyle(item.status)}`}>
+            {item.status.charAt(0).toUpperCase() + item.status.slice(1).replace('_', ' ')}
+          </Text>
         </View>
       </View>
+      
+      {/* Address Row */}
       <View className="flex-row items-center gap-2 mb-1">
         <Image source={icons.pin} className="w-4 h-4 mr-1" />
-        <Text className="text-gray-700 text-sm justify-start" numberOfLines={1}>{customerAddress}</Text>
+        <Text className="text-gray-700 text-sm justify-start flex-1" numberOfLines={1}>{customerAddress}</Text>
       </View>
+      
+      {/* Time & Items Row */}
       <View className="flex-row items-center gap-2">
         <Image source={icons.list} className="w-4 h-4 mr-1" />
         <Text className="text-gray-500 text-xs">{availabilityTime}</Text>
@@ -151,8 +189,25 @@ const DeliveryCard = ({ item, onPress }: { item: Order; onPress?: () => void }) 
           {totalItems} Items
         </Text>
       </View>
-      <View className="flex-row items-center gap-2 mt-1">
-        <Text className="text-gray-600 text-xs">Total: AED {totalAmount}</Text>
+      
+      {/* Footer Row */}
+      <View className="flex-row items-center justify-between mt-1">
+        <Text className="text-gray-800 text-sm font-JakartaSemiBold">AED {totalAmount.toFixed(2)}</Text>
+        {customerType === 'organization' ? (
+          <View className="flex-row items-center gap-1">
+            <Text className="text-gray-500 text-xs">Wallet:</Text>
+            <Text className={`text-xs font-JakartaSemiBold ${walletBalance >= 0 ? 'text-emerald-600' : 'text-orange-600'}`}>
+              AED {walletBalance.toFixed(2)}
+            </Text>
+          </View>
+        ) : walletBalance > 0 ? (
+          <View className="flex-row items-center gap-1">
+            <Text className="text-gray-500 text-xs">Wallet:</Text>
+            <Text className="text-emerald-600 text-xs font-JakartaSemiBold">
+              AED {walletBalance.toFixed(2)}
+            </Text>
+          </View>
+        ) : null}
       </View>
     </TouchableOpacity>
   );

@@ -421,8 +421,8 @@ const FailedDeliveries = () => {
             ) : (
               <>
                 <Text style={{ color: 'white', fontSize: 15, fontWeight: '600' }}>
-                  Submit Report
-                </Text>
+                Submit Report
+              </Text>
                 <View style={{ 
                   width: 26, 
                   height: 26, 

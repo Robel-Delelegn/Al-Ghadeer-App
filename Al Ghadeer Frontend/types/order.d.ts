@@ -31,6 +31,7 @@ export interface Order {
   customer_phone?: string;
   customer_email?: string;
   customer_address?: string;
+  customer_type?: 'individual' | 'organization';
   latitude?: number;
   longitude?: number;
   delivery_instructions?: string;

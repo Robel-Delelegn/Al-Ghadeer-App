@@ -170,7 +170,7 @@ const OrderDetails = () => {
             <Text style={[styles.statusPillText, { color: currentStatus.color }]}>
               {currentStatus.label}
             </Text>
-          </View>
+        </View>
         </View>
         <View style={styles.headerRight} />
       </View>
@@ -185,32 +185,32 @@ const OrderDetails = () => {
           <View style={styles.cardHeader}>
             <View style={styles.avatar}>
               <Text style={styles.avatarText}>
-                {customerName.charAt(0).toUpperCase()}
-              </Text>
-            </View>
-            <View style={styles.customerInfo}>
-              <Text style={styles.customerName}>{customerName}</Text>
-              <Text style={styles.customerLabel}>Customer</Text>
-            </View>
-            <TouchableOpacity 
-              style={styles.callButton}
-              onPress={() => Linking.openURL(`tel:${customerPhone}`)}
+                  {customerName.charAt(0).toUpperCase()}
+                </Text>
+              </View>
+              <View style={styles.customerInfo}>
+                <Text style={styles.customerName}>{customerName}</Text>
+                <Text style={styles.customerLabel}>Customer</Text>
+              </View>
+              <TouchableOpacity 
+                style={styles.callButton}
+                onPress={() => Linking.openURL(`tel:${customerPhone}`)}
               activeOpacity={0.7}
-            >
+              >
               <Ionicons name="call" size={18} color="#059669" />
-            </TouchableOpacity>
-          </View>
-          
+              </TouchableOpacity>
+            </View>
+            
           <View style={styles.cardDivider} />
-          
-          <View style={styles.infoRow}>
+            
+            <View style={styles.infoRow}>
             <View style={styles.infoIconBox}>
               <Ionicons name="call-outline" size={14} color="#6B7280" />
+              </View>
+              <Text style={styles.infoText}>{customerPhone}</Text>
             </View>
-            <Text style={styles.infoText}>{customerPhone}</Text>
-          </View>
-          
-          <View style={styles.infoRow}>
+            
+            <View style={styles.infoRow}>
             <View style={styles.infoIconBox}>
               <Ionicons name="location-outline" size={14} color="#6B7280" />
             </View>
@@ -273,31 +273,31 @@ const OrderDetails = () => {
           <View style={styles.detailRow}>
             <Text style={styles.detailLabel}>Order ID</Text>
             <Text style={styles.detailValue}>{order.order_number}</Text>
-          </View>
+            </View>
           <View style={styles.detailRowDivider} />
           <View style={styles.detailRow}>
             <Text style={styles.detailLabel}>Created</Text>
             <Text style={styles.detailValue}>
-              {new Date(order.created_at).toLocaleDateString('en-US', { 
-                month: 'short', 
-                day: 'numeric',
-                hour: '2-digit',
-                minute: '2-digit'
-              })}
-            </Text>
-          </View>
+                {new Date(order.created_at).toLocaleDateString('en-US', { 
+                  month: 'short', 
+                  day: 'numeric',
+                  hour: '2-digit',
+                  minute: '2-digit'
+                })}
+              </Text>
+            </View>
           <View style={styles.detailRowDivider} />
           <View style={styles.detailRow}>
             <Text style={styles.detailLabel}>Payment</Text>
             <Text style={styles.detailValue}>
-              {(order.payment_method || 'Cash').charAt(0).toUpperCase() + (order.payment_method || 'cash').slice(1)}
-            </Text>
-          </View>
+                {(order.payment_method || 'Cash').charAt(0).toUpperCase() + (order.payment_method || 'cash').slice(1)}
+              </Text>
+            </View>
           <View style={styles.detailRowDivider} />
           <View style={styles.detailRow}>
             <Text style={styles.detailLabel}>Items</Text>
             <Text style={styles.detailValue}>{productCount} items</Text>
-          </View>
+            </View>
           <View style={styles.detailRowDivider} />
           <View style={styles.detailRow}>
             <Text style={styles.detailLabel}>Total</Text>
@@ -309,22 +309,22 @@ const OrderDetails = () => {
         {order.products && Object.keys(order.products).length > 0 && (
           <View style={styles.card}>
             <Text style={styles.sectionLabel}>ITEMS</Text>
-            {Object.entries(order.products).map(([productName, quantity], index) => (
-              <View key={productName}>
-                <View style={styles.productRow}>
-                  <View style={styles.productIcon}>
+              {Object.entries(order.products).map(([productName, quantity], index) => (
+                <View key={productName}>
+                  <View style={styles.productRow}>
+                    <View style={styles.productIcon}>
                     <Ionicons name="water" size={14} color="#0EA5E9" />
-                  </View>
-                  <Text style={styles.productName}>{productName}</Text>
+                    </View>
+                    <Text style={styles.productName}>{productName}</Text>
                   <View style={styles.productQtyBadge}>
                     <Text style={styles.productQty}>×{quantity}</Text>
                   </View>
                 </View>
                 {index < Object.keys(order.products || {}).length - 1 && (
-                  <View style={styles.productDivider} />
-                )}
-              </View>
-            ))}
+                    <View style={styles.productDivider} />
+                  )}
+                </View>
+              ))}
           </View>
         )}
 
@@ -359,26 +359,26 @@ const OrderDetails = () => {
 
         {/* Action Buttons */}
         <View style={styles.actionButtons}>
-          <TouchableOpacity 
+        <TouchableOpacity 
             style={styles.failButton}
-            onPress={handleMarkAsUnsuccessful}
-            activeOpacity={0.8}
-          >
+          onPress={handleMarkAsUnsuccessful}
+          activeOpacity={0.8}
+        >
             <Ionicons name="close" size={20} color="#DC2626" />
             <Text style={styles.failButtonText}>Unsuccessful</Text>
-          </TouchableOpacity>
-          
-          <TouchableOpacity 
-            style={styles.proceedButton}
-            onPress={handleProceed}
-            activeOpacity={0.8}
-          >
-            <Text style={styles.proceedButtonText}>Start Delivery</Text>
-            <View style={styles.proceedArrow}>
+        </TouchableOpacity>
+        
+        <TouchableOpacity 
+          style={styles.proceedButton}
+          onPress={handleProceed}
+          activeOpacity={0.8}
+        >
+          <Text style={styles.proceedButtonText}>Start Delivery</Text>
+          <View style={styles.proceedArrow}>
               <Ionicons name="arrow-forward" size={16} color="#111827" />
-            </View>
-          </TouchableOpacity>
-        </View>
+          </View>
+        </TouchableOpacity>
+      </View>
 
         <View style={{ height: Math.max(insets.bottom, 20) + 80 }} />
       </ScrollView>

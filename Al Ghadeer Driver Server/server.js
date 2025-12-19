@@ -376,11 +376,12 @@ app.get('/api/driver/orders', async (req, res) => {
             start_time: '09:00',
             end_time: '17:00',
             total_amount: 45.50,
-            payment_method: 'cash',
             payment_status: 'pending',
             delivery_zone: 'Dubai Marina',
             customer_site_id: 'site_001',
             customer_id: 'cust_001',
+            customer_type: 'individual',
+            wallet_balance: 125.50,
             products: {
                 five_litre_bottles: 5,
                 ten_litre_bottles: 2
@@ -402,11 +403,12 @@ app.get('/api/driver/orders', async (req, res) => {
             start_time: '10:00',
             end_time: '18:00',
             total_amount: 32.00,
-            payment_method: 'wallet',
-            payment_status: 'paid',
+            payment_status: 'pending',
             delivery_zone: 'Jumeirah',
             customer_site_id: 'site_002',
             customer_id: 'cust_002',
+            customer_type: 'individual',
+            wallet_balance: 89.00,
             products: {
                 five_litre_bottles: 3,
                 three_hundred_ml_bottles: 10
@@ -428,14 +430,69 @@ app.get('/api/driver/orders', async (req, res) => {
             start_time: '08:00',
             end_time: '16:00',
             total_amount: 67.25,
-            payment_method: 'cash',
             payment_status: 'pending',
             delivery_zone: 'Business Bay',
             customer_site_id: 'site_003',
             customer_id: 'cust_003',
+            customer_type: 'individual',
+            wallet_balance: 0,
             products: {
                 ten_litre_bottles: 4,
                 water_dispenser: 1
+            },
+            created_at: new Date().toISOString(),
+            updated_at: new Date().toISOString()
+        },
+        {
+            id: '4',
+            order_number: 'ORD-004',
+            status: 'pending',
+            customer_name: 'South School',
+            customer_phone: '+971501111111',
+            customer_email: 'southschool@example.com',
+            customer_address: '123 Sheikh Zayed Road, Dubai',
+            latitude: 25.2048,
+            longitude: 55.2708,
+            delivery_instructions: 'Ring doorbell twice',
+            start_time: '09:00',
+            end_time: '17:00',
+            total_amount: 450.00,
+            payment_status: 'pending',
+            delivery_zone: 'Dubai Marina',
+            customer_site_id: 'site_001',
+            customer_id: 'cust_004',
+            customer_type: 'organization',
+            wallet_balance: 1250.00,
+            products: {
+                five_litre_bottles: 100,
+                ten_litre_bottles: 30
+            },
+            created_at: new Date().toISOString(),
+            updated_at: new Date().toISOString()
+        },
+        {
+            id: '5',
+            order_number: 'ORD-005',
+            status: 'pending',
+            customer_name: 'UAE University',
+            customer_phone: '+971509999999',
+            customer_email: 'procurement@uaeu.ac.ae',
+            customer_address: 'UAE University Campus, Al Ain',
+            latitude: 25.2048,
+            longitude: 55.2708,
+            delivery_instructions: 'Show your ID to the guards',
+            start_time: '09:00',
+            end_time: '17:00',
+            total_amount: 2850.00,
+            payment_status: 'pending',
+            delivery_zone: 'Al Ain',
+            customer_site_id: 'site_005',
+            customer_id: 'cust_005',
+            customer_type: 'organization',
+            wallet_balance: -500.00,
+            products: {
+                five_litre_bottles: 500,
+                ten_litre_bottles: 200
             },
             created_at: new Date().toISOString(),
             updated_at: new Date().toISOString()
@@ -551,7 +608,7 @@ app.get('/api/driver/history', async (req, res) => {
             payment_status: 'refunded',
             delivery_zone: 'Business Bay',
             customer_site_id: 'site_104',
-            customer_id: 'cust_001',
+            customer_id: 'cust_004',
             products: {
                 ten_litre_bottles: 3
             },
@@ -619,27 +676,55 @@ app.post('/api/failed-deliveries/submit', async (req, res) => {
 // Dummy customer wallet data (in production, fetch from database)
 // Each customer has their own wallet balance that they deposited
 const customerWallets = {
-    'cust_001': { balance: 500.00, currency: 'AED' },
-    'cust_002': { balance: 250.00, currency: 'AED' },
-    'cust_003': { balance: 100.00, currency: 'AED' },
+    'cust_001': { balance: 125.50, currency: 'AED', customer_type: 'individual' },
+    'cust_002': { balance: 89.00, currency: 'AED', customer_type: 'individual' },
+    'cust_003': { balance: 0.00, currency: 'AED', customer_type: 'individual' },
+    'cust_004': { balance: 1250.00, currency: 'AED', customer_type: 'organization', organization_name: 'South School' },
+    'cust_005': { balance: -500.00, currency: 'AED', customer_type: 'organization', organization_name: 'UAE University' },
     // Default wallet for unknown customers
-    'default': { balance: 0.00, currency: 'AED' }
+    'default': { balance: 0.00, currency: 'AED', customer_type: 'individual' }
 };
+
+// Organization credit records (tracks signed credit deliveries)
+const organizationCredits = [];
 
 // Helper function to get customer wallet balance
 function getCustomerWallet(customerId) {
     return customerWallets[customerId] || customerWallets['default'];
 }
 
+// Helper function to check if customer is an organization
+function isOrganizationCustomer(customerId) {
+    const wallet = getCustomerWallet(customerId);
+    return wallet.customer_type === 'organization';
+}
+
+// Helper function to update wallet balance (deduct or add credit)
+function updateWalletBalance(customerId, amount, isCredit = false) {
+    if (customerWallets[customerId]) {
+        if (isCredit) {
+            // For credit, we subtract from balance (making it more negative)
+            customerWallets[customerId].balance -= amount;
+        } else {
+            // For regular payment, we also subtract
+            customerWallets[customerId].balance -= amount;
+        }
+        return customerWallets[customerId].balance;
+    }
+    return null;
+}
+
 // POST /api/driver/orders/validate-payment
 app.post('/api/driver/orders/validate-payment', async (req, res) => {
-    const { payment_method, amount, order_id, customer_id } = req.body;
+    const { payment_method, amount, order_id, customer_id, customer_type, wallet_balance } = req.body;
 
     console.log('\n📋 Payment Validation Request');
     console.log('Payment Method:', payment_method);
     console.log('Amount:', amount);
     console.log('Order ID:', order_id);
     console.log('Customer ID:', customer_id);
+    console.log('Customer Type (from order):', customer_type);
+    console.log('Wallet Balance (from order):', wallet_balance);
 
     // Validate required fields
     if (!payment_method) {
@@ -656,8 +741,8 @@ app.post('/api/driver/orders/validate-payment', async (req, res) => {
         });
     }
 
-    // Validate payment method (must be 'cash' or 'wallet' ONLY)
-    const validMethods = ['cash', 'wallet'];
+    // Validate payment method
+    const validMethods = ['cash', 'wallet', 'credit_card'];
     const normalizedMethod = payment_method.toLowerCase();
     console.log(`🔍 Validating payment method: "${normalizedMethod}" against valid methods: [${validMethods.join(', ')}]`);
     
@@ -665,7 +750,7 @@ app.post('/api/driver/orders/validate-payment', async (req, res) => {
         console.log(`❌ Invalid payment method: "${normalizedMethod}"`);
         return res.status(400).json({
             success: false,
-            message: 'Invalid payment method. Must be "cash" or "wallet"'
+            message: 'Invalid payment method. Must be "cash", "wallet", or "credit_card"'
         });
     }
     
@@ -681,30 +766,41 @@ app.post('/api/driver/orders/validate-payment', async (req, res) => {
 
     // If wallet payment method, validate wallet balance
     if (normalizedMethod === 'wallet') {
-        if (!customer_id) {
-            return res.status(400).json({
-                success: false,
-                message: 'Customer ID is required for wallet payment'
+        
+        // Check if organization - prefer order data, fallback to wallet lookup
+        const isOrg = customer_type === 'organization' || (wallet && wallet.customer_type === 'organization');
+    
+
+        console.log(`💰 Wallet Check - Customer: ${customer_id}, Balance: ${wallet_balance}, Required: ${amount}, Organization: ${isOrg}`);
+
+        // For organizations, ALWAYS allow wallet payment (even with negative balance) - requires signature
+        if (isOrg) {
+            console.log(`🏢 Organization customer - wallet payment allowed, signature required`);
+            return res.status(200).json({
+                success: true,
+                message: 'Organization wallet payment - signature required',
+                validated: true,
+                payment_method: normalizedMethod,
+                amount: amount,
+                wallet_balance: wallet_balance,
+                requires_signature: true,
+                is_organization: true,
             });
         }
-
-        // Get customer wallet balance (in production, fetch from database)
-        const wallet = getCustomerWallet(customer_id);
-        const walletBalance = wallet.balance;
-
-        console.log(`💰 Wallet Check - Customer: ${customer_id}, Balance: ${walletBalance}, Required: ${amount}`);
-
-        if (walletBalance < amount) {
+        
+        // For individuals, check if balance is sufficient
+        if (wallet_balance < amount) {
+            console.log(`❌ Individual customer - insufficient wallet balance`);
             return res.status(400).json({
                 success: false,
-                message: `Insufficient wallet balance. Available: ${wallet.currency} ${walletBalance.toFixed(2)}, Required: ${wallet.currency} ${amount.toFixed(2)}`,
+                message: `Insufficient wallet balance. Available: AED ${walletBalance.toFixed(2)}, Required: AED ${amount.toFixed(2)}`,
                 wallet_balance: walletBalance,
                 required_amount: amount,
                 insufficient: true
             });
         }
 
-        console.log(`✅ Wallet balance sufficient: ${walletBalance} >= ${amount}`);
+        console.log(`✅ Individual wallet balance sufficient: ${walletBalance} >= ${amount}`);
     }
 
     console.log('✅ Payment validation successful');
@@ -714,9 +810,8 @@ app.post('/api/driver/orders/validate-payment', async (req, res) => {
         validated: true,
         payment_method: normalizedMethod,
         amount: amount,
-        ...(normalizedMethod === 'wallet' && {
-            wallet_balance: getCustomerWallet(customer_id).balance
-        })
+        requires_signature: false,
+        is_organization: false
     });
 });
 
@@ -738,6 +833,148 @@ app.post('/api/driver/orders/confirm-payment', async (req, res) => {
         success: true,
         message: `Order ${order.order_number} has been created successfully.`,
         order: order
+    });
+});
+
+// POST /api/driver/orders/organization-credit-delivery
+// Handles credit delivery for organizations - requires signature
+app.post('/api/driver/orders/organization-credit-delivery', async (req, res) => {
+    const { driver_id } = req.query;
+    const { 
+        order_id,
+        order_number,
+        customer_id,
+        customer_name,
+        customer_type,
+        organization_name,
+        wallet_balance: order_wallet_balance,
+        amount,
+        items,
+        signature_data, // Base64 encoded signature image
+        receiver_name,
+        receiver_position,
+        notes
+    } = req.body;
+
+    console.log('\n🏢 Organization Credit Delivery Request');
+    console.log('Driver ID:', driver_id);
+    console.log('Order ID:', order_id);
+    console.log('Customer ID:', customer_id);
+    console.log('Customer Type:', customer_type);
+    console.log('Organization:', organization_name || customer_name);
+    console.log('Amount:', amount);
+    console.log('Receiver:', receiver_name);
+    console.log('Signature provided:', !!signature_data);
+
+    // Validate required fields
+    if (!signature_data) {
+        return res.status(400).json({
+            success: false,
+            message: 'Signature is required for credit delivery'
+        });
+    }
+
+    if (!receiver_name || !receiver_name.trim()) {
+        return res.status(400).json({
+            success: false,
+            message: 'Receiver name is required'
+        });
+    }
+
+    if (!amount || amount <= 0) {
+        return res.status(400).json({
+            success: false,
+            message: 'Valid amount is required'
+        });
+    }
+
+    // Verify this is an organization customer - check both order data and wallet
+    const isOrg = customer_type === 'organization' || isOrganizationCustomer(customer_id);
+    if (!isOrg) {
+        return res.status(400).json({
+            success: false,
+            message: 'Credit delivery is only available for organization customers'
+        });
+    }
+
+    // Get current wallet info - use order data if available
+    const wallet = customer_id ? getCustomerWallet(customer_id) : null;
+    const previousBalance = (typeof order_wallet_balance === 'number') ? order_wallet_balance : (wallet?.balance ?? 0);
+
+    // Update wallet balance (subtract the amount, making it more negative if needed)
+    let newBalance = updateWalletBalance(customer_id, amount, true);
+    
+    // If wallet update failed (customer not in database), calculate new balance from order data
+    if (newBalance === null) {
+        newBalance = previousBalance - amount;
+        console.log(`📝 Customer ${customer_id} not in wallet DB, calculated new balance: ${newBalance}`);
+    }
+
+    // Create credit record
+    const creditRecord = {
+        id: `credit_${Date.now()}`,
+        credit_number: `CR-${Date.now()}`,
+        order_id: order_id,
+        order_number: order_number,
+        driver_id: driver_id,
+        customer_id: customer_id,
+        customer_name: customer_name,
+        organization_name: organization_name || customer_name,
+        amount: amount,
+        items: items,
+        receiver_name: receiver_name.trim(),
+        receiver_position: receiver_position?.trim() || '',
+        notes: notes?.trim() || '',
+        signature_data: signature_data, // In production, save to file storage
+        previous_balance: previousBalance,
+        new_balance: newBalance,
+        status: 'pending_payment',
+        delivery_date: new Date().toISOString(),
+        created_at: new Date().toISOString()
+    };
+
+    // Store credit record
+    organizationCredits.push(creditRecord);
+
+    console.log('✅ Organization credit delivery recorded');
+    console.log('Previous Balance:', previousBalance);
+    console.log('New Balance:', newBalance);
+    console.log('Credit Number:', creditRecord.credit_number);
+
+    res.status(201).json({
+        success: true,
+        message: `Credit delivery confirmed for ${organization_name || customer_name}. Payment will be collected later.`,
+        credit_record: {
+            id: creditRecord.id,
+            credit_number: creditRecord.credit_number,
+            organization_name: creditRecord.organization_name,
+            amount: creditRecord.amount,
+            receiver_name: creditRecord.receiver_name,
+            previous_balance: previousBalance,
+            new_balance: newBalance,
+            delivery_date: creditRecord.delivery_date
+        }
+    });
+});
+
+// GET /api/driver/organization-credits - Get all organization credit records
+app.get('/api/driver/organization-credits', async (req, res) => {
+    const { driver_id, customer_id } = req.query;
+
+    let credits = [...organizationCredits];
+
+    if (driver_id) {
+        credits = credits.filter(c => c.driver_id === driver_id);
+    }
+
+    if (customer_id) {
+        credits = credits.filter(c => c.customer_id === customer_id);
+    }
+
+    res.status(200).json({
+        success: true,
+        data: credits,
+        count: credits.length
     });
 });
 

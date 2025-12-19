@@ -19,7 +19,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 const { width } = Dimensions.get('window');
 const IP_ADDRESS = process.env.EXPO_PUBLIC_IP_ADDRESS || 'http://localhost:3000/api';
 
-type PaymentMethod = 'cash' | 'wallet';
+type PaymentMethod = 'cash' | 'wallet' | 'credit_card';
 
 interface PaymentOption {
   id: PaymentMethod;
@@ -29,8 +29,9 @@ interface PaymentOption {
 }
 
 const paymentOptions: PaymentOption[] = [
-  { id: 'cash', label: 'Cash', icon: 'cash', description: 'Pay with cash on delivery' },
-  { id: 'wallet', label: 'Wallet', icon: 'wallet', description: 'Use customer wallet balance' },
+  { id: 'cash', label: 'Cash', icon: 'cash-outline', description: 'Pay with cash on delivery' },
+  { id: 'wallet', label: 'Wallet', icon: 'wallet-outline', description: 'Use customer wallet balance' },
+  { id: 'credit_card', label: 'Card', icon: 'card-outline', description: 'Pay with credit/debit card' },
 ];
 
 const Checkout: React.FC = () => {
@@ -84,8 +85,18 @@ const Checkout: React.FC = () => {
         payment_method: selectedPaymentMethod.toLowerCase(),
         amount: parseFloat(totalWithVat),
         order_id: orderDetail?.id || orderDetail?.order_number || null,
-        customer_id: orderDetail?.customer_id || orderDetail?.customer?.id || null
+        customer_id: orderDetail?.customer_id || orderDetail?.customer?.id || null,
+        customer_type: orderDetail?.customer_type || 'individual',
+        wallet_balance: orderDetail?.wallet_balance ?? 0
       };
+
+      console.log('📤 Sending payment validation:', {
+        payment_method: validationData.payment_method,
+        amount: validationData.amount,
+        customer_id: validationData.customer_id,
+        customer_type: validationData.customer_type,
+        wallet_balance: validationData.wallet_balance
+      });
 
       const response = await fetch(`${IP_ADDRESS}/driver/orders/validate-payment`, {
         method: 'POST',
@@ -95,12 +106,29 @@ const Checkout: React.FC = () => {
 
       const result = await response.json();
 
+      console.log('📥 Payment validation response:', {
+        ok: response.ok,
+        status: response.status,
+        success: result.success,
+        requires_signature: result.requires_signature,
+        is_organization: result.is_organization,
+        message: result.message
+      });
+
       if (!response.ok || !result.success) {
         Alert.alert(
           'Validation Failed',
           result.message || 'Payment validation failed.',
-          [{ text: 'OK', onPress: () => router.back() }]
+          [{ text: 'OK' }]
         );
+        return;
+      }
+
+      // Check if this is an organization credit delivery requiring signature
+      if (result.requires_signature && result.is_organization) {
+        console.log('🏢 Redirecting to organization signature screen');
+        // Redirect to signature screen for organization credit delivery
+        router.push('/(root)/(tabs)/organization-signature');
         return;
       }
 
@@ -119,6 +147,9 @@ const Checkout: React.FC = () => {
   const customerName = orderDetail?.customer?.name || orderDetail?.customer_name || 'Customer';
   const customerAddress = orderDetail?.customer?.address || orderDetail?.customer_address || '—';
   const customerPhone = orderDetail?.customer?.phone || orderDetail?.customer_phone || '—';
+  const customerType = orderDetail?.customer_type || 'individual';
+  const walletBalance = orderDetail?.wallet_balance ?? 0;
+  const isOrganization = customerType === 'organization';
 
   return (
     <View style={[styles.container, { paddingTop: insets.top }]}>
@@ -210,36 +241,64 @@ const Checkout: React.FC = () => {
 
         {/* Payment Method */}
         <View style={styles.card}>
-          <Text style={styles.cardTitle}>Payment Method</Text>
+          <View style={styles.cardHeader}>
+            <Text style={styles.cardTitle}>Payment Method</Text>
+            {isOrganization && (
+              <View style={styles.orgBadge}>
+                <Text style={styles.orgBadgeText}>Organization</Text>
+              </View>
+            )}
+          </View>
           <View style={styles.paymentGrid}>
             {paymentOptions.map((option) => {
               const isSelected = selectedPaymentMethod === option.id;
+              const isWallet = option.id === 'wallet';
+              const canUseWallet = isWallet && (walletBalance > 0 || isOrganization);
+              const insufficientBalance = isWallet && !isOrganization && walletBalance < parseFloat(totalWithVat);
+              
               return (
                 <TouchableOpacity
                   key={option.id}
                   style={[
                     styles.paymentOption,
-                    isSelected && styles.paymentOptionSelected
+                    isSelected && styles.paymentOptionSelected,
+                    isWallet && !canUseWallet && !isOrganization && styles.paymentOptionDisabled
                   ]}
-                  onPress={() => setPaymentMethod(option.id)}
+                  onPress={() => {
+                    if (isWallet && !canUseWallet && !isOrganization) return;
+                    setPaymentMethod(option.id);
+                  }}
                   activeOpacity={0.7}
+                  disabled={isWallet && !canUseWallet && !isOrganization}
                 >
                   <View style={[
                     styles.paymentIconBox,
-                    isSelected && styles.paymentIconBoxSelected
+                    isSelected && styles.paymentIconBoxSelected,
+                    isWallet && walletBalance < 0 && styles.paymentIconBoxNegative
                   ]}>
                     <Ionicons 
                       name={option.icon} 
                       size={20} 
-                      color={isSelected ? '#FFFFFF' : '#6B7280'} 
+                      color={isSelected ? '#FFFFFF' : (isWallet && walletBalance < 0 ? '#F97316' : '#6B7280')} 
                     />
                   </View>
-                  <Text style={[
-                    styles.paymentLabel,
-                    isSelected && styles.paymentLabelSelected
-                  ]}>
-                    {option.label}
-                  </Text>
+                  <View style={styles.paymentLabelContainer}>
+                    <Text style={[
+                      styles.paymentLabel,
+                      isSelected && styles.paymentLabelSelected
+                    ]}>
+                      {option.label}
+                    </Text>
+                    {isWallet && (
+                      <Text style={[
+                        styles.walletBalance,
+                        walletBalance >= 0 ? styles.walletBalancePositive : styles.walletBalanceNegative,
+                        insufficientBalance && !isOrganization && styles.walletBalanceInsufficient
+                      ]}>
+                        AED {walletBalance.toFixed(2)}
+                      </Text>
+                    )}
+                  </View>
                   {isSelected && (
                     <View style={styles.paymentCheck}>
                       <Ionicons name="checkmark" size={10} color="#059669" />
@@ -249,6 +308,12 @@ const Checkout: React.FC = () => {
               );
             })}
           </View>
+          {isOrganization && walletBalance < 0 && (
+            <View style={styles.creditNote}>
+              <Ionicons name="information-circle" size={14} color="#F97316" />
+              <Text style={styles.creditNoteText}>Organization account - credit payment allowed</Text>
+            </View>
+          )}
         </View>
 
         {/* Summary */}
@@ -532,7 +597,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     backgroundColor: '#F9FAFB',
     borderRadius: 14,
-    padding: 16,
+    padding: 14,
     borderWidth: 2,
     borderColor: 'transparent',
   },
@@ -540,36 +605,84 @@ const styles = StyleSheet.create({
     backgroundColor: '#FFFFFF',
     borderColor: '#111827',
   },
+  paymentOptionDisabled: {
+    opacity: 0.5,
+  },
   paymentIconBox: {
-    width: 44,
-    height: 44,
-    borderRadius: 12,
+    width: 40,
+    height: 40,
+    borderRadius: 10,
     backgroundColor: '#FFFFFF',
     justifyContent: 'center',
     alignItems: 'center',
-    marginBottom: 10,
+    marginBottom: 8,
   },
   paymentIconBoxSelected: {
     backgroundColor: '#111827',
   },
+  paymentIconBoxNegative: {
+    backgroundColor: '#FFF7ED',
+  },
+  paymentLabelContainer: {
+    alignItems: 'center',
+  },
   paymentLabel: {
-    fontSize: 14,
+    fontSize: 13,
     fontWeight: '600',
     color: '#6B7280',
   },
   paymentLabelSelected: {
     color: '#111827',
   },
+  walletBalance: {
+    fontSize: 10,
+    fontWeight: '600',
+    marginTop: 3,
+  },
+  walletBalancePositive: {
+    color: '#059669',
+  },
+  walletBalanceNegative: {
+    color: '#F97316',
+  },
+  walletBalanceInsufficient: {
+    color: '#DC2626',
+  },
   paymentCheck: {
     position: 'absolute',
-    top: 10,
-    right: 10,
-    width: 18,
-    height: 18,
-    borderRadius: 9,
+    top: 8,
+    right: 8,
+    width: 16,
+    height: 16,
+    borderRadius: 8,
     backgroundColor: '#ECFDF5',
     justifyContent: 'center',
     alignItems: 'center',
+  },
+  orgBadge: {
+    backgroundColor: '#F3E8FF',
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+    borderRadius: 6,
+  },
+  orgBadgeText: {
+    fontSize: 10,
+    fontWeight: '600',
+    color: '#7C3AED',
+  },
+  creditNote: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#FFFBEB',
+    borderRadius: 8,
+    padding: 10,
+    marginTop: 12,
+    gap: 8,
+  },
+  creditNoteText: {
+    fontSize: 11,
+    color: '#92400E',
+    flex: 1,
   },
   summaryRow: {
     flexDirection: 'row',

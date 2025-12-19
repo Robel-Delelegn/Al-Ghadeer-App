@@ -201,7 +201,7 @@ const DirectSales: React.FC = () => {
       <View style={styles.header}>
         <TouchableOpacity style={styles.backButton} onPress={() => router.back()}>
           <Ionicons name="arrow-back" size={22} color="#0F172A" />
-        </TouchableOpacity>
+          </TouchableOpacity>
         <View style={styles.headerCenter}>
           <Text style={styles.headerTitle}>New Sale</Text>
           {location && (
@@ -221,46 +221,46 @@ const DirectSales: React.FC = () => {
       </View>
 
       <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
-        <ScrollView 
+      <ScrollView 
           style={styles.content}
           contentContainerStyle={styles.contentContainer}
-          showsVerticalScrollIndicator={false}
+        showsVerticalScrollIndicator={false}
           keyboardShouldPersistTaps="handled"
-        >
+      >
           {/* Customer Section */}
           <View style={styles.section}>
             <Text style={styles.sectionTitle}>Customer</Text>
             <View style={styles.inputRow}>
               <View style={styles.inputWrapper}>
                 <Ionicons name="person-outline" size={18} color="#94A3B8" style={styles.inputIcon} />
-                <TextInput
+              <TextInput
                   style={styles.input}
                   placeholder="Name"
                   placeholderTextColor="#CBD5E1"
-                  value={customerName}
-                  onChangeText={setCustomerName}
-                />
-              </View>
+                value={customerName}
+                onChangeText={setCustomerName}
+              />
+            </View>
               <View style={styles.inputWrapper}>
                 <Ionicons name="call-outline" size={18} color="#94A3B8" style={styles.inputIcon} />
-                <TextInput
+              <TextInput
                   style={styles.input}
                   placeholder="Phone"
                   placeholderTextColor="#CBD5E1"
-                  value={customerPhone}
-                  onChangeText={setCustomerPhone}
-                  keyboardType="phone-pad"
-                />
-              </View>
+                value={customerPhone}
+                onChangeText={setCustomerPhone}
+                keyboardType="phone-pad"
+              />
             </View>
-          </View>
+                  </View>
+                  </View>
 
           {/* Payment Method */}
           <View style={styles.section}>
             <Text style={styles.sectionTitle}>Payment</Text>
             <View style={styles.paymentRow}>
               {PAYMENT_METHODS.map((method) => (
-                <TouchableOpacity
+                <TouchableOpacity 
                   key={method.id}
                   style={[
                     styles.paymentOption,
@@ -282,34 +282,34 @@ const DirectSales: React.FC = () => {
                   </Text>
                 </TouchableOpacity>
               ))}
-            </View>
           </View>
+        </View>
 
           {/* Products */}
           <View style={styles.section}>
             <Text style={styles.sectionTitle}>Products</Text>
-            {loading ? (
+          {loading ? (
               <View style={styles.loadingContainer}>
                 <ActivityIndicator size="large" color="#0F172A" />
-              </View>
-            ) : products.length === 0 ? (
+            </View>
+          ) : products.length === 0 ? (
               <View style={styles.emptyContainer}>
                 <Ionicons name="cube-outline" size={48} color="#E2E8F0" />
                 <Text style={styles.emptyText}>No products available</Text>
-              </View>
-            ) : (
+            </View>
+          ) : (
               <View style={styles.productGrid}>
-                {products.map((product) => {
-                  const quantity = quantities[product.id] || 0;
+              {products.map((product) => {
+                const quantity = quantities[product.id] || 0;
                   const isSelected = quantity > 0;
-                  
-                  return (
+
+                return (
                     <View key={product.id} style={[styles.productCard, isSelected && styles.productCardSelected]}>
                       <View style={styles.productInfo}>
                         <Text style={styles.productName} numberOfLines={1}>{product.name}</Text>
                         <Text style={styles.productPrice}>AED {product.price}</Text>
                       </View>
-                      
+
                       <View style={styles.quantityControl}>
                         <TouchableOpacity
                           style={[styles.quantityButton, quantity === 0 && styles.quantityButtonDisabled]}
@@ -318,22 +318,22 @@ const DirectSales: React.FC = () => {
                         >
                           <Ionicons name="remove" size={18} color={quantity === 0 ? '#CBD5E1' : '#0F172A'} />
                         </TouchableOpacity>
-                        
+
                         <Text style={styles.quantityText}>{quantity}</Text>
-                        
+
                         <TouchableOpacity
                           style={styles.quantityButton}
                           onPress={() => handleChangeQuantity(product.id, 1)}
                         >
                           <Ionicons name="add" size={18} color="#0F172A" />
                         </TouchableOpacity>
-                      </View>
                     </View>
-                  );
-                })}
-              </View>
-            )}
-          </View>
+                  </View>
+                );
+              })}
+            </View>
+          )}
+        </View>
 
           {/* Action Section */}
           <View style={styles.actionSection}>
@@ -346,35 +346,35 @@ const DirectSales: React.FC = () => {
               <View style={styles.summaryRow}>
                 <Text style={styles.summaryLabel}>VAT (5%)</Text>
                 <Text style={styles.summaryValue}>AED {vat.toFixed(2)}</Text>
-              </View>
+            </View>
               <View style={styles.totalRow}>
                 <Text style={styles.totalLabel}>Total</Text>
                 <Text style={styles.totalValue}>AED {totalAmount.toFixed(2)}</Text>
-              </View>
             </View>
+          </View>
 
-            {/* Confirm Button */}
-            <TouchableOpacity
+        {/* Confirm Button */}
+        <TouchableOpacity
               style={[styles.confirmButton, !isFormValid && styles.confirmButtonDisabled]}
-              onPress={handleConfirmSale}
+          onPress={handleConfirmSale}
               disabled={!isFormValid || isSubmitting}
               activeOpacity={0.8}
-            >
-              {isSubmitting ? (
+        >
+          {isSubmitting ? (
                 <ActivityIndicator size="small" color="#FFFFFF" />
-              ) : (
-                <>
+          ) : (
+            <>
                   <Text style={styles.confirmText}>Confirm Sale</Text>
                   <View style={styles.confirmArrow}>
                     <Ionicons name="arrow-forward" size={18} color="#0F172A" />
                   </View>
-                </>
-              )}
-            </TouchableOpacity>
+            </>
+          )}
+        </TouchableOpacity>
           </View>
 
           <View style={{ height: Math.max(insets.bottom, 20) + 80 }} />
-        </ScrollView>
+      </ScrollView>
       </KeyboardAvoidingView>
     </View>
   );

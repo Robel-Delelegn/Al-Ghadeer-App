@@ -55,7 +55,7 @@ const ProductItem: React.FC<{
         <View style={[styles.productIconBox, isSelected && styles.productIconBoxSelected]}>
           <Ionicons name="water" size={18} color={isSelected ? "#FFFFFF" : "#0EA5E9"} />
         </View>
-        
+
         <View style={styles.productInfo}>
           <Text style={styles.productName}>{product.name}</Text>
           <View style={styles.productMeta}>
@@ -298,13 +298,13 @@ const ProductList: React.FC = () => {
           <Ionicons name="alert-circle" size={36} color="#DC2626" />
         </View>
         <Text style={styles.errorTitle}>{error}</Text>
-        <TouchableOpacity 
+          <TouchableOpacity 
           style={styles.retryButton}
           onPress={() => setLoading(true)}
           activeOpacity={0.7}
-        >
+          >
           <Text style={styles.retryButtonText}>Retry</Text>
-        </TouchableOpacity>
+          </TouchableOpacity>
       </View>
     );
   }
@@ -319,16 +319,16 @@ const ProductList: React.FC = () => {
           activeOpacity={0.7}
         >
           <Ionicons name="chevron-back" size={20} color="#0F172A" />
-        </TouchableOpacity>
+          </TouchableOpacity>
         <View style={styles.headerCenter}>
           <Text style={styles.headerTitle}>Add Products</Text>
-          {currentOrder && (
+        {currentOrder && (
             <Text style={styles.headerSubtitle}>{currentOrder.order_number}</Text>
           )}
-        </View>
+            </View>
         <View style={styles.cartIndicator}>
           <Text style={styles.cartIndicatorText}>{totalSelectedItems}</Text>
-        </View>
+            </View>
       </View>
 
       {/* Summary Bar */}
@@ -336,30 +336,30 @@ const ProductList: React.FC = () => {
         <View style={styles.summaryItem}>
           <Text style={styles.summaryLabel}>Selected</Text>
           <Text style={styles.summaryValue}>{totalSelectedItems} items</Text>
-        </View>
+            </View>
         <View style={styles.summaryDivider} />
         <View style={styles.summaryItem}>
           <Text style={styles.summaryLabel}>Subtotal</Text>
           <Text style={styles.summaryValueHighlight}>AED {totalAmount.toFixed(2)}</Text>
-        </View>
-      </View>
-
+            </View>
+          </View>
+          
       <ScrollView 
         style={styles.content}
         contentContainerStyle={styles.contentContainer}
         showsVerticalScrollIndicator={false}
       >
         {/* Order Context */}
-        {currentOrder?.products && Object.keys(currentOrder.products).length > 0 && (
+          {currentOrder?.products && Object.keys(currentOrder.products).length > 0 && (
           <View style={styles.contextCard}>
             <View style={styles.contextIcon}>
               <Ionicons name="information-circle" size={16} color="#2563EB" />
-            </View>
+              </View>
             <Text style={styles.contextText}>
               Quantities pre-filled from order. Adjust as needed.
-            </Text>
-          </View>
-        )}
+              </Text>
+            </View>
+          )}
 
         {/* Categories */}
         {categories.map((category) => {
@@ -370,20 +370,20 @@ const ProductList: React.FC = () => {
               <View style={styles.categoryHeader}>
                 <Text style={styles.categoryTitle}>{category}</Text>
                 <Text style={styles.categoryCount}>{productsInCategory.length}</Text>
-              </View>
-              
-              {productsInCategory.map((product) => {
-                const initialQty = currentOrder?.products?.[product.name] || 0;
-                return (
-                  <ProductItem
-                    key={product.id}
-                    product={product}
-                    quantity={quantities[product.id] || 0}
-                    onChangeQuantity={(q) => handleChangeQuantity(product.id, q)}
-                    initialQuantity={initialQty}
-                  />
-                );
-              })}
+                </View>
+                
+                {productsInCategory.map((product) => {
+                  const initialQty = currentOrder?.products?.[product.name] || 0;
+                  return (
+                    <ProductItem
+                      key={product.id}
+                      product={product}
+                      quantity={quantities[product.id] || 0}
+                      onChangeQuantity={(q) => handleChangeQuantity(product.id, q)}
+                      initialQuantity={initialQty}
+                    />
+                  );
+                })}
             </View>
           );
         })}
@@ -395,13 +395,13 @@ const ProductList: React.FC = () => {
             <Text style={styles.actionTotal}>AED {totalAmount.toFixed(2)}</Text>
           </View>
           
-          <TouchableOpacity
+        <TouchableOpacity
             style={[
               styles.checkoutButton,
               totalSelectedItems === 0 && styles.checkoutButtonDisabled
             ]}
-            onPress={handleCheckout}
-            disabled={totalSelectedItems === 0}
+          onPress={handleCheckout}
+          disabled={totalSelectedItems === 0}
             activeOpacity={0.8}
           >
             <Text style={styles.checkoutButtonText}>Checkout</Text>
@@ -411,7 +411,7 @@ const ProductList: React.FC = () => {
             ]}>
               <Ionicons name="arrow-forward" size={16} color={totalSelectedItems === 0 ? '#9CA3AF' : '#111827'} />
             </View>
-          </TouchableOpacity>
+        </TouchableOpacity>
         </View>
 
         <View style={{ height: Math.max(insets.bottom, 20) + 80 }} />

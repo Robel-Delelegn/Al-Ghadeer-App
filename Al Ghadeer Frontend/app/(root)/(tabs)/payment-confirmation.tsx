@@ -154,6 +154,9 @@ const PaymentConfirmation: React.FC = () => {
   const customerName = orderDetail?.customer?.name || orderDetail?.customer_name || 'Customer';
   const customerAddress = orderDetail?.customer?.address || orderDetail?.customer_address || '—';
   const customerPhone = orderDetail?.customer?.phone || orderDetail?.customer_phone || '—';
+  const customerType = orderDetail?.customer_type || 'individual';
+  const walletBalance = orderDetail?.wallet_balance ?? 0;
+  const isOrganization = customerType === 'organization';
 
   return (
     <View style={[styles.container, { paddingTop: insets.top }]}>
@@ -243,19 +246,48 @@ const PaymentConfirmation: React.FC = () => {
 
         {/* Payment Method */}
         <View style={styles.card}>
-          <Text style={styles.cardTitle}>Payment Method</Text>
+          <View style={styles.cardHeader}>
+            <Text style={styles.cardTitle}>Payment Method</Text>
+            {isOrganization && (
+              <View style={styles.orgBadge}>
+                <Text style={styles.orgBadgeText}>Organization</Text>
+              </View>
+            )}
+          </View>
           <View style={styles.paymentRow}>
-            <View style={styles.paymentIconBox}>
-              <Ionicons name={paymentIcon} size={20} color="#111827" />
+            <View style={[
+              styles.paymentIconBox,
+              selectedPaymentMethod === 'wallet' && walletBalance < 0 && styles.paymentIconBoxNegative
+            ]}>
+              <Ionicons 
+                name={paymentIcon} 
+                size={20} 
+                color={selectedPaymentMethod === 'wallet' && walletBalance < 0 ? '#F97316' : '#111827'} 
+              />
             </View>
             <View style={styles.paymentInfo}>
               <Text style={styles.paymentLabel}>{paymentLabel}</Text>
-              <Text style={styles.paymentSublabel}>Selected method</Text>
+              {selectedPaymentMethod === 'wallet' ? (
+                <Text style={[
+                  styles.paymentSublabel,
+                  walletBalance >= 0 ? styles.walletPositive : styles.walletNegative
+                ]}>
+                  Balance: AED {walletBalance.toFixed(2)}
+                </Text>
+              ) : (
+                <Text style={styles.paymentSublabel}>Selected method</Text>
+              )}
             </View>
             <View style={styles.paymentCheck}>
               <Ionicons name="checkmark" size={14} color="#059669" />
             </View>
           </View>
+          {selectedPaymentMethod === 'wallet' && isOrganization && walletBalance < 0 && (
+            <View style={styles.creditNote}>
+              <Ionicons name="information-circle" size={14} color="#F97316" />
+              <Text style={styles.creditNoteText}>Credit balance will be added to account</Text>
+            </View>
+          )}
         </View>
 
         {/* Totals */}
@@ -527,6 +559,9 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     marginRight: 12,
   },
+  paymentIconBoxNegative: {
+    backgroundColor: '#FFF7ED',
+  },
   paymentInfo: {
     flex: 1,
   },
@@ -540,6 +575,12 @@ const styles = StyleSheet.create({
     color: '#6B7280',
     marginTop: 2,
   },
+  walletPositive: {
+    color: '#059669',
+  },
+  walletNegative: {
+    color: '#F97316',
+  },
   paymentCheck: {
     width: 26,
     height: 26,
@@ -547,6 +588,31 @@ const styles = StyleSheet.create({
     backgroundColor: '#ECFDF5',
     justifyContent: 'center',
     alignItems: 'center',
+  },
+  orgBadge: {
+    backgroundColor: '#F3E8FF',
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+    borderRadius: 6,
+  },
+  orgBadgeText: {
+    fontSize: 10,
+    fontWeight: '600',
+    color: '#7C3AED',
+  },
+  creditNote: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#FFFBEB',
+    borderRadius: 8,
+    padding: 10,
+    marginTop: 12,
+    gap: 8,
+  },
+  creditNoteText: {
+    fontSize: 11,
+    color: '#92400E',
+    flex: 1,
   },
   totalRow: {
     flexDirection: 'row',
@@ -642,3 +708,10 @@ const styles = StyleSheet.create({
 });
 
 export default PaymentConfirmation;
+
+
+
+
+export default PaymentConfirmation;
+
+

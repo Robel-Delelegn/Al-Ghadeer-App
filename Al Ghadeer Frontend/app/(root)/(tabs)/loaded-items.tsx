@@ -107,16 +107,16 @@ const LoadedItems = () => {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          driver_id: currentDriver.id,
-          items: items.map(item => ({
-            id: item.id,
-            name: item.name,
-            quantity: item.quantity,
-            unit: item.unit,
-            category: item.category,
-          })),
-          is_correct: isCorrect,
-          confirmed_at: new Date().toISOString()
+        driver_id: currentDriver.id,
+        items: items.map(item => ({
+          id: item.id,
+          name: item.name,
+          quantity: item.quantity,
+          unit: item.unit,
+          category: item.category,
+        })),
+        is_correct: isCorrect,
+        confirmed_at: new Date().toISOString()
         })
       });
 
@@ -132,7 +132,7 @@ const LoadedItems = () => {
           ? 'Items have been confirmed and loaded successfully.'
           : 'Your report has been submitted. Management will review.',
         [{ text: 'Done', onPress: () => resetProcess() }]
-      );
+        );
     } catch (error) {
       Alert.alert('Error', error instanceof Error ? error.message : 'Failed to confirm.');
     } finally {
@@ -152,12 +152,12 @@ const LoadedItems = () => {
       <View style={styles.header}>
         <TouchableOpacity style={styles.backButton} onPress={() => router.back()}>
           <Ionicons name="arrow-back" size={22} color="#0F172A" />
-        </TouchableOpacity>
+          </TouchableOpacity>
         <Text style={styles.headerTitle}>Load Items</Text>
         <View style={styles.headerRight} />
       </View>
 
-      <ScrollView
+      <ScrollView 
         style={styles.content}
         contentContainerStyle={styles.contentContainer}
         showsVerticalScrollIndicator={false}
@@ -181,30 +181,30 @@ const LoadedItems = () => {
             {step === 'request' && "Today's Loading"}
             {step === 'review' && 'Review Items'}
             {step === 'done' && 'Loading Complete'}
-          </Text>
+            </Text>
           
           <Text style={styles.statusSubtitle}>
             {step === 'request' && 'Request items assigned for loading today'}
             {step === 'review' && 'Verify the items match your physical count'}
             {step === 'done' && 'Items have been confirmed and loaded'}
-          </Text>
+              </Text>
 
           {step === 'request' && (
-            <TouchableOpacity
+              <TouchableOpacity
               style={styles.requestButton}
-              onPress={fetchItems}
-              disabled={isLoading}
+                onPress={fetchItems}
+                disabled={isLoading}
               activeOpacity={0.8}
-            >
-              {isLoading ? (
+              >
+                {isLoading ? (
                 <ActivityIndicator size="small" color="#FFFFFF" />
-              ) : (
+                ) : (
                 <>
                   <Ionicons name="download-outline" size={20} color="#FFFFFF" />
                   <Text style={styles.requestButtonText}>Request Items</Text>
                 </>
               )}
-            </TouchableOpacity>
+              </TouchableOpacity>
           )}
         </View>
 
@@ -273,7 +273,7 @@ const LoadedItems = () => {
                     Yes, Correct
                   </Text>
                 </TouchableOpacity>
-
+                
                 <TouchableOpacity
                   style={[
                     styles.verifyButton,
@@ -348,8 +348,8 @@ const LoadedItems = () => {
                 </>
               )}
             </TouchableOpacity>
-          </View>
-        )}
+        </View>
+      )}
 
         <View style={{ height: Math.max(insets.bottom, 20) + 80 }} />
       </ScrollView>
