@@ -68,6 +68,39 @@ const Home = ({ navigation }: HomeProps) => {
   // Count currently available orders
   const availableOrdersCount = deliveries.filter(isOrderCurrentlyAvailable).length;
 
+  // Filter deliveries based on search query
+  const filteredDeliveries = React.useMemo(() => {
+    if (!searchQuery.trim()) {
+      return deliveries;
+    }
+
+    const query = searchQuery.toLowerCase().trim();
+    return deliveries.filter((order) => {
+      // Search in customer name
+      if (order.customer_name?.toLowerCase().includes(query)) return true;
+      
+      // Search in customer phone
+      if (order.customer_phone?.toLowerCase().includes(query)) return true;
+      
+      // Search in customer address
+      if (order.customer_address?.toLowerCase().includes(query)) return true;
+      
+      // Search in order number
+      if (order.order_number?.toLowerCase().includes(query)) return true;
+      
+      // Search in customer site ID
+      if (order.customer_site_id?.toLowerCase().includes(query)) return true;
+      
+      // Search in delivery zone
+      if (order.delivery_zone?.toLowerCase().includes(query)) return true;
+      
+      // Search in customer email
+      if (order.customer_email?.toLowerCase().includes(query)) return true;
+      
+      return false;
+    });
+  }, [deliveries, searchQuery]);
+
 
   useEffect(() => {
     const requestLocation = async () => {
@@ -195,7 +228,7 @@ const Home = ({ navigation }: HomeProps) => {
     <GestureHandlerRootView style={{ flex: 1 }}>
       <View className="flex-1 bg-white">
         {/* Map fills the whole screen */}
-      <MyMap orders={deliveries} />
+      <MyMap orders={filteredDeliveries} />
 
         {/* Transparent header overlay */}
         <View className="absolute top-0 left-0 right-0 px-6 pt-14 pb-2">
@@ -275,7 +308,7 @@ const Home = ({ navigation }: HomeProps) => {
           <View className="px-6 py-4 flex-row items-center justify-between">
             <Text className="text-xl font-JakartaSemiBold text-gray-900">Today's Deliveries</Text>
             <View className="flex-row items-center gap-2">
-              {availableOrdersCount > 0 && (
+              {!searchQuery && availableOrdersCount > 0 && (
                 <View className="flex-row items-center gap-1 bg-green-50 border border-green-200 rounded-full px-2 py-1">
                   <View className="w-2 h-2 bg-green-500 rounded-full" 
                         style={{ 
@@ -290,7 +323,9 @@ const Home = ({ navigation }: HomeProps) => {
                 </View>
               )}
               <View className="bg-[#0286FF] rounded-full px-3 py-1">
-                <Text className="text-sm text-white font-JakartaSemiBold">{deliveries.length} total</Text>
+                <Text className="text-sm text-white font-JakartaSemiBold">
+                  {searchQuery ? `${filteredDeliveries.length} found` : `${deliveries.length} total`}
+                </Text>
               </View>
             </View>
           </View>
@@ -302,7 +337,7 @@ const Home = ({ navigation }: HomeProps) => {
           )
           : (
           <FlatList
-            data={deliveries}
+            data={filteredDeliveries}
             keyExtractor={(item: Order) => item.id}
             renderItem={({ item }: { item: Order }) => (
               <DeliveryCard

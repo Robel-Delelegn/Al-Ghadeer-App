@@ -11,8 +11,8 @@ import {
   View, 
   ScrollView, 
   StyleSheet,
-  Alert,
 } from 'react-native';
+import { showWarningAlert } from '@/utils/alert';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 const Profile = () => {
@@ -22,7 +22,7 @@ const Profile = () => {
   const { assignedOrders, currentDriver, getDriverMetrics } = useOrderStore();
 
   const onLogOut = () => {
-    Alert.alert(
+    showWarningAlert(
       'Sign Out',
       'Are you sure you want to sign out?',
       [

@@ -5,7 +5,6 @@ import { useRouter } from 'expo-router';
 import React, { useCallback, useState, useMemo } from 'react';
 import { 
   ActivityIndicator, 
-  Alert, 
   ScrollView, 
   Text, 
   TouchableOpacity, 
@@ -14,6 +13,7 @@ import {
   Dimensions,
   Platform,
 } from 'react-native';
+import { showWarningAlert, showErrorAlert } from '@/utils/alert';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 const { width } = Dimensions.get('window');
@@ -69,12 +69,12 @@ const Checkout: React.FC = () => {
 
   const handleContinueToPayment = useCallback(async () => {
     if (cartItems.length === 0) {
-      Alert.alert('Empty Cart', 'Please add items to your cart.');
+      showWarningAlert('Empty Cart', 'Please add items to your cart.');
       return;
     }
     
     if (!selectedPaymentMethod) {
-      Alert.alert('Payment Required', 'Please select a payment method.');
+      showWarningAlert('Payment Required', 'Please select a payment method.');
       return;
     }
     
@@ -85,9 +85,9 @@ const Checkout: React.FC = () => {
         payment_method: selectedPaymentMethod.toLowerCase(),
         amount: parseFloat(totalWithVat),
         order_id: orderDetail?.id || orderDetail?.order_number || null,
-        customer_id: orderDetail?.customer_id || orderDetail?.customer?.id || null,
+        customer_id: orderDetail?.customer_id || null,
         customer_type: orderDetail?.customer_type || 'individual',
-        wallet_balance: orderDetail?.wallet_balance ?? 0
+        wallet_balance: orderDetail?.wallet_balance 
       };
 
       console.log('📤 Sending payment validation:', {
@@ -116,10 +116,9 @@ const Checkout: React.FC = () => {
       });
 
       if (!response.ok || !result.success) {
-        Alert.alert(
+        showErrorAlert(
           'Validation Failed',
-          result.message || 'Payment validation failed.',
-          [{ text: 'OK' }]
+          result.message || 'Payment validation failed.'
         );
         return;
       }
@@ -134,19 +133,18 @@ const Checkout: React.FC = () => {
 
       router.push('/(root)/(tabs)/payment-confirmation');
     } catch (error) {
-      Alert.alert(
+      showErrorAlert(
         'Error',
-        error instanceof Error ? error.message : 'Failed to validate payment.',
-        [{ text: 'OK', onPress: () => router.back() }]
+        error instanceof Error ? error.message : 'Failed to validate payment.'
       );
     } finally {
       setIsLoading(false);
     }
   }, [cartItems, router, selectedPaymentMethod, totalWithVat, orderDetail]);
 
-  const customerName = orderDetail?.customer?.name || orderDetail?.customer_name || 'Customer';
-  const customerAddress = orderDetail?.customer?.address || orderDetail?.customer_address || '—';
-  const customerPhone = orderDetail?.customer?.phone || orderDetail?.customer_phone || '—';
+  const customerName = orderDetail?.customer_name || 'Customer';
+  const customerAddress =  orderDetail?.customer_address || '—';
+  const customerPhone = orderDetail?.customer_phone || '—';
   const customerType = orderDetail?.customer_type || 'individual';
   const walletBalance = orderDetail?.wallet_balance ?? 0;
   const isOrganization = customerType === 'organization';

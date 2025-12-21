@@ -4,25 +4,8 @@ export interface Order {
   id: string;
   order_number: string;
   status: 'pending' | 'assigned' | 'in_progress' | 'delivered' | 'failed' | 'cancelled';
-  priority?: 'low' | 'normal' | 'high' | 'urgent';
   created_at: string;
   updated_at: string;
-  driver_id?: number;
-  
-  // Customer Information (Embedded - for backward compatibility)
-  customer?: {
-    id: string;
-    site_id?: string;
-    name: string;
-    phone: string;
-    email?: string;
-    address: string;
-    latitude: number;
-    longitude: number;
-    delivery_instructions?: string;
-    special_requirements?: string;
-    is_regular?: boolean;
-  };
   
   // Customer Information (Flat structure - new API format)
   customer_id?: string;
@@ -210,12 +193,12 @@ export interface Product {
   pricing: {
     cost_price: number;
     selling_price: number;
-    driver_commission: number;
-    profit_margin: number;
+    driver_commission?: number;
+    profit_margin?: number;
   };
   
   // Inventory
-  inventory: {
+  inventory?: {
     current_stock: number;
     reserved_stock: number;
     available_stock: number;
@@ -225,7 +208,7 @@ export interface Product {
   };
   
   // Product Details
-  details: {
+  details?: {
     weight: number;
     dimensions: {
       length: number;

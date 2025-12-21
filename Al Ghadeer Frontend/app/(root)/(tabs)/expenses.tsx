@@ -4,7 +4,6 @@ import * as ImagePicker from 'expo-image-picker';
 import * as FileSystem from 'expo-file-system';
 import React, { useMemo, useState, useEffect, useCallback } from 'react';
 import { 
-  Alert, 
   Image, 
   Modal, 
   ScrollView, 
@@ -19,6 +18,7 @@ import {
   Pressable,
   KeyboardAvoidingView
 } from 'react-native';
+import { showErrorAlert, showWarningAlert, showSuccessAlert } from '@/utils/alert';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 const { width } = Dimensions.get('window');
@@ -52,8 +52,8 @@ interface ServerExpense {
   amount: number;
   description?: string;
   receipt_image?: string;
-  status: 'pending' | 'approved' | 'rejected';
-  submission_date: string;
+  status?: 'pending' | 'approved' | 'rejected';
+  submission_date?: string;
   created_at: string;
   updated_at: string;
   reviewed_at?: string;
@@ -93,7 +93,7 @@ const Expenses = () => {
 
   const fetchExpenseHistory = useCallback(async (status?: string) => {
     if (!currentDriver?.id) {
-      Alert.alert('Error', 'Driver information not available.');
+      showErrorAlert('Error', 'Driver information not available.');
       return;
     }
 
@@ -109,7 +109,7 @@ const Expenses = () => {
       setExpenseHistory(data);
     } catch (error) {
       console.error('Error fetching expense history:', error);
-      Alert.alert('Error', 'Failed to load expense history.');
+      showErrorAlert('Error', 'Failed to load expense history.');
     } finally {
       setLoadingHistory(false);
     }
@@ -125,7 +125,7 @@ const Expenses = () => {
     try {
       const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
       if (status !== 'granted') {
-        Alert.alert('Permission required', 'We need access to your photos to upload a receipt.');
+        showWarningAlert('Permission required', 'We need access to your photos to upload a receipt.');
         return;
       }
       const result = await ImagePicker.launchImageLibraryAsync({
@@ -141,12 +141,12 @@ const Expenses = () => {
           const base64String = await convertImageToBase64(imageUri);
           setReceiptBase64(base64String);
         } catch {
-          Alert.alert('Error', 'Failed to process the selected image.');
+          showErrorAlert('Error', 'Failed to process the selected image.');
           setReceiptUri(undefined);
         }
       }
     } catch {
-      Alert.alert('Error', 'Could not open image library.');
+      showErrorAlert('Error', 'Could not open image library.');
     }
   };
 
@@ -161,15 +161,15 @@ const Expenses = () => {
   const handleSubmit = async () => {
     const numericAmount = Number(formattedAmount);
     if (!selectedType) {
-      Alert.alert('Missing info', 'Please select an expense type.');
+      showWarningAlert('Missing info', 'Please select an expense type.');
       return;
     }
     if (!formattedAmount || isNaN(numericAmount) || numericAmount <= 0) {
-      Alert.alert('Invalid amount', 'Please enter a valid amount.');
+      showWarningAlert('Invalid amount', 'Please enter a valid amount.');
       return;
     }
     if (!currentDriver?.id) {
-      Alert.alert('Error', 'Driver information not available.');
+      showErrorAlert('Error', 'Driver information not available.');
       return;
     }
 
@@ -207,11 +207,11 @@ const Expenses = () => {
         receiptUri: receiptBase64 || receiptUri
       });
 
-      Alert.alert('Success', 'Expense submitted successfully!', [
+      showSuccessAlert('Success', 'Expense submitted successfully!', [
         { text: 'OK', onPress: resetForm }
       ]);
     } catch (error) {
-      Alert.alert('Error', error instanceof Error ? error.message : 'Could not submit expense.');
+      showErrorAlert('Error', error instanceof Error ? error.message : 'Could not submit expense.');
     } finally {
       setSubmitting(false);
     }

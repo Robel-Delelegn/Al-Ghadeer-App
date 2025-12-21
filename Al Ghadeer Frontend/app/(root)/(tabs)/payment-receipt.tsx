@@ -6,11 +6,12 @@ import * as Print from 'expo-print';
 import { useRouter } from 'expo-router';
 import * as Sharing from 'expo-sharing';
 import React, { useCallback, useState } from 'react';
-import { Alert, ActivityIndicator, ScrollView, Text, TouchableOpacity, View } from 'react-native';
+import { ActivityIndicator, ScrollView, Text, TouchableOpacity, View } from 'react-native';
+import { showSuccessAlert, showErrorAlert } from '@/utils/alert';
 
 const PaymentReceipt: React.FC = () => {
   const router = useRouter();
-  const { selectedOrder, assignedOrders, cartItems } = useOrderStore();
+  const { selectedOrder, assignedOrders, cartItems, selectedPaymentMethod } = useOrderStore();
   const orderDetail = assignedOrders.find(item => selectedOrder === item.id) as Order | undefined;
 
   // Loading states for buttons
@@ -20,11 +21,10 @@ const PaymentReceipt: React.FC = () => {
 
   // Calculate data from current state with safe property access
   const shippingDetails = orderDetail ? {
-    name: orderDetail.customer?.name || orderDetail.customer_name || 'N/A',
-    address: orderDetail.customer?.address || orderDetail.customer_address || 'N/A',
-    contact: orderDetail.customer?.phone || orderDetail.customer_phone || 'N/A'
+    name: orderDetail.customer_name || 'N/A',
+    address: orderDetail.customer_address || 'N/A',
+    contact: orderDetail.customer_phone || 'N/A'
   } : { name: 'N/A', address: 'N/A', contact: 'N/A' };
-  const selectedPaymentMethod = orderDetail?.payment_method || orderDetail?.pricing?.payment_method || 'cash';
   const paymentMethodDisplay = selectedPaymentMethod === 'credit_card' ? 'Credit Card' : 
                                 selectedPaymentMethod === 'wallet' ? 'Wallet' : 
                                 'Cash';
@@ -308,18 +308,16 @@ const PaymentReceipt: React.FC = () => {
         });
         console.log('Invoice shared successfully');
       } else {
-        Alert.alert(
+        showSuccessAlert(
           'Invoice Saved', 
-          `Invoice has been saved to your device.\nLocation: ${newPath}`,
-          [{ text: 'OK', style: 'default' }]
+          `Invoice has been saved to your device.\nLocation: ${newPath}`
         );
       }
     } catch (error) {
       console.error('Download error:', error);
-      Alert.alert(
+      showErrorAlert(
         'Download Failed', 
-        'Unable to download the invoice. Please check your device storage and try again.',
-        [{ text: 'OK', style: 'default' }]
+        'Unable to download the invoice. Please check your device storage and try again.'
       );
     } finally {
       setIsDownloading(false);
@@ -358,10 +356,9 @@ const PaymentReceipt: React.FC = () => {
       
     } catch (error) {
       console.error('Print error:', error);
-      Alert.alert(
+      showErrorAlert(
         'Print Failed', 
-        'Unable to open print dialog. Please check your printer connection and try again.',
-        [{ text: 'OK', style: 'default' }]
+        'Unable to open print dialog. Please check your printer connection and try again.'
       );
     } finally {
       setIsPrinting(false);

@@ -4,7 +4,6 @@ import { useRouter } from 'expo-router';
 import React, { useCallback, useState, useEffect } from 'react';
 import {
   ActivityIndicator,
-  Alert,
   Linking,
   ScrollView,
   Text,
@@ -14,6 +13,7 @@ import {
   Dimensions,
   Platform,
 } from 'react-native';
+import { showErrorAlert } from '@/utils/alert';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 const { width } = Dimensions.get('window');
@@ -32,8 +32,8 @@ const OrderDetails = () => {
   const calculateDistanceAndTime = useCallback(async () => {
     if (!order || !userLatitude || !userLongitude) return;
 
-    const customerLatitude = order.customer?.latitude || order.latitude;
-    const customerLongitude = order.customer?.longitude || order.longitude;
+    const customerLatitude = order.latitude;
+    const customerLongitude = order.longitude;
     
     if (!customerLatitude || !customerLongitude) return;
 
@@ -89,18 +89,18 @@ const OrderDetails = () => {
 
     try {
       setIsLoading(true);
-      const latitude = order.customer?.latitude || order.latitude;
-      const longitude = order.customer?.longitude || order.longitude;
+      const latitude = order.latitude;
+      const longitude = order.longitude;
       
       if (!latitude || !longitude) {
-        Alert.alert('Error', 'Customer location not available.');
+        showErrorAlert('Error', 'Customer location not available.');
         return;
       }
       
       const googleMapsUrl = `https://www.google.com/maps/dir/?api=1&origin=${userLatitude},${userLongitude}&destination=${latitude},${longitude}&travelmode=driving`;
       await Linking.openURL(googleMapsUrl);
     } catch {
-      Alert.alert('Error', 'Failed to open map.');
+      showErrorAlert('Error', 'Failed to open map.');
     } finally {
       setIsLoading(false);
     }
@@ -132,11 +132,11 @@ const OrderDetails = () => {
     );
   }
 
-  const customerName = order.customer?.name || order.customer_name || 'Unknown';
-  const customerPhone = order.customer?.phone || order.customer_phone || '—';
-  const customerAddress = order.customer?.address || order.customer_address || '—';
-  const totalAmount = order.pricing?.total_amount || order.total_amount || 0;
-  const deliveryInstructions = order.customer?.delivery_instructions || order.delivery_instructions;
+  const customerName = order.customer_name || 'Unknown';
+  const customerPhone = order.customer_phone || '—';
+  const customerAddress =  order.customer_address || '—';
+  const totalAmount = order.total_amount || 0;
+  const deliveryInstructions = order.delivery_instructions;
 
   const statusConfig: Record<string, { color: string; bgColor: string; label: string }> = {
     pending: { color: '#D97706', bgColor: '#FFFBEB', label: 'Pending' },

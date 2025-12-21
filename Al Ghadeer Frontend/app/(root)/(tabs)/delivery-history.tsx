@@ -1,4 +1,5 @@
 import { Order } from '@/types/order';
+import { useAuthStore } from '@/store/auth';
 import { Ionicons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
 import React, { useEffect, useMemo, useState, useCallback } from 'react';
@@ -39,12 +40,13 @@ const DeliveryHistory = () => {
   const [statusFilter, setStatusFilter] = useState<StatusFilter>('all');
   const [history, setHistory] = useState<Order[]>([]);
   const [loading, setLoading] = useState(true);
+  const { user } = useAuthStore()
 
   useEffect(() => {
     const fetchHistory = async () => {
       try {
         setLoading(true);
-        const url = `${IP_ADDRESS}/driver/history?driver_id=b97f3fc1-0708-4b97-bf5d-deb424b2cd93`;
+        const url = `${IP_ADDRESS}/driver/?${user?.id}`;
         const response = await fetch(url);
 
         if (!response.ok) {
@@ -65,7 +67,7 @@ const DeliveryHistory = () => {
         const transformedHistory: Order[] = orders.map(order => ({
           ...order,
           products: order.products || {},
-          customer: order.customer || {
+          customer: {
             id: order.customer_id || '',
             site_id: order.customer_site_id,
             name: order.customer_name || '',
@@ -92,9 +94,9 @@ const DeliveryHistory = () => {
   const filtered = useMemo(() => {
     const query = search.trim().toLowerCase();
     return history.filter((item) => {
-      const customerName = item.customer?.name || item.customer_name || '';
-      const customerAddress = item.customer?.address || item.customer_address || '';
-      const customerPhone = item.customer?.phone || item.customer_phone || '';
+      const customerName = item.customer_name || '';
+      const customerAddress = item.customer_address || '';
+      const customerPhone = item.customer_phone || '';
       
       const matchesQuery =
         !query ||
@@ -127,8 +129,8 @@ const DeliveryHistory = () => {
   }, []);
 
   const renderItem = useCallback(({ item }: { item: Order }) => {
-    const customerName = item.customer?.name || item.customer_name || 'Unknown';
-    const customerAddress = item.customer?.address || item.customer_address || '';
+    const customerName = item.customer_name || 'Unknown';
+    const customerAddress = item.customer_address || '';
     const totalAmount = item.pricing?.total_amount || item.total_amount || 0;
     const config = statusConfig[item.status as StatusFilter] || statusConfig.cancelled;
     

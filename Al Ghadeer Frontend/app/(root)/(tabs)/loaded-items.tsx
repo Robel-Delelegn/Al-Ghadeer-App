@@ -3,7 +3,6 @@ import { Ionicons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
 import React, { useState, useCallback } from 'react';
 import { 
-  Alert, 
   ScrollView, 
   Text, 
   TouchableOpacity, 
@@ -13,6 +12,7 @@ import {
   StyleSheet,
   Dimensions,
 } from 'react-native';
+import { showErrorAlert, showSuccessAlert } from '@/utils/alert';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 const { width } = Dimensions.get('window');
@@ -58,7 +58,7 @@ const LoadedItems = () => {
 
   const fetchItems = useCallback(async () => {
     if (!currentDriver) {
-      Alert.alert('Error', 'Driver information not found.');
+      showErrorAlert('Error', 'Driver information not found.');
       return;
     }
 
@@ -83,7 +83,7 @@ const LoadedItems = () => {
       setIsCorrect(null);
     } catch (error) {
       console.error('Error fetching items:', error);
-      Alert.alert('Error', error instanceof Error ? error.message : 'Failed to fetch items.');
+      showErrorAlert('Error', error instanceof Error ? error.message : 'Failed to fetch items.');
     } finally {
       setIsLoading(false);
     }
@@ -126,7 +126,7 @@ const LoadedItems = () => {
         throw new Error(data.message || 'Failed to confirm items');
       }
 
-      Alert.alert(
+      showSuccessAlert(
         isCorrect ? 'Items Loaded' : 'Issue Reported',
         isCorrect 
           ? 'Items have been confirmed and loaded successfully.'
@@ -134,7 +134,7 @@ const LoadedItems = () => {
         [{ text: 'Done', onPress: () => resetProcess() }]
         );
     } catch (error) {
-      Alert.alert('Error', error instanceof Error ? error.message : 'Failed to confirm.');
+      showErrorAlert('Error', error instanceof Error ? error.message : 'Failed to confirm.');
     } finally {
       setIsConfirming(false);
     }

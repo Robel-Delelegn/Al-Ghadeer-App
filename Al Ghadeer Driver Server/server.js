@@ -383,8 +383,8 @@ app.get('/api/driver/orders', async (req, res) => {
             customer_type: 'individual',
             wallet_balance: 125.50,
             products: {
-                five_litre_bottles: 5,
-                ten_litre_bottles: 2
+                '5L Water Bottle': 5,
+                '300ml Water Bottle': 2
             },
             created_at: new Date().toISOString(),
             updated_at: new Date().toISOString()
@@ -410,8 +410,8 @@ app.get('/api/driver/orders', async (req, res) => {
             customer_type: 'individual',
             wallet_balance: 89.00,
             products: {
-                five_litre_bottles: 3,
-                three_hundred_ml_bottles: 10
+                '5L Water Bottle': 3,
+                '300ml Water Bottle': 10
             },
             created_at: new Date().toISOString(),
             updated_at: new Date().toISOString()
@@ -437,7 +437,7 @@ app.get('/api/driver/orders', async (req, res) => {
             customer_type: 'individual',
             wallet_balance: 0,
             products: {
-                ten_litre_bottles: 4,
+                '5L Water Bottle': 4,
                 water_dispenser: 1
             },
             created_at: new Date().toISOString(),
@@ -464,8 +464,8 @@ app.get('/api/driver/orders', async (req, res) => {
             customer_type: 'organization',
             wallet_balance: 1250.00,
             products: {
-                five_litre_bottles: 100,
-                ten_litre_bottles: 30
+                '5L Water Bottle': 100,
+                "10L Water Bottle": 30
             },
             created_at: new Date().toISOString(),
             updated_at: new Date().toISOString()
@@ -491,8 +491,8 @@ app.get('/api/driver/orders', async (req, res) => {
             customer_type: 'organization',
             wallet_balance: -500.00,
             products: {
-                five_litre_bottles: 500,
-                ten_litre_bottles: 200
+                '5L Water Bottle': 500,
+                "10L Water Bottle": 200
             },
             created_at: new Date().toISOString(),
             updated_at: new Date().toISOString()
@@ -536,9 +536,6 @@ app.get('/api/driver/history', async (req, res) => {
             created_at: new Date(Date.now() - 86400000).toISOString(),
             assigned_at: new Date(Date.now() - 86400000).toISOString(),
             completed_at: new Date(Date.now() - 82800000).toISOString(),
-            delivery: {
-                delivered_at: new Date(Date.now() - 82800000).toISOString()
-            }
         },
         {
             id: '102',
@@ -562,9 +559,6 @@ app.get('/api/driver/history', async (req, res) => {
             created_at: new Date(Date.now() - 172800000).toISOString(),
             assigned_at: new Date(Date.now() - 172800000).toISOString(),
             completed_at: null,
-            delivery: {
-                delivered_at: null
-            }
         },
         {
             id: '103',
@@ -589,9 +583,7 @@ app.get('/api/driver/history', async (req, res) => {
             created_at: new Date(Date.now() - 259200000).toISOString(),
             assigned_at: new Date(Date.now() - 259200000).toISOString(),
             completed_at: new Date(Date.now() - 255600000).toISOString(),
-            delivery: {
-                delivered_at: new Date(Date.now() - 255600000).toISOString()
-            }
+
         },
         {
             id: '104',
@@ -615,9 +607,6 @@ app.get('/api/driver/history', async (req, res) => {
             created_at: new Date(Date.now() - 345600000).toISOString(),
             assigned_at: new Date(Date.now() - 345600000).toISOString(),
             completed_at: null,
-            delivery: {
-                delivered_at: null
-            }
         }
     ];
 
@@ -1289,7 +1278,7 @@ app.post('/api/expenses/submit', async (req, res) => {
 
 // GET /api/products (also supports /api/driver/products)
 app.get('/api/products', async (req, res) => {
-    const { driver_id, customer_site_id } = req.query;
+    const { driver_id, customer_site_id, customer_id } = req.query;
 
     const products = [
         {
@@ -1303,7 +1292,7 @@ app.get('/api/products', async (req, res) => {
             image_url: 'https://example.com/images/5l-bottle.jpg',
             is_active: true,
             customer_site_id: customer_site_id || 'site_001',
-            customer_id: 'cust_001'
+            customer_id: customer_id || 'cust_001'
         },
         {
             id: 'prod_002',
@@ -1316,7 +1305,7 @@ app.get('/api/products', async (req, res) => {
             image_url: 'https://example.com/images/10l-bottle.jpg',
             is_active: true,
             customer_site_id: customer_site_id || 'site_001',
-            customer_id: 'cust_001'
+            customer_id: customer_id || 'cust_001'
         },
         {
             id: 'prod_003',
@@ -1329,7 +1318,7 @@ app.get('/api/products', async (req, res) => {
             image_url: 'https://example.com/images/300ml-bottle.jpg',
             is_active: true,
             customer_site_id: customer_site_id || 'site_001',
-            customer_id: 'cust_001'
+            customer_id: customer_id || 'cust_001'
         },
         {
             id: 'prod_004',
@@ -1342,7 +1331,7 @@ app.get('/api/products', async (req, res) => {
             image_url: 'https://example.com/images/1l-bottle.jpg',
             is_active: true,
             customer_site_id: customer_site_id || 'site_001',
-            customer_id: 'cust_001'
+            customer_id: customer_id || 'cust_001'
         },
         {
             id: 'prod_005',
@@ -1355,7 +1344,7 @@ app.get('/api/products', async (req, res) => {
             image_url: 'https://example.com/images/20l-bottle.jpg',
             is_active: true,
             customer_site_id: customer_site_id || 'site_001',
-            customer_id: 'cust_001'
+            customer_id: customer_id || 'cust_001'
         },
         {
             id: 'prod_006',
@@ -1368,7 +1357,7 @@ app.get('/api/products', async (req, res) => {
             image_url: 'https://example.com/images/dispenser.jpg',
             is_active: true,
             customer_site_id: customer_site_id || 'site_001',
-            customer_id: 'cust_001'
+            customer_id: customer_id || 'cust_001'
         }
     ];
 
@@ -1382,7 +1371,7 @@ app.get('/api/products', async (req, res) => {
 
 // GET /api/driver/products (alias for /api/products)
 app.get('/api/driver/products', async (req, res) => {
-    const { driver_id, customer_site_id } = req.query;
+    const { driver_id, customer_site_id, customer_id } = req.query;
 
     const products = [
         {
@@ -1396,7 +1385,7 @@ app.get('/api/driver/products', async (req, res) => {
             image_url: 'https://example.com/images/5l-bottle.jpg',
             is_active: true,
             customer_site_id: customer_site_id || 'site_001',
-            customer_id: 'cust_001'
+            customer_id: customer_id || 'cust_001'
         },
         {
             id: 'prod_002',
@@ -1409,7 +1398,7 @@ app.get('/api/driver/products', async (req, res) => {
             image_url: 'https://example.com/images/10l-bottle.jpg',
             is_active: true,
             customer_site_id: customer_site_id || 'site_001',
-            customer_id: 'cust_001'
+            customer_id: customer_id || 'cust_001'
         },
         {
             id: 'prod_003',
@@ -1422,7 +1411,7 @@ app.get('/api/driver/products', async (req, res) => {
             image_url: 'https://example.com/images/300ml-bottle.jpg',
             is_active: true,
             customer_site_id: customer_site_id || 'site_001',
-            customer_id: 'cust_001'
+            customer_id: customer_id || 'cust_001'
         },
         {
             id: 'prod_004',
@@ -1435,7 +1424,7 @@ app.get('/api/driver/products', async (req, res) => {
             image_url: 'https://example.com/images/1l-bottle.jpg',
             is_active: true,
             customer_site_id: customer_site_id || 'site_001',
-            customer_id: 'cust_001'
+            customer_id: customer_id || 'cust_001'
         },
         {
             id: 'prod_005',
@@ -1448,7 +1437,7 @@ app.get('/api/driver/products', async (req, res) => {
             image_url: 'https://example.com/images/20l-bottle.jpg',
             is_active: true,
             customer_site_id: customer_site_id || 'site_001',
-            customer_id: 'cust_001'
+            customer_id: customer_id || 'cust_001'
         },
         {
             id: 'prod_006',
@@ -1461,7 +1450,7 @@ app.get('/api/driver/products', async (req, res) => {
             image_url: 'https://example.com/images/dispenser.jpg',
             is_active: true,
             customer_site_id: customer_site_id || 'site_001',
-            customer_id: 'cust_001'
+            customer_id: customer_id || 'cust_001'
         }
     ];
 

@@ -2,7 +2,8 @@ import { useOrderStore } from '@/store/index';
 import { Ionicons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
 import React, { useState, useCallback, useMemo } from 'react';
-import { Alert, ScrollView, Text, TextInput, TouchableOpacity, View, ActivityIndicator, Modal, Image } from 'react-native';
+import { ScrollView, Text, TextInput, TouchableOpacity, View, ActivityIndicator, Modal, Image } from 'react-native';
+import { showErrorAlert, showSuccessAlert } from '@/utils/alert';
 
 const IP_ADDRESS = process.env.EXPO_PUBLIC_IP_ADDRESS || 'http://localhost:3000/api';
 
@@ -37,17 +38,17 @@ const FailedDeliveries = () => {
 
   const handleSubmitFailedDelivery = useCallback(async () => {
     if (!order) {
-      Alert.alert('Error', 'Order information not found.');
+      showErrorAlert('Error', 'Order information not found.');
       return;
     }
 
     if (!selectedReason) {
-      Alert.alert('Error', 'Please select a reason for failed delivery.');
+      showErrorAlert('Error', 'Please select a reason for failed delivery.');
       return;
     }
 
     if (!currentDriver) {
-      Alert.alert('Error', 'Driver information not found.');
+      showErrorAlert('Error', 'Driver information not found.');
       return;
     }
 
@@ -56,7 +57,7 @@ const FailedDeliveries = () => {
       // Prepare failure details
       const failureDetails = {
         order_id: order.id,
-        customer_id: order.customer_id || order.customer?.id,
+        customer_id: order.customer_id,
         reason: selectedReason,
         additional_notes: additionalNotes,
         submitted_at: new Date().toISOString()
@@ -82,7 +83,7 @@ const FailedDeliveries = () => {
         updateOrderStatus(order.id, 'failed', selectedReason, JSON.stringify(failureDetails));
         
         // Show success message
-        Alert.alert(
+        showSuccessAlert(
           'Failed Delivery Reported',
           result.message || 'Your failed delivery report has been submitted successfully.',
           [
@@ -93,18 +94,18 @@ const FailedDeliveries = () => {
           ]
         );
       } else {
-        Alert.alert('Error', result.message || 'Failed to submit report. Please try again.');
+        showErrorAlert('Error', result.message || 'Failed to submit report. Please try again.');
       }
     } catch (error) {
       console.error('Error submitting failed delivery report:', error);
-      Alert.alert('Error', 'Failed to submit report. Please try again.');
+      showErrorAlert('Error', 'Failed to submit report. Please try again.');
     } finally {
       setIsSubmitting(false);
     }
   }, [order, selectedReason, additionalNotes, currentDriver, updateOrderStatus, router]);
 
   const handleCancel = () => {
-    Alert.alert(
+    showWarningAlert(
       'Cancel Report',
       'Are you sure you want to cancel this failed delivery report?',
       [
@@ -230,21 +231,21 @@ const FailedDeliveries = () => {
             <View style={{ flexDirection: 'row', justifyContent: 'space-between' }}>
               <Text style={{ color: '#6C757D', fontSize: 14, fontWeight: '500' }}>Customer:</Text>
               <Text style={{ color: '#212529', fontSize: 14, fontWeight: '600' }}>
-                {order.customer?.name || order.customer_name || 'N/A'}
+                {order.customer_name || 'N/A'}
               </Text>
             </View>
             
             <View style={{ flexDirection: 'row', justifyContent: 'space-between' }}>
               <Text style={{ color: '#6C757D', fontSize: 14, fontWeight: '500' }}>Phone:</Text>
               <Text style={{ color: '#212529', fontSize: 14, fontWeight: '600' }}>
-                {order.customer?.phone || order.customer_phone || 'N/A'}
+                {order.customer_phone || 'N/A'}
               </Text>
             </View>
             
             <View>
               <Text style={{ color: '#6C757D', fontSize: 14, fontWeight: '500', marginBottom: 4 }}>Address:</Text>
               <Text style={{ color: '#212529', fontSize: 14, fontWeight: '600', lineHeight: 20 }}>
-                {order.customer?.address || order.customer_address || 'N/A'}
+                { order.customer_address || 'N/A'}
               </Text>
             </View>
           </View>

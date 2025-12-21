@@ -1,11 +1,11 @@
 import { useOrderStore } from '@/store/index';
+import { useAuthStore } from '@/store/auth';
 import { Order } from '@/types/order';
 import { Ionicons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
 import React, { useCallback, useState, useMemo } from 'react';
 import { 
   ActivityIndicator, 
-  Alert, 
   ScrollView, 
   Text, 
   TouchableOpacity, 
@@ -14,6 +14,7 @@ import {
   Dimensions,
   Platform,
 } from 'react-native';
+import { showErrorAlert, showSuccessAlert } from '@/utils/alert';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 const { width } = Dimensions.get('window');
@@ -35,6 +36,7 @@ interface ApiResponse {
 const PaymentConfirmation: React.FC = () => {
   const insets = useSafeAreaInsets();
   const router = useRouter();
+  const { user } = useAuthStore();
   const [isProcessing, setIsProcessing] = useState(false);
   const { 
     selectedOrder, 
@@ -82,12 +84,12 @@ const PaymentConfirmation: React.FC = () => {
 
   const handleConfirmPayment = useCallback(async () => {
     if (!orderDetail) {
-      Alert.alert('Error', 'Order details not found.');
+      showErrorAlert('Error', 'Order details not found.');
       return;
     }
     
     if (cartItems.length === 0) {
-      Alert.alert('Error', 'No items in cart.');
+      showErrorAlert('Error', 'No items in cart.');
       return;
     }
     
@@ -95,15 +97,15 @@ const PaymentConfirmation: React.FC = () => {
     
     try {
       const orderData = {
-        customer_site_id: orderDetail.customer?.site_id || orderDetail.customer_site_id || '',
-        customer_id: orderDetail.customer?.id || orderDetail.customer_id || '',
-        customer_name: orderDetail.customer?.name || orderDetail.customer_name || 'N/A',
-        customer_phone: orderDetail.customer?.phone || orderDetail.customer_phone || 'N/A',
-        customer_email: orderDetail.customer?.email || orderDetail.customer_email || '',
-        customer_address: orderDetail.customer?.address || orderDetail.customer_address || 'N/A',
-        latitude: orderDetail.customer?.latitude || orderDetail.latitude || 0,
-        longitude: orderDetail.customer?.longitude || orderDetail.longitude || 0,
-        delivery_instructions: orderDetail.customer?.delivery_instructions || orderDetail.delivery_instructions || '',
+        customer_site_id: orderDetail.customer_site_id || '',
+        customer_id:  orderDetail.customer_id || '',
+        customer_name: orderDetail.customer_name || 'N/A',
+        customer_phone: orderDetail.customer_phone || 'N/A',
+        customer_email: orderDetail.customer_email || '',
+        customer_address: orderDetail.customer_address || 'N/A',
+        latitude: orderDetail.latitude || 0,
+        longitude: orderDetail.longitude || 0,
+        delivery_instructions: orderDetail.delivery_instructions || '',
         products: cartItems.filter(item => item?.name).map(item => ({
           name: item.name,
           quantity: item.quantity,
@@ -113,10 +115,10 @@ const PaymentConfirmation: React.FC = () => {
         vat: parseFloat(vat),
         total_amount: parseFloat(totalWithVat),
         payment_method: selectedPaymentMethod.toLowerCase(),
-        delivery_zone: orderDetail.delivery?.delivery_zone || orderDetail.delivery_zone || 'General'
+        delivery_zone: orderDetail.delivery_zone || 'General'
       };
 
-      const url = `${IP_ADDRESS}/driver/orders/confirm-payment?driver_id=b97f3fc1-0708-4b97-bf5d-deb424b2cd93`;
+      const url = `${IP_ADDRESS}/driver/orders/confirm-payment?driver_id=${user?.id}`;
       
       const response = await fetch(url, {
         method: 'POST',
@@ -135,14 +137,14 @@ const PaymentConfirmation: React.FC = () => {
         throw new Error(result.message || 'Payment confirmation failed');
       }
 
-      Alert.alert(
+      showSuccessAlert(
         'Payment Successful', 
         result.message || `Order ${result.order.order_number} confirmed.`,
         [{ text: 'View Receipt', onPress: () => router.push('/(root)/(tabs)/payment-receipt') }]
       );
       
     } catch (error) {
-      Alert.alert(
+      showErrorAlert(
         'Payment Failed', 
         error instanceof Error ? error.message : 'Please try again.'
       );
@@ -151,9 +153,9 @@ const PaymentConfirmation: React.FC = () => {
     }
   }, [orderDetail, cartItems, subtotal, vat, totalWithVat, selectedPaymentMethod, router]);
 
-  const customerName = orderDetail?.customer?.name || orderDetail?.customer_name || 'Customer';
-  const customerAddress = orderDetail?.customer?.address || orderDetail?.customer_address || '—';
-  const customerPhone = orderDetail?.customer?.phone || orderDetail?.customer_phone || '—';
+  const customerName = orderDetail?.customer_name || 'Customer';
+  const customerAddress = orderDetail?.customer_address || '—';
+  const customerPhone = orderDetail?.customer_phone || '—';
   const customerType = orderDetail?.customer_type || 'individual';
   const walletBalance = orderDetail?.wallet_balance ?? 0;
   const isOrganization = customerType === 'organization';

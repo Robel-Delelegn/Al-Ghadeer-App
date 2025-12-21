@@ -1,11 +1,11 @@
 import { useOrderStore } from '@/store/index';
+import { useAuthStore } from '@/store/auth';
 import { Order } from '@/types/order';
 import { Ionicons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
 import React, { useCallback, useRef, useState, useMemo } from 'react';
 import { 
   ActivityIndicator, 
-  Alert, 
   ScrollView, 
   Text, 
   TextInput, 
@@ -18,6 +18,7 @@ import {
   Modal,
   Image,
 } from 'react-native';
+import { showWarningAlert, showErrorAlert, showSuccessAlert } from '@/utils/alert';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import SignatureScreen, { SignatureViewRef } from 'react-native-signature-canvas';
 
@@ -44,6 +45,7 @@ const OrganizationSignature: React.FC = () => {
     cartItems,
     currentDriver
   } = useOrderStore();
+  const { user } = useAuthStore();
   
   const orderDetail = assignedOrders.find(item => selectedOrder === item.id) as Order | undefined;
   
@@ -74,7 +76,7 @@ const OrganizationSignature: React.FC = () => {
   const handleSignature = useCallback((signature: string) => {
     if (!signature || signature.trim().length === 0) {
       console.log('Empty signature received');
-      Alert.alert('No Signature', 'Please draw a signature before saving.');
+      showWarningAlert('No Signature', 'Please draw a signature before saving.');
       return;
     }
     
@@ -88,7 +90,7 @@ const OrganizationSignature: React.FC = () => {
       }
     }
     
-    console.log('Signature captured, length:', cleanSignature.length, 'First 50 chars:', cleanSignature.substring(0, 50));
+    console.log('Signature captured, length:', cleanSignature.length, 'First 10 chars:', cleanSignature.substring(0, 10),'...');
     
     if (cleanSignature && cleanSignature.length > 0) {
       setSignatureData(cleanSignature);
@@ -99,7 +101,7 @@ const OrganizationSignature: React.FC = () => {
       }
     } else {
       console.log('Cleaned signature is empty');
-      Alert.alert('Error', 'Failed to capture signature. Please try again.');
+      showErrorAlert('Error', 'Failed to capture signature. Please try again.');
     }
   }, [showSignatureModal]);
 
@@ -133,7 +135,7 @@ const OrganizationSignature: React.FC = () => {
         signatureRef.current.readSignature();
       } catch (error) {
         console.error('Error reading signature:', error);
-        Alert.alert('Error', 'Failed to capture signature. Please try again.');
+        showErrorAlert('Error', 'Failed to capture signature. Please try again.');
       }
     }
   }, [hasDrawnSignature]);
@@ -144,17 +146,17 @@ const OrganizationSignature: React.FC = () => {
 
   const handleConfirm = useCallback(async () => {
     if (!receiverName.trim()) {
-      Alert.alert('Required', 'Please enter the receiver\'s name.');
+      showWarningAlert('Required', 'Please enter the receiver\'s name.');
       return;
     }
 
     if (!hasSignature || !signatureData) {
-      Alert.alert('Required', 'Please provide a signature.');
+      showWarningAlert('Required', 'Please provide a signature.');
       return;
     }
 
     if (!orderDetail) {
-      Alert.alert('Error', 'Order details not found.');
+      showErrorAlert('Error', 'Order details not found.');
       return;
     }
 
@@ -183,7 +185,7 @@ const OrganizationSignature: React.FC = () => {
       };
 
       const response = await fetch(
-        `${IP_ADDRESS}/driver/orders/organization-credit-delivery?driver_id=${currentDriver?.id}`,
+        `${IP_ADDRESS}/driver/orders/organization-credit-delivery?driver_id=${user?.id}`,
         {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
@@ -197,14 +199,14 @@ const OrganizationSignature: React.FC = () => {
         throw new Error(result.message || 'Failed to confirm delivery');
       }
 
-      Alert.alert(
+      showSuccessAlert(
         'Delivery Confirmed',
         `Credit delivery recorded for ${organizationName}.\n\nCredit Number: ${result.credit_record.credit_number}\nAmount: AED ${result.credit_record.amount.toFixed(2)}\nNew Balance: AED ${result.credit_record.new_balance.toFixed(2)}`,
         [{ text: 'Done', onPress: () => router.push('/(root)/(tabs)/home') }]
       );
 
     } catch (error) {
-      Alert.alert(
+      showErrorAlert(
         'Error',
         error instanceof Error ? error.message : 'Failed to process delivery.'
       );

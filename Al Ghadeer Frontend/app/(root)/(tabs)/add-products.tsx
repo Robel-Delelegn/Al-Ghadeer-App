@@ -1,10 +1,10 @@
 import { useOrderStore } from '@/store/index';
+import { useAuthStore } from '@/store/auth';
 import { Product } from '@/types/order';
 import { Ionicons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
 import React, { useCallback, useMemo, useState, useEffect } from 'react';
 import { 
-  Alert, 
   ScrollView, 
   Text, 
   TouchableOpacity, 
@@ -14,6 +14,7 @@ import {
   Dimensions,
   Platform,
 } from 'react-native';
+import { showWarningAlert } from '@/utils/alert';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 const { width } = Dimensions.get('window');
@@ -26,7 +27,7 @@ interface ServerProduct {
   name: string;
   description: string;
   price: number;
-  unit: string;
+  unit?: string;
   available_stock: string | number;
   category: string;
   image_url: string;
@@ -105,6 +106,7 @@ const ProductList: React.FC = () => {
   const insets = useSafeAreaInsets();
   const router = useRouter();
   const { addToCart, clearCart, selectedOrder, assignedOrders } = useOrderStore();
+  const { user } = useAuthStore();
   
   const [products, setProducts] = useState<ServerProduct[]>([]);
   const [loading, setLoading] = useState(true);
@@ -115,13 +117,13 @@ const ProductList: React.FC = () => {
       try {
         setLoading(true);
         let url = `${IP_ADDRESS}/products`;
-        url += "?driver_id=b97f3fc1-0708-4b97-bf5d-deb424b2cd93";
+        url += `?driver_id=${user?.id}`;
         
         const currentOrder = assignedOrders.find(order => order.id === selectedOrder);
-        const customerSiteId = currentOrder?.customer_site_id || currentOrder?.customer?.site_id;
+        const customerSiteId = currentOrder?.customer_site_id;
         
         if (customerSiteId) {
-          url += `&customer_site_id=${customerSiteId}`;
+          url += `&customer_site_id=${customerSiteId}&customer_id=${currentOrder.customer_id}`;
         }
         
         const response = await fetch(url);
@@ -220,7 +222,7 @@ const ProductList: React.FC = () => {
   const handleCheckout = useCallback(() => {
     const selected = products.filter((p) => (quantities[p.id] || 0) > 0);
     if (selected.length === 0) {
-      Alert.alert('No items selected', 'Please select at least one product to continue.');
+      showWarningAlert('No items selected', 'Please select at least one product to continue.');
       return;
     }
 
@@ -238,12 +240,7 @@ const ProductList: React.FC = () => {
         type: productType,
         description: serverProduct.description,
         image_url: serverProduct.image_url || 'https://via.placeholder.com/150',
-        pricing: {
-          cost_price: serverProduct.price * 0.7,
-          selling_price: serverProduct.price,
-          driver_commission: serverProduct.price * 0.1,
-          profit_margin: 0.3
-        },
+        pricing:  serverProduct.price,
         inventory: {
           current_stock: serverProduct.available_stock === "N/A" ? 999 : Number(serverProduct.available_stock),
           reserved_stock: 0,
@@ -273,7 +270,7 @@ const ProductList: React.FC = () => {
     });
     
     if (itemsAdded === 0) {
-      Alert.alert('No Items Selected', 'Please select at least one product to continue.');
+      showWarningAlert('No Items Selected', 'Please select at least one product to continue.');
       return;
     }
     

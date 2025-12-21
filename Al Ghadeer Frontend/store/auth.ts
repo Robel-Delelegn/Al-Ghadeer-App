@@ -6,7 +6,7 @@ import { createJSONStorage, persist } from 'zustand/middleware';
 interface User {
   id: string;
   phone: string;
-  name: string; // alias of driver_name
+  name: string; 
   driver_name?: string;
   helper_name?: string;
   vehicle_number?: string;
@@ -32,8 +32,6 @@ interface AuthStore {
   getToken: () => Promise<string | null>;
 }
 
-// API Base URL - Update with your actual server URL
-// Note: Should include /api at the end (e.g., http://192.168.100.249:3000/api)
 const API_BASE_URL = process.env.EXPO_PUBLIC_IP_ADDRESS || process.env.EXPO_PUBLIC_API_URL || 'http://localhost:3000/api';
 
 export const useAuthStore = create<AuthStore>()(

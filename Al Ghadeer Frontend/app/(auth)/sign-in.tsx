@@ -1,4 +1,5 @@
-import { Text, View, ScrollView, Image, Alert, ActivityIndicator, Modal, TextInput, TouchableOpacity } from 'react-native';
+import { Text, View, ScrollView, Image, ActivityIndicator, Modal, TextInput, TouchableOpacity } from 'react-native';
+import { showErrorAlert, showSuccessAlert, showWarningAlert } from '@/utils/alert';
 import { icons, images } from '@/constants';
 import InputField from '@/components/InputField';
 import { useState } from 'react';
@@ -68,7 +69,7 @@ const SignIn = () => {
       }, 1000);
     } else {
       console.error('❌ Conditions not met for OTP modal:', result);
-      Alert.alert('Error', result.message || 'Failed to send OTP. Please try again.');
+      showErrorAlert('Error', result.message || 'Failed to send OTP. Please try again.');
     }
   };
 
@@ -96,7 +97,7 @@ const SignIn = () => {
       const user = useAuthStore.getState().user;
       
       if (user?.status === 'pending') {
-        Alert.alert(
+        showWarningAlert(
           'Account Pending Approval',
           'Your phone number has been verified. Please wait for approval from the administrator.',
           [
@@ -111,7 +112,7 @@ const SignIn = () => {
       } else if (user?.status === 'approved') {
         router.replace('/(root)/(tabs)/home');
       } else {
-        Alert.alert('Account Rejected', 'Your account has been rejected. Please contact the administrator.');
+        showErrorAlert('Account Rejected', 'Your account has been rejected. Please contact the administrator.');
         await useAuthStore.getState().signOut();
       }
     } else {
@@ -138,9 +139,9 @@ const SignIn = () => {
           return prev - 1;
         });
       }, 1000);
-      Alert.alert('OTP Resent', 'A new OTP has been sent to your phone number.');
+      showSuccessAlert('OTP Resent', 'A new OTP has been sent to your phone number.');
     } else {
-      Alert.alert('Error', result.message || 'Failed to resend OTP. Please try again.');
+      showErrorAlert('Error', result.message || 'Failed to resend OTP. Please try again.');
     }
 
     setIsResendingOtp(false);

@@ -4,7 +4,6 @@ import { useRouter } from 'expo-router';
 import * as Location from 'expo-location';
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { 
-  Alert, 
   ScrollView, 
   Text, 
   TextInput, 
@@ -17,6 +16,7 @@ import {
   KeyboardAvoidingView,
   Animated,
 } from 'react-native';
+import { showErrorAlert, showWarningAlert, showSuccessAlert } from '@/utils/alert';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 const { width } = Dimensions.get('window');
@@ -79,7 +79,7 @@ const DirectSales: React.FC = () => {
         setProducts(apiResponse.data);
       } catch (err) {
         console.error('Error fetching products:', err);
-        Alert.alert('Error', 'Failed to load products.');
+        showErrorAlert('Error', 'Failed to load products.');
       } finally {
         setLoading(false);
       }
@@ -93,7 +93,7 @@ const DirectSales: React.FC = () => {
         setLocationLoading(true);
         const { status } = await Location.requestForegroundPermissionsAsync();
         if (status !== 'granted') {
-          Alert.alert('Permission Denied', 'Location permission is required.');
+          showWarningAlert('Permission Denied', 'Location permission is required.');
           return;
         }
 
@@ -146,10 +146,10 @@ const DirectSales: React.FC = () => {
 
   const handleConfirmSale = useCallback(async () => {
     if (!isFormValid) {
-      if (selectedProducts.length === 0) Alert.alert('No Items', 'Please select at least one product.');
-      else if (!customerName.trim()) Alert.alert('Required', 'Please enter customer name.');
-      else if (!customerPhone.trim()) Alert.alert('Required', 'Please enter phone number.');
-      else if (!location) Alert.alert('Required', 'Please wait for location.');
+      if (selectedProducts.length === 0) showWarningAlert('No Items', 'Please select at least one product.');
+      else if (!customerName.trim()) showWarningAlert('Required', 'Please enter customer name.');
+      else if (!customerPhone.trim()) showWarningAlert('Required', 'Please enter phone number.');
+      else if (!location) showWarningAlert('Required', 'Please wait for location.');
       return;
     }
 
@@ -185,11 +185,11 @@ const DirectSales: React.FC = () => {
       const result = await response.json();
       if (!response.ok || !result.success) throw new Error(result.message || 'Failed to submit');
 
-      Alert.alert('Success', `Sale of AED ${totalAmount.toFixed(2)} confirmed.`, [
+      showSuccessAlert('Success', `Sale of AED ${totalAmount.toFixed(2)} confirmed.`, [
         { text: 'Done', onPress: () => { setQuantities({}); setCustomerName(''); setCustomerPhone(''); router.back(); }}
       ]);
     } catch (error) {
-      Alert.alert('Error', error instanceof Error ? error.message : 'Failed to confirm sale.');
+      showErrorAlert('Error', error instanceof Error ? error.message : 'Failed to confirm sale.');
     } finally {
       setIsSubmitting(false);
     }
