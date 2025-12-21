@@ -236,11 +236,6 @@ app.post('/api/auth/verify-otp', async (req, res) => {
         id: driver.id,
         phone: driver.phone,
         name: driver.driver_name,
-        driver_name: driver.driver_name,
-        helper_name: driver.helper_name,
-        vehicle_number: driver.vehicle_number,
-        vehicle_type: driver.vehicle_type,
-        zone: driver.zone,
         status: driver.status
     };
 
@@ -757,7 +752,7 @@ app.post('/api/driver/orders/validate-payment', async (req, res) => {
     if (normalizedMethod === 'wallet') {
         
         // Check if organization - prefer order data, fallback to wallet lookup
-        const isOrg = customer_type === 'organization' || (wallet && wallet.customer_type === 'organization');
+        const isOrg = customer_type === 'organization';
     
 
         console.log(`💰 Wallet Check - Customer: ${customer_id}, Balance: ${wallet_balance}, Required: ${amount}, Organization: ${isOrg}`);
@@ -789,7 +784,7 @@ app.post('/api/driver/orders/validate-payment', async (req, res) => {
             });
         }
 
-        console.log(`✅ Individual wallet balance sufficient: ${walletBalance} >= ${amount}`);
+        console.log(`✅ Individual wallet balance sufficient: ${wallet_balance} >= ${amount}`);
     }
 
     console.log('✅ Payment validation successful');
@@ -1056,8 +1051,8 @@ app.post('/api/driver/direct-sales', async (req, res) => {
 // ============================================
 
 // GET /api/drivers/:driver_id/loaded-items/request
-app.get('/api/drivers/:driver_id/loaded-items/request', async (req, res) => {
-    const { driver_id } = req.params;
+app.get('/api/drivers/loaded-items/request', async (req, res) => {
+    const { driver_id } = req.query;
 
     const items = [
         {
@@ -1111,8 +1106,8 @@ app.get('/api/drivers/:driver_id/loaded-items/request', async (req, res) => {
 });
 
 // POST /api/drivers/:driver_id/loaded-items/confirm
-app.post('/api/drivers/:driver_id/loaded-items/confirm', async (req, res) => {
-    const { driver_id } = req.params;
+app.post('/api/drivers/loaded-items/confirm', async (req, res) => {
+    const { driver_id } = req.query;
     const { items, is_correct, confirmed_at } = req.body;
 
     res.status(200).json({

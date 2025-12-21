@@ -147,25 +147,6 @@ export interface Driver {
     customer_satisfaction: number;
   };
   
-  // Financial
-  earnings: {
-    daily_earnings: number;
-    weekly_earnings: number;
-    monthly_earnings: number;
-    commission_rate: number;
-    pending_payments: number;
-    total_paid: number;
-  };
-  
-  // Work Schedule
-  schedule: {
-    working_days: string[];
-    start_time: string;
-    end_time: string;
-    is_available: boolean;
-    preferred_zones: string[];
-  };
-  
   // Account Info
   account: {
     joined_date: string;
@@ -190,12 +171,7 @@ export interface Product {
   image_url: string;
   
   // Pricing
-  pricing: {
-    cost_price: number;
-    selling_price: number;
-    driver_commission?: number;
-    profit_margin?: number;
-  };
+  pricing: number;
   
   // Inventory
   inventory?: {
@@ -205,19 +181,5 @@ export interface Product {
     minimum_stock: number;
     maximum_stock: number;
     warehouse_location: string;
-  };
-  
-  // Product Details
-  details?: {
-    weight: number;
-    dimensions: {
-      length: number;
-      width: number;
-      height: number;
-    };
-    material: string;
-    brand: string;
-    expiry_date?: string;
-    batch_number?: string;
   };
 }

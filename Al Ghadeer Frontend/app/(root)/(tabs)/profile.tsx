@@ -40,11 +40,11 @@ const Profile = () => {
   };
 
   const avatar = currentDriver?.profile_image || icons.person;
-  const driverName = currentDriver?.name || user?.driver_name || user?.name || 'Driver';
-  const helperName = currentDriver?.helper_name || user?.helper_name;
-  const phone = currentDriver?.phone || user?.phone || '—';
-  const vehicleType = currentDriver?.vehicle?.type || user?.vehicle_type || '—';
-  const vehiclePlate = currentDriver?.vehicle?.plate_number || user?.vehicle_number || '—';
+  const driverName = user?.driver_name || user?.name || 'Driver';
+  const helperName = user?.helper_name;
+  const phone = user?.phone || '—';
+  const vehicleType = user?.vehicle_type || '—';
+  const vehiclePlate = user?.vehicle_number || '—';
   const zone = user?.zone || '—';
   const status = currentDriver?.status || 'online';
 
@@ -159,48 +159,15 @@ const Profile = () => {
           </View>
         </View>
 
-        {/* Quick Actions */}
-        <View style={styles.section}>
-          <Text style={styles.sectionTitle}>Quick Actions</Text>
-          <View style={styles.actionsGrid}>
-            <TouchableOpacity style={styles.actionCard} activeOpacity={0.7}>
-              <View style={[styles.actionIcon, { backgroundColor: '#EFF6FF' }]}>
-                <Ionicons name="time-outline" size={22} color="#3B82F6" />
-              </View>
-              <Text style={styles.actionLabel}>History</Text>
-            </TouchableOpacity>
-
-            <TouchableOpacity style={styles.actionCard} activeOpacity={0.7}>
-              <View style={[styles.actionIcon, { backgroundColor: '#F0FDF4' }]}>
-                <Ionicons name="wallet-outline" size={22} color="#10B981" />
-              </View>
-              <Text style={styles.actionLabel}>Earnings</Text>
-            </TouchableOpacity>
-
-            <TouchableOpacity style={styles.actionCard} activeOpacity={0.7}>
-              <View style={[styles.actionIcon, { backgroundColor: '#FEF3C7' }]}>
-                <Ionicons name="settings-outline" size={22} color="#F59E0B" />
-              </View>
-              <Text style={styles.actionLabel}>Settings</Text>
-            </TouchableOpacity>
-
-            <TouchableOpacity style={styles.actionCard} activeOpacity={0.7}>
-              <View style={[styles.actionIcon, { backgroundColor: '#F3E8FF' }]}>
-                <Ionicons name="help-circle-outline" size={22} color="#8B5CF6" />
-              </View>
-              <Text style={styles.actionLabel}>Support</Text>
-            </TouchableOpacity>
-          </View>
-        </View>
-
         {/* Sign Out */}
         <TouchableOpacity style={styles.signOutButton} onPress={onLogOut} activeOpacity={0.8}>
-          <Ionicons name="log-out-outline" size={20} color="#EF4444" />
+          <Ionicons name="log-out-outline" size={16} color="#EF4444" />
           <Text style={styles.signOutText}>Sign Out</Text>
         </TouchableOpacity>
 
         {/* App Version */}
         <Text style={styles.version}>Al Ghadeer Driver v1.0.0</Text>
+        <View style={{ height: Math.max(insets.bottom, 20) + 80 }} />
       </ScrollView>
     </View>
   );

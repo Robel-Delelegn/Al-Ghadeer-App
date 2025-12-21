@@ -228,11 +228,12 @@ const ProductList: React.FC = () => {
 
     const cartProducts: Product[] = selected.map(serverProduct => {
       let productType: "5L" | "10L" | "300ml" | "1L" | "20L" | "dispenser" = "5L";
-      if (serverProduct.unit.includes("10L")) productType = "10L";
-      else if (serverProduct.unit.includes("300ml")) productType = "300ml";
-      else if (serverProduct.unit.includes("1L")) productType = "1L";
-      else if (serverProduct.unit.includes("20L")) productType = "20L";
-      else if (serverProduct.unit.includes("dispenser")) productType = "dispenser";
+      const unit = serverProduct.unit || "";
+      if (unit.includes("10L")) productType = "10L";
+      else if (unit.includes("300ml")) productType = "300ml";
+      else if (unit.includes("1L")) productType = "1L";
+      else if (unit.includes("20L")) productType = "20L";
+      else if (unit.includes("dispenser")) productType = "dispenser";
 
       return {
         id: serverProduct.id,
@@ -240,7 +241,7 @@ const ProductList: React.FC = () => {
         type: productType,
         description: serverProduct.description,
         image_url: serverProduct.image_url || 'https://via.placeholder.com/150',
-        pricing:  serverProduct.price,
+        pricing: serverProduct.price,
         inventory: {
           current_stock: serverProduct.available_stock === "N/A" ? 999 : Number(serverProduct.available_stock),
           reserved_stock: 0,

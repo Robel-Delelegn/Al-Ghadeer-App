@@ -43,7 +43,8 @@ const OrganizationSignature: React.FC = () => {
     selectedOrder, 
     assignedOrders, 
     cartItems,
-    currentDriver
+    currentDriver,
+    updateOrderStatus
   } = useOrderStore();
   const { user } = useAuthStore();
   
@@ -199,6 +200,11 @@ const OrganizationSignature: React.FC = () => {
         throw new Error(result.message || 'Failed to confirm delivery');
       }
 
+      // Mark order as delivered and remove from assigned orders
+      if (orderDetail) {
+        updateOrderStatus(orderDetail.id, 'delivered');
+      }
+
       showSuccessAlert(
         'Delivery Confirmed',
         `Credit delivery recorded for ${organizationName}.\n\nCredit Number: ${result.credit_record.credit_number}\nAmount: AED ${result.credit_record.amount.toFixed(2)}\nNew Balance: AED ${result.credit_record.new_balance.toFixed(2)}`,
@@ -213,7 +219,7 @@ const OrganizationSignature: React.FC = () => {
     } finally {
       setIsProcessing(false);
     }
-  }, [receiverName, receiverPosition, notes, hasSignature, signatureData, orderDetail, cartItems, totalWithVat, currentDriver, organizationName, router]);
+  }, [receiverName, receiverPosition, notes, hasSignature, signatureData, orderDetail, cartItems, totalWithVat, currentDriver, organizationName, router, updateOrderStatus]);
 
   const signatureStyle = `.m-signature-pad {
     box-shadow: none;

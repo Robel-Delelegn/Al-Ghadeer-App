@@ -46,7 +46,7 @@ const DeliveryHistory = () => {
     const fetchHistory = async () => {
       try {
         setLoading(true);
-        const url = `${IP_ADDRESS}/driver/?${user?.id}`;
+        const url = `${IP_ADDRESS}/driver/history?driver_id=${user?.id}`;
         const response = await fetch(url);
 
         if (!response.ok) {

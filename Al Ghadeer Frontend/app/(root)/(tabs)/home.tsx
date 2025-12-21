@@ -41,9 +41,12 @@ const Home = ({ navigation }: HomeProps) => {
   const today = new Date();
   const [searchQuery, setSearchQuery] = useState('');
   const [hasPermission, setHasPermission] = useState(false);
-  const [deliveries, setDeliveries] = useState<Order[]>([]);
   const [isloading, setIsloading] = useState(true);
   const [isProfileModalVisible, setIsProfileModalVisible] = useState(false);
+  
+  // Use assignedOrders from store as the source of truth
+  // This will automatically update when orders are completed/failed
+  const deliveries = assignedOrders;
   
   // Helper function to check if order is currently available
   const isOrderCurrentlyAvailable = (order: Order) => {
@@ -204,7 +207,7 @@ const Home = ({ navigation }: HomeProps) => {
           total_amount: sortedOrders[0].total_amount
         } : 'No orders');
 
-        setDeliveries(sortedOrders);
+        // Update assignedOrders in store (this is the source of truth)
         setAssignedOrders(sortedOrders);
 
         // Initialize driver data if not exists

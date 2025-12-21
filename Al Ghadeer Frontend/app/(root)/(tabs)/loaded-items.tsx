@@ -65,7 +65,7 @@ const LoadedItems = () => {
     setIsLoading(true);
     
     try {
-      const endpoint = `${API_BASE_URL}/drivers/${currentDriver.id}/loaded-items/request`;
+      const endpoint = `${API_BASE_URL}/drivers/loaded-items/request/?driver_id=${currentDriver.id}`;
       const response = await fetch(endpoint, {
         method: 'GET',
         headers: { 'Content-Type': 'application/json' }
@@ -102,7 +102,7 @@ const LoadedItems = () => {
     setIsConfirming(true);
     
     try {
-      const endpoint = `${API_BASE_URL}/drivers/${currentDriver.id}/loaded-items/confirm`;
+      const endpoint = `${API_BASE_URL}/drivers/loaded-items/confirm/?driver_id=${currentDriver.id}`;
       const response = await fetch(endpoint, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },

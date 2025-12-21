@@ -186,33 +186,51 @@ export const useOrderStore = create<OrderStore>()(persist(
     },
     
     updateOrderStatus: (id: string, status: Order['status'], failureReason?: string, failureNote?: string) => {
-      set((state) => ({
-        assignedOrders: state.assignedOrders.map(o =>
-          o.id === id
-            ? { 
-                ...o, 
-                status,
-                delivery: {
-                  ...o.delivery,
-                  ...(status === 'failed' ? { failure_reason: failureReason, failure_note: failureNote } : {}),
-                  ...(status === 'delivered' ? { delivered_at: new Date().toISOString() } : {}),
-                  ...(status === 'in_progress' ? { started_at: new Date().toISOString() } : {})
-                }
-              }
-            : o
-        )
-      }));
+      set((state) => {
+        const order = state.assignedOrders.find(o => o.id === id);
+        if (!order) return state;
+
+        const updatedOrder: Order = {
+          ...order,
+          status,
+          delivery: {
+            ...order.delivery,
+            distance_km: order.delivery?.distance_km ?? order.distance_km ?? 0,
+            delivery_zone: order.delivery?.delivery_zone ?? order.delivery_zone ?? 'General',
+            ...(status === 'failed' ? { failure_reason: failureReason, failure_note: failureNote } : {}),
+            ...(status === 'delivered' ? { delivered_at: new Date().toISOString() } : {}),
+            ...(status === 'in_progress' ? { started_at: new Date().toISOString() } : {})
+          }
+        };
+
+        // If order is delivered or failed, remove from assignedOrders and add to completedOrders
+        if (status === 'delivered' || status === 'failed') {
+          return {
+            assignedOrders: state.assignedOrders.filter(o => o.id !== id),
+            completedOrders: [...state.completedOrders, updatedOrder]
+          };
+        }
+
+        // Otherwise, just update the status in assignedOrders
+        return {
+          assignedOrders: state.assignedOrders.map(o =>
+            o.id === id ? updatedOrder : o
+          )
+        };
+      });
     },
     
     completeOrder: (orderId: string) => {
       set((state) => {
         const order = state.assignedOrders.find(o => o.id === orderId);
         if (order) {
-          const completedOrder = {
+          const completedOrder: Order = {
             ...order,
             status: 'delivered' as Order['status'],
             delivery: {
               ...order.delivery,
+              distance_km: order.delivery?.distance_km ?? order.distance_km ?? 0,
+              delivery_zone: order.delivery?.delivery_zone ?? order.delivery_zone ?? 'General',
               delivered_at: new Date().toISOString()
             }
           };
@@ -331,7 +349,7 @@ export const useOrderStore = create<OrderStore>()(persist(
           };
         } else {
           // Safe access to pricing with fallback
-          const price = product.pricing?.selling_price || 0;
+          const price = product.pricing;
           const imageUrl = product.image_url || 'https://via.placeholder.com/150';
           
           console.log('Adding product to cart:', {
@@ -348,7 +366,7 @@ export const useOrderStore = create<OrderStore>()(persist(
               name: product.name,
               image: { uri: imageUrl },
               price: price,
-              quantity,
+              quantity: quantity,
               currency: 'AED',
               type: product.type
             }]

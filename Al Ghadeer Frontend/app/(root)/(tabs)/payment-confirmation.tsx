@@ -42,7 +42,8 @@ const PaymentConfirmation: React.FC = () => {
     selectedOrder, 
     assignedOrders, 
     cartItems,
-    selectedPaymentMethod
+    selectedPaymentMethod,
+    updateOrderStatus
   } = useOrderStore();
   
   const orderDetail = assignedOrders.find(item => selectedOrder === item.id) as Order | undefined;
@@ -137,6 +138,11 @@ const PaymentConfirmation: React.FC = () => {
         throw new Error(result.message || 'Payment confirmation failed');
       }
 
+      // Mark order as delivered and remove from assigned orders
+      if (orderDetail) {
+        updateOrderStatus(orderDetail.id, 'delivered');
+      }
+
       showSuccessAlert(
         'Payment Successful', 
         result.message || `Order ${result.order.order_number} confirmed.`,
@@ -151,7 +157,7 @@ const PaymentConfirmation: React.FC = () => {
     } finally {
       setIsProcessing(false);
     }
-  }, [orderDetail, cartItems, subtotal, vat, totalWithVat, selectedPaymentMethod, router]);
+  }, [orderDetail, cartItems, subtotal, vat, totalWithVat, selectedPaymentMethod, router, updateOrderStatus]);
 
   const customerName = orderDetail?.customer_name || 'Customer';
   const customerAddress = orderDetail?.customer_address || '—';
