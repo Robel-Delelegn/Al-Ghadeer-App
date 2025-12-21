@@ -40,12 +40,13 @@ const Profile = () => {
   };
 
   const avatar = currentDriver?.profile_image || icons.person;
-  const driverName = user?.driver_name || user?.name || 'Driver';
-  const helperName = user?.helper_name;
-  const phone = user?.phone || '—';
-  const vehicleType = user?.vehicle_type || '—';
-  const vehiclePlate = user?.vehicle_number || '—';
-  const zone = user?.zone || '—';
+  const driverName = currentDriver?.name || user?.driver_name || user?.name || 'Driver';
+  const helperName = currentDriver?.helper_name || user?.helper_name;
+  const helperPhone = (currentDriver as any)?.helper_phone || '—';
+  const phone = currentDriver?.phone || user?.phone || '—';
+  const vehicleType = currentDriver?.vehicle?.type || user?.vehicle_type || '—';
+  const vehiclePlate = currentDriver?.vehicle?.plate_number || user?.vehicle_number || '—';
+  const zone = (currentDriver as any)?.zone || user?.zone || '—';
   const status = currentDriver?.status || 'online';
 
   const stats = useMemo(() => {
@@ -147,6 +148,18 @@ const Profile = () => {
           <View style={styles.infoCard}>
             <InfoItem icon="call-outline" label="Phone" value={phone} />
             <View style={styles.infoDivider} />
+            {helperName && (
+              <>
+                <InfoItem icon="people-outline" label="Helper" value={helperName} />
+                {helperPhone !== '—' && (
+                  <>
+                    <View style={styles.infoDivider} />
+                    <InfoItem icon="call-outline" label="Helper Phone" value={helperPhone} />
+                  </>
+                )}
+                <View style={styles.infoDivider} />
+              </>
+            )}
             <InfoItem icon="car-outline" label="Vehicle" value={vehicleType} />
             <View style={styles.infoDivider} />
             <InfoItem icon="document-text-outline" label="Plate" value={vehiclePlate} />

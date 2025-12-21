@@ -11,7 +11,7 @@ const TabIcon = ({
   source: ImageSourcePropType;
   focused: boolean;
 }) => (
-  <View className={`flex flex-row justify-center items-center rounded-full ${focused ? '' : ''}`}>
+  <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center' }}>
     <View className={`rounded-2xl w-12 h-12 items-center justify-center ${focused ? 'bg-[#0286FF]' : 'bg-[#0F172A]'} `}
       style={{ shadowColor: '#0F172A', shadowOpacity: focused ? 0.2 : 0.1, shadowRadius: 10, shadowOffset: { width: 0, height: 6 }, elevation: 4 }}>
       <Image
@@ -38,17 +38,25 @@ export default function Layout() {
         ),
         tabBarStyle: {
           backgroundColor: 'rgba(255,255,255,0.6)',
-          borderRadius: 28,
-          paddingBottom: 6,
+          borderRadius: 26,
+          paddingBottom: 2,
+          paddingTop: 8,
+          paddingHorizontal: 0,
           overflow: 'hidden',
-          marginHorizontal: 16,
-          height: 70,
+          marginHorizontal: 20,
+          height: 60,
           justifyContent: 'space-between',
           alignItems: 'center',
           flexDirection: 'row',
           position: 'absolute',
-          bottom: insets.bottom + 10,
+          bottom: insets.bottom ,
           borderTopWidth: 0,
+        },
+        tabBarItemStyle: {
+          flex: 1,
+          justifyContent: 'center',
+          alignItems: 'center',
+          height: '100%',
         },
       }}
     >
@@ -100,6 +108,13 @@ export default function Layout() {
       {/* Hidden screens not shown in tab bar */}
       <Tabs.Screen
         name="add-products"
+        options={{
+          headerShown: false,
+          href: null, // Hide from tab bar
+        }}
+      />
+      <Tabs.Screen
+        name="organization-signature"
         options={{
           headerShown: false,
           href: null, // Hide from tab bar

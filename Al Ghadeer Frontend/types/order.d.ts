@@ -24,14 +24,6 @@ export interface Order {
   // Product Details (Dynamic structure - can contain any product names and quantities)
   products?: Record<string, number>;
   
-  // Legacy flat product fields (for backward compatibility)
-  five_litre_bottles?: number;
-  ten_litre_bottles?: number;
-  three_hundred_ml_bottles?: number;
-  one_litre_bottles?: number;
-  twenty_litre_bottles?: number;
-  water_dispenser?: number;
-  
   // Pricing & Payment (Embedded - for backward compatibility)
   pricing?: {
     subtotal: number;
@@ -111,9 +103,9 @@ export interface Order {
 export interface Driver {
   // Basic Info
   id: string;
-  clerk_id: string;
   name: string;
   helper_name?: string;
+  helper_phone?: string;
   phone: string;
   profile_image?: string;
   
@@ -121,44 +113,17 @@ export interface Driver {
   vehicle: {
     type: string;
     plate_number: string;
-    model: string;
-    year: number;
-    capacity: number;
   };
   
   // Status & Location
-  status: 'online' | 'offline' | 'busy' | 'unavailable';
+  status: 'online' | 'offline';
   current_location: {
     latitude: number;
     longitude: number;
     address: string;
     updated_at: string;
   };
-  
-  // Performance Metrics
-  metrics: {
-    total_deliveries: number;
-    completed_deliveries: number;
-    failed_deliveries: number;
-    average_rating: number;
-    total_earnings: number;
-    total_distance_km: number;
-    average_delivery_time: number;
-    customer_satisfaction: number;
-  };
-  
-  // Account Info
-  account: {
-    joined_date: string;
-    last_active: string;
-    is_active: boolean;
-    emergency_contact: string;
-    bank_details?: {
-      account_number: string;
-      bank_name: string;
-      branch_code: string;
-    };
-  };
+  zone?: string;
 }
 
 // Product Structure

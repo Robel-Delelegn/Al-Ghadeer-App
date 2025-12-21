@@ -48,10 +48,11 @@ const drivers = [
         status: 'approved'
     },
     {
-        id: 'driver_002',
+        id: 'b97f3fc1-0708-4b97-bf5d-deb424b2cd93',
         phone: '+971501234568',
         driver_name: 'Fatima Noor',
         helper_name: 'Salem Mansoor',
+        helper_phone: '+97150123492',
         vehicle_number: 'DXB-67890',
         vehicle_type: 'Van',
         zone: 'Jumeirah',
@@ -497,6 +498,44 @@ app.get('/api/driver/orders', async (req, res) => {
     res.status(200).json({
         success: true,
         data: orders
+    });
+});
+
+// GET /api/driver/info
+app.get('/api/driver/info', async (req, res) => {
+    const { driver_id } = req.query;
+
+    console.log('\n👤 Driver Info Request');
+    console.log('Driver ID:', driver_id);
+
+    // Find driver by ID or phone
+    const driver = drivers.find(d => d.id === driver_id || d.phone === driver_id);
+    
+    if (!driver) {
+        return res.status(404).json({
+            success: false,
+            message: 'Driver not found'
+        });
+    }
+
+    // Return driver info with helper phone (mock data)
+    const driverInfo = {
+        id: driver.id,
+        driver_number: driver.id,
+        name: driver.driver_name,
+        helper_name: driver.helper_name || '',
+        helper_phone: driver.helper_phone || '+971501234500', // Mock helper phone
+        vehicle_name: driver.vehicle_type,
+        vehicle_id: driver.vehicle_id || driver.id + '_vehicle', // Mock vehicle ID
+        vehicle_plate: driver.vehicle_number,
+        zone: driver.zone,
+        status: driver.status === 'approved' ? 'online' : 'offline',
+        phone: driver.phone
+    };
+
+    res.status(200).json({
+        success: true,
+        data: driverInfo
     });
 });
 

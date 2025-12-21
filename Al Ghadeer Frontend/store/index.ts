@@ -1,5 +1,5 @@
 import { Driver, Order, Product } from "@/types/order";
-import { DriverStore, LocationStore, MarkerData } from "@/types/type";
+import { LocationStore } from "@/types/type";
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { create } from "zustand";
 import { createJSONStorage, persist } from "zustand/middleware";
@@ -65,35 +65,9 @@ interface CartItem {
   type: '5L' | '10L' | '300ml' | '1L' | '20L' | 'dispenser';
 }
 
-interface ShippingDetails {
-  name: string;
-  address: string;
-  contact: string;
-}
-
-interface PaymentMethod {
-  id: string;
-  name: string;
-  selected: boolean;
-  icon: string;
-}
-
-interface OrderSummary {
-  orderId: string;
-  cartItems: CartItem[];
-  shippingDetails: ShippingDetails;
-  selectedPaymentMethod: string;
-  subtotal: string;
-  vat: string;
-  totalWithVat: string;
-  paymentDate?: string;
-  status: 'pending' | 'confirmed' | 'processing' | 'completed' | 'failed';
-}
-
 // Enhanced Order Store with new Order structure
 interface OrderStore {
   // Order management
-  availableOrders: Order[];
   assignedOrders: Order[];
   selectedOrder: string | null;
   completedOrders: Order[];
@@ -110,17 +84,22 @@ interface OrderStore {
   
   // Order actions
   selectOrder: (id: string) => void;
-  acceptOrder: (id: string) => void;
   updateOrderStatus: (id: string, status: Order['status'], failureReason?: string, failureNote?: string) => void;
   setAssignedOrders: (orders: Order[]) => void;
-  setAvailableOrders: (orders: Order[]) => void;
-  completeOrder: (orderId: string) => void;
   
   // Driver actions
-  setCurrentDriver: (driver: Driver) => void;
-  initializeDriver: (user: any) => void;
-  updateDriverStatus: (status: Driver['status']) => void;
-  updateDriverLocation: (latitude: number, longitude: number, address: string) => void;
+  updateDriverInfo: (info: {
+    driver_number: string;
+    name: string;
+    helper_name: string;
+    helper_phone: string;
+    vehicle_name: string;
+    vehicle_id: string;
+    vehicle_plate: string;
+    zone: string;
+    status: 'online' | 'offline';
+    phone: string;
+  }) => void;
   
   // Product actions
   setProducts: (products: Product[]) => void;
@@ -140,7 +119,6 @@ interface OrderStore {
 export const useOrderStore = create<OrderStore>()(persist(
   (set, get) => ({
     // Order management state
-    availableOrders: [],
     assignedOrders: [],
     selectedOrder: null,
     completedOrders: [],
@@ -158,31 +136,9 @@ export const useOrderStore = create<OrderStore>()(persist(
     
     // Order management actions
     setAssignedOrders: (orders) => set(() => ({ assignedOrders: orders })),
-    setAvailableOrders: (orders) => set(() => ({ availableOrders: orders })),
     
     selectOrder: (id: string) => {
       set({ selectedOrder: id });
-    },
-    
-    acceptOrder: (id: string) => {
-      set((state) => {
-        const order = state.availableOrders.find(o => o.id === id);
-        if (order) {
-          const updatedOrder = {
-            ...order,
-            status: 'assigned' as Order['status'],
-            tracking: {
-              ...order.tracking,
-              assigned_at: new Date().toISOString()
-            }
-          };
-          return {
-            availableOrders: state.availableOrders.filter(o => o.id !== id),
-            assignedOrders: [...state.assignedOrders, updatedOrder]
-          };
-        }
-        return state;
-      });
     },
     
     updateOrderStatus: (id: string, status: Order['status'], failureReason?: string, failureNote?: string) => {
@@ -220,109 +176,35 @@ export const useOrderStore = create<OrderStore>()(persist(
       });
     },
     
-    completeOrder: (orderId: string) => {
-      set((state) => {
-        const order = state.assignedOrders.find(o => o.id === orderId);
-        if (order) {
-          const completedOrder: Order = {
-            ...order,
-            status: 'delivered' as Order['status'],
-            delivery: {
-              ...order.delivery,
-              distance_km: order.delivery?.distance_km ?? order.distance_km ?? 0,
-              delivery_zone: order.delivery?.delivery_zone ?? order.delivery_zone ?? 'General',
-              delivered_at: new Date().toISOString()
-            }
-          };
-          return {
-            assignedOrders: state.assignedOrders.filter(o => o.id !== orderId),
-            completedOrders: [...state.completedOrders, completedOrder]
-          };
-        }
-        return state;
-      });
-    },
-    
     // Driver management actions
-    setCurrentDriver: (driver: Driver) => {
-      set({ currentDriver: driver });
-    },
-    
-    initializeDriver: (user: any) => {
-      const driverData: Driver = {
-        id: user.id || "b97f3fc1-0708-4b97-bf5d-deb424b2cd93",
-        clerk_id: user.id, // Keep for backward compatibility, but will use user.id from auth
-        name: user.driver_name || user.name || user.fullName || 'Driver',
-        helper_name: user.helper_name || '',
-        phone: user.phone || '',
-        profile_image: user.profile_image || user.imageUrl,
-        vehicle: {
-          type: user.vehicle_type || 'Van',
-          plate_number: user.vehicle_number || 'N/A',
-          model: user.vehicle_type || 'N/A',
-          year: 2020,
-          capacity: 1000
-        },
-        status: user.status || 'online',
-        current_location: {
-          latitude: 0,
-          longitude: 0,
-          address: '',
-          updated_at: new Date().toISOString()
-        },
-        metrics: {
-          total_deliveries: 0,
-          completed_deliveries: 0,
-          failed_deliveries: 0,
-          average_rating: 0,
-          total_earnings: 0,
-          total_distance_km: 0,
-          average_delivery_time: 0,
-          customer_satisfaction: 0
-        },
-        earnings: {
-          daily_earnings: 0,
-          weekly_earnings: 0,
-          monthly_earnings: 0,
-          commission_rate: 0.15,
-          pending_payments: 0,
-          total_paid: 0
-        },
-        schedule: {
-          working_days: ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'],
-          start_time: '08:00',
-          end_time: '18:00',
-          is_available: true,
-          preferred_zones: []
-        },
-        account: {
-          joined_date: new Date().toISOString(),
-          last_active: new Date().toISOString(),
-          is_active: true,
-          emergency_contact: ''
-        }
-      };
-      set({ currentDriver: driverData });
-    },
-    
-    updateDriverStatus: (status: Driver['status']) => {
-      set((state) => ({
-        currentDriver: state.currentDriver ? { ...state.currentDriver, status } : null
-      }));
-    },
-    
-    updateDriverLocation: (latitude: number, longitude: number, address: string) => {
-      set((state) => ({
-        currentDriver: state.currentDriver ? {
-          ...state.currentDriver,
-          current_location: {
-            latitude,
-            longitude,
-            address,
+    updateDriverInfo: (info) => {
+      set((state) => {
+        // Create a completely new driver object to ensure Zustand detects the change
+        // This is critical for React to detect the update and re-render
+        console.log('Updating driver info:', info);
+        const updatedDriver: Driver = {
+          id: info.driver_number,
+          name: info.name,
+          helper_name: info.helper_name || undefined,
+          helper_phone: info.helper_phone || undefined,
+          phone: info.phone,
+          profile_image: state.currentDriver?.profile_image,
+          vehicle: {
+            type: info.vehicle_name,
+            plate_number: info.vehicle_plate
+          },
+          status: info.status,
+          current_location: state.currentDriver?.current_location || {
+            latitude: 0,
+            longitude: 0,
+            address: '',
             updated_at: new Date().toISOString()
-          }
-        } : null
-      }));
+          },
+          zone: info.zone || undefined
+        };
+        
+        return { currentDriver: updatedDriver };
+      });
     },
     
     // Product management actions
@@ -332,11 +214,7 @@ export const useOrderStore = create<OrderStore>()(persist(
     
     addToCart: (product: Product, quantity: number) => {
       set((state) => {
-        // Validate product structure
-        if (!product || !product.id || !product.name) {
-          console.error('Invalid product passed to addToCart:', product);
-          return state;
-        }
+        if (!product?.id || !product?.name) return state;
 
         const existingItem = state.cartItems.find(item => item.id === product.id);
         if (existingItem) {
@@ -347,31 +225,19 @@ export const useOrderStore = create<OrderStore>()(persist(
                 : item
             )
           };
-        } else {
-          // Safe access to pricing with fallback
-          const price = product.pricing;
-          const imageUrl = product.image_url || 'https://via.placeholder.com/150';
-          
-          console.log('Adding product to cart:', {
+        }
+
+        return {
+          cartItems: [...state.cartItems, {
             id: product.id,
             name: product.name,
-            price: price,
+            image: { uri: product.image_url || 'https://via.placeholder.com/150' },
+            price: typeof product.pricing === 'number' ? product.pricing : 0,
             quantity: quantity,
-            imageUrl: imageUrl
-          });
-
-          return {
-            cartItems: [...state.cartItems, {
-              id: product.id,
-              name: product.name,
-              image: { uri: imageUrl },
-              price: price,
-              quantity: quantity,
-              currency: 'AED',
-              type: product.type
-            }]
-          };
-        }
+            currency: 'AED',
+            type: product.type
+          }]
+        };
       });
     },
     

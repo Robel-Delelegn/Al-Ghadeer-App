@@ -24,29 +24,32 @@ interface ApiResponse {
   data: Order[];
 }
 
-interface HomeProps {
-  navigation: {
-    navigate: (screen: string, params?: any) => void;
-  };
-}
-
-const Home = ({ navigation }: HomeProps) => {
+const Home = () => {
   const { user } = useAuthStore();
-  const { setAssignedOrders, selectedOrder, selectOrder, assignedOrders, initializeDriver, currentDriver } = useOrderStore();
+  const { setAssignedOrders, selectOrder, assignedOrders, updateDriverInfo, currentDriver } = useOrderStore();
   const router = useRouter();
   const { setUserLocation } = useLocationStore();
-  const driverName = user?.driver_name || user?.name || user?.phone || 'Driver';
-  const helperName = user?.helper_name;
-  const avatar = icons.person;
+  
+  // Use useMemo to ensure these values update when currentDriver changes
+  // Depend on currentDriver object itself, not nested properties, for proper reactivity
+  const driverName = React.useMemo(
+    () => currentDriver?.name || user?.driver_name || user?.name || user?.phone || 'Driver',
+    [currentDriver, user?.driver_name, user?.name, user?.phone]
+  );
+  
+  const helperName = React.useMemo(
+    () => currentDriver?.helper_name || user?.helper_name || '',
+    [currentDriver, user?.helper_name]
+  );
+  
+  const avatar = React.useMemo(
+    () => currentDriver?.profile_image || icons.person,
+    [currentDriver]
+  );
   const today = new Date();
   const [searchQuery, setSearchQuery] = useState('');
-  const [hasPermission, setHasPermission] = useState(false);
   const [isloading, setIsloading] = useState(true);
   const [isProfileModalVisible, setIsProfileModalVisible] = useState(false);
-  
-  // Use assignedOrders from store as the source of truth
-  // This will automatically update when orders are completed/failed
-  const deliveries = assignedOrders;
   
   // Helper function to check if order is currently available
   const isOrderCurrentlyAvailable = (order: Order) => {
@@ -69,58 +72,50 @@ const Home = ({ navigation }: HomeProps) => {
   };
   
   // Count currently available orders
-  const availableOrdersCount = deliveries.filter(isOrderCurrentlyAvailable).length;
+  const availableOrdersCount = React.useMemo(
+    () => assignedOrders.filter(isOrderCurrentlyAvailable).length,
+    [assignedOrders]
+  );
 
   // Filter deliveries based on search query
   const filteredDeliveries = React.useMemo(() => {
     if (!searchQuery.trim()) {
-      return deliveries;
+      return assignedOrders;
     }
 
     const query = searchQuery.toLowerCase().trim();
-    return deliveries.filter((order) => {
-      // Search in customer name
-      if (order.customer_name?.toLowerCase().includes(query)) return true;
-      
-      // Search in customer phone
-      if (order.customer_phone?.toLowerCase().includes(query)) return true;
-      
-      // Search in customer address
-      if (order.customer_address?.toLowerCase().includes(query)) return true;
-      
-      // Search in order number
-      if (order.order_number?.toLowerCase().includes(query)) return true;
-      
-      // Search in customer site ID
-      if (order.customer_site_id?.toLowerCase().includes(query)) return true;
-      
-      // Search in delivery zone
-      if (order.delivery_zone?.toLowerCase().includes(query)) return true;
-      
-      // Search in customer email
-      if (order.customer_email?.toLowerCase().includes(query)) return true;
-      
-      return false;
-    });
-  }, [deliveries, searchQuery]);
+    const searchFields = [
+      'customer_name',
+      'customer_phone',
+      'customer_address',
+      'order_number',
+      'customer_site_id',
+      'delivery_zone',
+      'customer_email'
+    ];
+
+    return assignedOrders.filter((order) =>
+      searchFields.some(field => {
+        const value = order[field as keyof Order];
+        return typeof value === 'string' && value.toLowerCase().includes(query);
+      })
+    );
+  }, [assignedOrders, searchQuery]);
 
 
   useEffect(() => {
     const requestLocation = async () => {
-      let { status } = await Location.requestForegroundPermissionsAsync();
-      if (status !== "granted") {
-        setHasPermission(false);
-        return;
-      }
-      setHasPermission(true);
-      let location = await Location.getCurrentPositionAsync();
+      const { status } = await Location.requestForegroundPermissionsAsync();
+      if (status !== "granted") return;
+
+      const location = await Location.getCurrentPositionAsync();
       const address = await Location.reverseGeocodeAsync({
-        latitude: location.coords?.latitude,
-        longitude: location.coords?.longitude,
+        latitude: location.coords.latitude,
+        longitude: location.coords.longitude,
       });
       setUserLocation({
-        latitude: location.coords?.latitude, 
-        longitude: location.coords?.longitude, 
+        latitude: location.coords.latitude, 
+        longitude: location.coords.longitude, 
         address: `${address[0]?.name || ''}, ${address[0]?.region || ''}`
       });
     };
@@ -131,102 +126,74 @@ const Home = ({ navigation }: HomeProps) => {
     selectOrder(id)
     router.push("/(root)/(tabs)/order-details")
   }
+  // Helper function to parse time string to minutes
+  const parseTime = React.useCallback((timeStr: string): number => {
+    if (timeStr.includes(':')) {
+      const [hours, minutes] = timeStr.split(':').map(Number);
+      return hours * 60 + minutes;
+    }
+    return new Date(timeStr).getTime();
+  }, []);
+
   useEffect(() => {
+    const driverId = user?.id || currentDriver?.id;
+
     const fetchDeliveries = async () => {
       try {
         setIsloading(true);
-        
-        // Debug logging
-        console.log('IP_ADDRESS:', IP_ADDRESS);
-        console.log('Current Driver:', currentDriver);
-        
-        // Build URL with driver_id parameter if available
-        let url = `${IP_ADDRESS}/driver/orders`;
-        
-        // Use authenticated user's ID
-        const driverId = user?.id || currentDriver?.id || 'b97f3fc1-0708-4b97-bf5d-deb424b2cd93';
-        url += `?driver_id=${driverId}`;
-       
-        console.log('Fetching from URL:', url);
-        
-        // Fetch data from Express API
+        const url = `${IP_ADDRESS}/driver/orders?driver_id=${driverId}`;
         const response = await fetch(url);
-        console.log('Response status:', response.status);
-        console.log('Response ok:', response.ok);
 
-        // If response is not OK, throw error
         if (!response.ok) {
           throw new Error(`HTTP error! Status: ${response.status}`);
         }
         
-        // Parse the new API response format
         const apiResponse: ApiResponse = await response.json();
-        console.log('API Response:', apiResponse);
         
         if (!apiResponse.success || !apiResponse.data) {
           throw new Error('Invalid API response format');
         }
         
-        // Transform the flat structure to match our Order interface
         const transformedOrders: Order[] = apiResponse.data.map(order => ({
           ...order,
-          // Keep products as-is if it exists, otherwise create empty object
           products: order.products || {}, 
-          // Ensure customer_site_id is included
           customer_site_id: order.customer_site_id,
         }));
         
-        // Sort orders by start_time (availability)
         const sortedOrders = transformedOrders.sort((a, b) => {
-          // Handle orders without start_time by putting them at the end
           if (!a.start_time && !b.start_time) return 0;
           if (!a.start_time) return 1;
           if (!b.start_time) return -1;
-          
-          // Convert "18:30" format to comparable time
-          const parseTime = (timeStr: string) => {
-            if (timeStr.includes(':')) {
-              const [hours, minutes] = timeStr.split(':');
-              return parseInt(hours, 10) * 60 + parseInt(minutes, 10);
-            }
-            // Fallback for other formats
-            return new Date(timeStr).getTime();
-          };
-          
-          // Sort by start_time (earliest first)
           return parseTime(a.start_time) - parseTime(b.start_time);
         });
-        
-        console.log('Transformed orders:', sortedOrders.length, 'orders');
-        console.log('Sample order with availability:', sortedOrders[0] ? {
-          id: sortedOrders[0].id,
-          customer_name: sortedOrders[0].customer_name,
-          customer_site_id: sortedOrders[0].customer_site_id,
-          start_time: sortedOrders[0].start_time,
-          end_time: sortedOrders[0].end_time,
-          total_amount: sortedOrders[0].total_amount
-        } : 'No orders');
 
-        // Update assignedOrders in store (this is the source of truth)
         setAssignedOrders(sortedOrders);
-
-        // Initialize driver data if not exists
-        if (user && !currentDriver) {
-          initializeDriver(user);
-        }
-
       } catch (err) {
         console.error('Error fetching orders:', err);
-        console.error('Error details:', err instanceof Error ? err.message : 'Unknown error');
-        console.error('Error stack:', err instanceof Error ? err.stack : 'No stack trace');
       } finally {
         setIsloading(false);
       }
     };
 
-    // Call the async function
+    const fetchDriverInfo = async () => {
+      try {
+        const url = `${IP_ADDRESS}/driver/info?driver_id=${driverId}`;
+        const response = await fetch(url);
+        console.log('Driver info response:', response);
+        if (!response.ok) return;
+        
+        const apiResponse = await response.json();
+        if (apiResponse.success && apiResponse.data) {
+          updateDriverInfo(apiResponse.data);
+        }
+      } catch (err) {
+        // Silently fail - driver info is not critical
+      }
+    };
+
     fetchDeliveries();
-  }, [user, IP_ADDRESS, setAssignedOrders, initializeDriver, currentDriver]);
+    fetchDriverInfo();
+  }, [user?.id, currentDriver?.id, IP_ADDRESS, setAssignedOrders, updateDriverInfo, parseTime]);
   return (
     <GestureHandlerRootView style={{ flex: 1 }}>
       <View className="flex-1 bg-white">
@@ -327,7 +294,7 @@ const Home = ({ navigation }: HomeProps) => {
               )}
               <View className="bg-[#0286FF] rounded-full px-3 py-1">
                 <Text className="text-sm text-white font-JakartaSemiBold">
-                  {searchQuery ? `${filteredDeliveries.length} found` : `${deliveries.length} total`}
+                  {searchQuery ? `${filteredDeliveries.length} found` : `${assignedOrders.length} total`}
                 </Text>
               </View>
             </View>
