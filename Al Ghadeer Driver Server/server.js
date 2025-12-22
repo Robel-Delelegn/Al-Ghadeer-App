@@ -1,12 +1,71 @@
 require('dotenv').config();
 
 const express = require('express');
-const cors = require('cors'); 
+const cors = require('cors');
+const stripe = require('stripe')(process.env.STRIPE_SECRET_KEY || 'sk_test_placeholder'); 
 
 const app = express();
 const port = process.env.PORT || 3000;
 
 // --- Middleware ---
+// Stripe webhook needs raw body, so handle it before JSON parser
+app.post('/api/payments/webhook', express.raw({ type: 'application/json' }), async (req, res) => {
+    const sig = req.headers['stripe-signature'];
+    const webhookSecret = process.env.STRIPE_WEBHOOK_SECRET;
+
+    console.log('\n🔔 Stripe Webhook Received');
+
+    // If webhook secret is configured, verify the signature
+    let event;
+    if (webhookSecret) {
+        try {
+            event = stripe.webhooks.constructEvent(req.body, sig, webhookSecret);
+        } catch (err) {
+            console.error('❌ Webhook signature verification failed:', err.message);
+            return res.status(400).send(`Webhook Error: ${err.message}`);
+        }
+    } else {
+        // For testing without webhook secret, parse JSON directly
+        try {
+            event = JSON.parse(req.body.toString());
+        } catch (err) {
+            console.error('❌ Failed to parse webhook body:', err.message);
+            return res.status(400).send(`Webhook Error: ${err.message}`);
+        }
+    }
+
+    console.log('Event type:', event.type);
+
+    // Handle the event
+    if (event.type === 'checkout.session.completed') {
+        const session = event.data.object;
+        console.log('✅ Checkout session completed:', session.id);
+        console.log('Payment status:', session.payment_status);
+        console.log('Order ID:', session.metadata?.orderId);
+
+        // Update stored session
+        const storedSession = paymentSessions.get(session.id);
+        if (storedSession) {
+            storedSession.payment_status = session.payment_status;
+            storedSession.order_number = `ORD-${Date.now()}`;
+            if (session.payment_status === 'paid') {
+                storedSession.paid_at = new Date().toISOString();
+            }
+            paymentSessions.set(session.id, storedSession);
+            console.log('✅ Payment session updated in storage');
+        }
+
+        // In production, here you would:
+        // 1. Update order status in database
+        // 2. Send confirmation email
+        // 3. Update inventory
+        // etc.
+    }
+
+    // Return a response to acknowledge receipt of the event
+    res.json({ received: true });
+});
+
 app.use(express.json({ limit: '50mb' })); // Increased limit for base64 images
 app.use(express.urlencoded({ extended: true, limit: '50mb' }));
 
@@ -711,6 +770,9 @@ const customerWallets = {
 // Organization credit records (tracks signed credit deliveries)
 const organizationCredits = [];
 
+// Payment sessions storage (checkoutSessionId -> order data)
+const paymentSessions = new Map();
+
 // Helper function to get customer wallet balance
 function getCustomerWallet(customerId) {
     return customerWallets[customerId] || customerWallets['default'];
@@ -842,6 +904,29 @@ app.post('/api/driver/orders/validate-payment', async (req, res) => {
 app.post('/api/driver/orders/confirm-payment', async (req, res) => {
     const { driver_id } = req.query;
     const orderData = req.body;
+
+    // Check if this is a Stripe credit card payment that needs webhook confirmation
+    if (orderData.payment_method === 'credit_card' && orderData.checkout_session_id) {
+        // Payment already completed via Stripe webhook
+        const sessionData = paymentSessions.get(orderData.checkout_session_id);
+        if (sessionData && sessionData.payment_status === 'paid') {
+            const order = {
+                id: sessionData.order_id || `order_${Date.now()}`,
+                order_number: sessionData.order_number || `ORD-${Date.now()}`,
+                created_at: new Date().toISOString(),
+                total_amount: orderData.total_amount,
+                payment_method: orderData.payment_method,
+                status: 'completed',
+                payment_status: 'paid'
+            };
+
+            return res.status(201).json({
+                success: true,
+                message: `Order ${order.order_number} has been confirmed and payment received.`,
+                order: order
+            });
+        }
+    }
 
     const order = {
         id: `order_${Date.now()}`,
@@ -1495,6 +1580,144 @@ app.get('/api/driver/products', async (req, res) => {
         count: products.length
     });
 });
+
+// ============================================
+// STRIPE PAYMENT ENDPOINTS
+// ============================================
+
+// POST /api/payments/create-checkout-session
+app.post('/api/payments/create-checkout-session', async (req, res) => {
+    const { orderId, amount, currency = 'AED', customerId, customerSiteId } = req.body;
+
+    console.log('\n💳 Stripe Checkout Session Request');
+    console.log('Customer ID:', customerId);
+    console.log('Customer Site ID:', customerSiteId);
+    console.log('Order ID:', orderId);
+    console.log('Amount:', amount);
+    console.log('Currency:', currency);
+
+    // Validate required fields
+    if (!orderId) {
+        return res.status(400).json({
+            success: false,
+            message: 'Order ID is required'
+        });
+    }
+
+    if (!amount || typeof amount !== 'number' || amount <= 0) {
+        return res.status(400).json({
+            success: false,
+            message: 'Valid amount is required'
+        });
+    }
+
+    try {
+        // Convert amount to cents (Stripe uses smallest currency unit)
+        const amountInCents = Math.round(amount * 100);
+
+        // Create Stripe Checkout Session
+        const session = await stripe.checkout.sessions.create({
+            payment_method_types: ['card'],
+            line_items: [
+                {
+                    price_data: {
+                        currency: currency.toLowerCase(),
+                        product_data: {
+                            name: `Order ${orderId}`,
+                            description: 'Al Ghadeer Water Delivery'
+                        },
+                        unit_amount: amountInCents
+                    },
+                    quantity: 1
+                }
+            ],
+            mode: 'payment',
+            success_url: `${process.env.STRIPE_SUCCESS_URL || 'https://example.com/success'}?session_id={CHECKOUT_SESSION_ID}&order_id=${orderId}`,
+            cancel_url: `${process.env.STRIPE_CANCEL_URL || 'https://example.com/cancel'}?order_id=${orderId}`,
+            metadata: {
+                orderId: orderId.toString()
+            }
+        });
+
+        // Store session data for later retrieval
+        paymentSessions.set(session.id, {
+            customer_id: customerId,
+            customer_site_id: customerSiteId,
+            checkout_session_id: session.id,
+            order_id: orderId,
+            amount: amount,
+            currency: currency,
+            payment_status: 'pending',
+            created_at: new Date().toISOString()
+        });
+
+        console.log('✅ Stripe Checkout Session created:', session.id);
+        console.log('Checkout URL:', session.url);
+
+        res.status(200).json({
+            success: true,
+            checkoutUrl: session.url,
+            checkoutSessionId: session.id,
+            orderId: orderId
+        });
+    } catch (error) {
+        console.error('❌ Stripe error:', error.message);
+        res.status(500).json({
+            success: false,
+            message: 'Failed to create checkout session',
+            error: error.message
+        });
+    }
+});
+
+// GET /api/payments/status/:checkoutSessionId
+app.get('/api/payments/status/:checkoutSessionId', async (req, res) => {
+    const { checkoutSessionId } = req.params;
+
+    console.log('\n🔍 Payment Status Check');
+    console.log('Checkout Session ID:', checkoutSessionId);
+
+    try {
+        // Retrieve session from Stripe
+        const session = await stripe.checkout.sessions.retrieve(checkoutSessionId);
+        
+        // Get stored session data
+        const storedSession = paymentSessions.get(checkoutSessionId);
+        
+        const paymentStatus = {
+            checkout_session_id: checkoutSessionId,
+            payment_status: session.payment_status, // 'paid', 'unpaid', 'no_payment_required'
+            payment_intent: session.payment_intent,
+            order_id: storedSession?.order_id || session.metadata?.orderId,
+            amount_total: session.amount_total ? session.amount_total / 100 : storedSession?.amount,
+            currency: session.currency?.toUpperCase() || storedSession?.currency
+        };
+
+        // Update stored session status
+        if (storedSession) {
+            storedSession.payment_status = session.payment_status;
+            if (session.payment_status === 'paid') {
+                storedSession.order_number = `ORD-${Date.now()}`;
+            }
+            paymentSessions.set(checkoutSessionId, storedSession);
+        }
+
+        console.log('Payment Status:', paymentStatus.payment_status);
+
+        res.status(200).json({
+            success: true,
+            paymentStatus: paymentStatus
+        });
+    } catch (error) {
+        console.error('❌ Error retrieving payment status:', error.message);
+        res.status(500).json({
+            success: false,
+            message: 'Failed to retrieve payment status',
+            error: error.message
+        });
+    }
+});
+
 
 // ============================================
 // HEALTH CHECK

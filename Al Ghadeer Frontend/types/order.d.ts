@@ -32,7 +32,6 @@ export interface Order {
     total_amount: number;
     payment_method: 'cash' | 'wallet' | 'credit_card';
     payment_status: 'pending' | 'paid' | 'failed';
-    driver_commission?: number;
   };
   
   // Pricing & Payment (Flat structure - new API format)
@@ -43,56 +42,6 @@ export interface Order {
   wallet_balance?: number;
   payment_method?: 'cash' | 'wallet' | 'credit_card';
   payment_status?: 'pending' | 'paid' | 'failed';
-  driver_commission?: number;
-  
-  // Delivery Details (Embedded - for backward compatibility)
-  delivery?: {
-    scheduled_time?: string;
-    estimated_duration?: number;
-    actual_duration?: number;
-    distance_km: number;
-    delivery_zone: string;
-    started_at?: string;
-    delivered_at?: string;
-    delivery_notes?: string;
-    failure_reason?: string;
-    customer_rating?: number;
-    customer_feedback?: string;
-    proof_of_delivery?: string;
-  };
-  
-  // Delivery Details (Flat structure - new API format)
-  scheduled_time?: string;
-  estimated_duration?: number;
-  actual_duration?: number;
-  distance_km?: number;
-  delivery_zone?: string;
-  started_at?: string;
-  delivered_at?: string;
-  delivery_notes?: string;
-  failure_reason?: string;
-  customer_rating?: number;
-  customer_feedback?: string;
-  proof_of_delivery?: string;
-  
-  // Tracking & Analytics (Embedded - for backward compatibility)
-  tracking?: {
-    assigned_at?: string;
-    accepted_at?: string;
-    started_at?: string;
-    completed_at?: string;
-    total_working_time?: number;
-    fuel_cost?: number;
-    expenses?: number;
-  };
-  
-  // Tracking & Analytics (Flat structure - new API format)
-  assigned_at?: string;
-  accepted_at?: string;
-  completed_at?: string;
-  total_working_time?: number;
-  fuel_cost?: number;
-  expenses?: number;
   
   // Availability times
   start_time?: string;

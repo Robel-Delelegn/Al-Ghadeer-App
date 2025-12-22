@@ -2,7 +2,7 @@ import { useOrderStore } from '@/store/index';
 import { useAuthStore } from '@/store/auth';
 import { Order } from '@/types/order';
 import { Ionicons } from '@expo/vector-icons';
-import { useRouter } from 'expo-router';
+import { useRouter, useLocalSearchParams } from 'expo-router';
 import React, { useCallback, useState, useMemo } from 'react';
 import { 
   ActivityIndicator, 
@@ -36,6 +36,7 @@ interface ApiResponse {
 const PaymentConfirmation: React.FC = () => {
   const insets = useSafeAreaInsets();
   const router = useRouter();
+  const params = useLocalSearchParams();
   const { user } = useAuthStore();
   const [isProcessing, setIsProcessing] = useState(false);
   const { 
@@ -47,6 +48,7 @@ const PaymentConfirmation: React.FC = () => {
   } = useOrderStore();
   
   const orderDetail = assignedOrders.find(item => selectedOrder === item.id) as Order | undefined;
+  const checkoutSessionId = params.checkout_session_id as string | undefined;
   
   const { subtotal, vat, totalWithVat, itemCount } = useMemo(() => {
     const sub = cartItems.reduce((sum, item) => {
@@ -116,7 +118,9 @@ const PaymentConfirmation: React.FC = () => {
         vat: parseFloat(vat),
         total_amount: parseFloat(totalWithVat),
         payment_method: selectedPaymentMethod.toLowerCase(),
-        delivery_zone: orderDetail.delivery_zone || 'General'
+        delivery_zone: orderDetail.delivery_zone || 'General',
+        // Include checkout session ID if this is a credit card payment
+        ...(checkoutSessionId && selectedPaymentMethod === 'credit_card' && { checkout_session_id: checkoutSessionId })
       };
 
       const url = `${IP_ADDRESS}/driver/orders/confirm-payment?driver_id=${user?.id}`;
@@ -157,7 +161,7 @@ const PaymentConfirmation: React.FC = () => {
     } finally {
       setIsProcessing(false);
     }
-  }, [orderDetail, cartItems, subtotal, vat, totalWithVat, selectedPaymentMethod, router, updateOrderStatus]);
+  }, [orderDetail, cartItems, subtotal, vat, totalWithVat, selectedPaymentMethod, router, updateOrderStatus, checkoutSessionId]);
 
   const customerName = orderDetail?.customer_name || 'Customer';
   const customerAddress = orderDetail?.customer_address || '—';

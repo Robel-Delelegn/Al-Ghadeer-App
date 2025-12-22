@@ -123,6 +123,13 @@ const Checkout: React.FC = () => {
         return;
       }
 
+      // Check if this is a credit card payment - redirect to QR code screen
+      if (selectedPaymentMethod === 'credit_card') {
+        console.log('💳 Redirecting to Stripe QR payment screen');
+        router.push('/(root)/(tabs)/stripe-qr-payment');
+        return;
+      }
+
       // Check if this is an organization credit delivery requiring signature
       if (result.requires_signature && result.is_organization) {
         console.log('🏢 Redirecting to organization signature screen');

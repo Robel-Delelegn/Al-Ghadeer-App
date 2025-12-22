@@ -11,8 +11,10 @@ import { showSuccessAlert, showErrorAlert } from '@/utils/alert';
 
 const PaymentReceipt: React.FC = () => {
   const router = useRouter();
-  const { selectedOrder, assignedOrders, cartItems, selectedPaymentMethod } = useOrderStore();
-  const orderDetail = assignedOrders.find(item => selectedOrder === item.id) as Order | undefined;
+  const { selectedOrder, assignedOrders, completedOrders, cartItems, selectedPaymentMethod } = useOrderStore();
+  // Check both assignedOrders and completedOrders since order might have been marked as delivered
+  const orderDetail = assignedOrders.find(item => selectedOrder === item.id) || 
+                      completedOrders.find(item => selectedOrder === item.id) as Order | undefined;
 
   // Loading states for buttons
   const [isDownloading, setIsDownloading] = useState(false);
