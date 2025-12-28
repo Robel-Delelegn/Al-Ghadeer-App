@@ -1,4 +1,5 @@
 import { useOrderStore } from '@/store/index';
+import { authenticatedFetch } from '@/store/auth';
 import { Ionicons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
 import React, { useState, useCallback, useMemo } from 'react';
@@ -64,11 +65,8 @@ const FailedDeliveries = () => {
       // Send to server
       const url = `${IP_ADDRESS}/failed-deliveries/submit?driver_id=${currentDriver.id}`;
       
-      const response = await fetch(url, {
+      const response = await authenticatedFetch(url, {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
         body: JSON.stringify(failureDetails)
       });
 

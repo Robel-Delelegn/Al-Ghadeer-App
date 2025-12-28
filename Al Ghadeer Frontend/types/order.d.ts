@@ -16,8 +16,16 @@ export interface Order {
   longitude?: number;
   delivery_instructions?: string;
   
-  // Product Details (Dynamic structure - can contain any product names and quantities)
-  products?: Record<string, number>;
+  // Product Details - supports both array format (new) and Record format (legacy)
+  // New format: Array of product objects with id, name, quantity, type, category
+  // Legacy format: Record<string, number> where key is product name and value is quantity
+  products?: Array<{
+    id: string;
+    name: string;
+    quantity: number;
+    type?: string;
+    category?: string;
+  }> | Record<string, number>;
   total_amount?: number;
   wallet_balance?: number;
   payment_method?: 'cash' | 'wallet' | 'credit_card';
@@ -26,6 +34,8 @@ export interface Order {
   // Availability times
   start_time?: string;
   end_time?: string;
+  // Signature requirement
+  requires_signature?: boolean;
 }
 
 // Driver Structure
@@ -62,6 +72,7 @@ export interface Product {
   name: string;
   description: string;
   image_url: string;
+  category?: string; // Product category
   
   // Pricing
   pricing: number;

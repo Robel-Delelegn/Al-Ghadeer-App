@@ -4,7 +4,7 @@ import ProfileModal from '@/components/ProfileModal';
 import { icons, images } from '@/constants';
 import { useLocationStore, useOrderStore } from '@/store/index';
 import { Order } from '@/types/order';
-import { useAuthStore } from '@/store/auth';
+import { useAuthStore, authenticatedFetch } from '@/store/auth';
 import * as Location from 'expo-location';
 import { useRouter } from 'expo-router';
 import React, { useEffect, useState, useCallback } from 'react';
@@ -176,9 +176,10 @@ const Home = () => {
     const driverId = user?.id || currentDriver?.id;
     try {
       setIsloading(true);
+      console.log('Fetching deliveries for driver:', driverId);
       const url = `${IP_ADDRESS}/driver/orders?driver_id=${driverId}`;
-      const response = await fetch(url);
-
+      const response = await authenticatedFetch(url);
+      console.log('Deliveries response:', response);
       if (!response.ok) {
         throw new Error(`HTTP error! Status: ${response.status}`);
       }
@@ -189,9 +190,11 @@ const Home = () => {
         throw new Error('Invalid API response format');
       }
       
+      // Normalize orders - handle both array and Record formats for products
       const transformedOrders: Order[] = apiResponse.data.map(order => ({
         ...order,
-        products: order.products || {}, 
+        // Keep products as-is (can be array or Record)
+        products: order.products || (Array.isArray(order.products) ? [] : {}),
         customer_site_id: order.customer_site_id,
       }));
       
@@ -214,8 +217,8 @@ const Home = () => {
   const fetchDriverInfo = useCallback(async () => {
     const driverId = user?.id || currentDriver?.id;
     try {
-      const url = `${IP_ADDRESS}/driver/info?driver_id=${driverId}`;
-      const response = await fetch(url);
+        const url = `${IP_ADDRESS}/driver/info?driver_id=${driverId}`;
+        const response = await authenticatedFetch(url);
       console.log('Driver info response:', response);
       if (!response.ok) return;
       
@@ -245,7 +248,7 @@ const Home = () => {
       <MyMap orders={filteredDeliveries} />
 
         {/* Transparent header overlay */}
-        <View className="absolute top-0 left-0 right-0 px-6 pt-14 pb-2">
+        <View className="absolute top-0 left-0 right-0 px-6 pt-14 pb-4">
           <View className="flex-row items-center justify-between mb-4">
             <View className="flex-row items-center">
               <TouchableOpacity onPress={() => setIsProfileModalVisible(true)}>
@@ -271,10 +274,10 @@ const Home = () => {
         </View>
 
         {/* Search Section */}
-        <View className="px-6 py-3 bg-transparent">
+        <View className="px-4 py-2 bg-transparent">
           <View className="flex-row items-center gap-3">
             <View
-              className="flex-1 flex-row items-center rounded-full px-4 py-[4px] bg-white border border-gray-200"
+              className="flex-1 flex-row items-center rounded-full px-4 py-[1px] bg-white border border-gray-200"
               style={{
                 shadowColor: '#0F172A',
                 shadowOpacity: 0.06,
@@ -285,7 +288,7 @@ const Home = () => {
             >
               <Image source={icons.search} className="w-5 h-5 mr-3" resizeMode="contain" />
               <TextInput
-                className="flex-1 text-[15px] font-JakartaSemiBold text-gray-800"
+                className="flex-1 text-[14px] font-JakartaSemiBold text-gray-800"
                 placeholder="Search for customers..."
                 placeholderTextColor="#9CA3AF"
                 value={searchQuery}

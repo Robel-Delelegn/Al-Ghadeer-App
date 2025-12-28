@@ -25,8 +25,9 @@ const PaymentReceipt: React.FC = () => {
   const shippingDetails = orderDetail ? {
     name: orderDetail.customer_name || 'N/A',
     address: orderDetail.customer_address || 'N/A',
-    contact: orderDetail.customer_phone || 'N/A'
-  } : { name: 'N/A', address: 'N/A', contact: 'N/A' };
+    contact: orderDetail.customer_phone || 'N/A',
+    customerId: orderDetail.customer_id || 'N/A'
+  } : { name: 'N/A', address: 'N/A', contact: 'N/A', customerId: 'N/A' };
   const paymentMethodDisplay = selectedPaymentMethod === 'credit_card' ? 'Credit Card' : 
                                 selectedPaymentMethod === 'wallet' ? 'Wallet' : 
                                 'Cash';
@@ -43,7 +44,7 @@ const PaymentReceipt: React.FC = () => {
     }
     return sum + item.price * item.quantity;
   }, 0).toFixed(2);
-  const vat = (Number(subtotal) * 0.15).toFixed(2);
+  const vat = (Number(subtotal) * 0.05).toFixed(2);
   const totalWithVat = (Number(subtotal) + Number(vat)).toFixed(2);
   const orderId = orderDetail?.order_number || 'N/A';
   const paymentDate = new Date().toLocaleDateString('en-GB', {
@@ -229,7 +230,7 @@ const PaymentReceipt: React.FC = () => {
             </div>
               <div class="info-row">
                 <span class="info-label">Customer ID:</span>
-                <span>DB-${orderId}</span>
+                <span>${shippingDetails.customerId}</span>
             </div>
           </div>
 
@@ -253,7 +254,7 @@ const PaymentReceipt: React.FC = () => {
                 <span>${subtotal}</span>
             </div>
             <div class="total-row">
-                <span>Vat (15%):</span>
+                <span>Vat (5%):</span>
                 <span>${vat}</span>
             </div>
             <div class="total-row final-total">
@@ -557,7 +558,7 @@ const PaymentReceipt: React.FC = () => {
               <Text style={{ color: '#212529', fontSize: 11 }}>{subtotal}</Text>
                   </View>
             <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginBottom: 4 }}>
-              <Text style={{ color: '#6C757D', fontSize: 11 }}>Vat (15%):</Text>
+              <Text style={{ color: '#6C757D', fontSize: 11 }}>Vat (5%):</Text>
               <Text style={{ color: '#212529', fontSize: 11 }}>{vat}</Text>
                   </View>
             <View style={{ 

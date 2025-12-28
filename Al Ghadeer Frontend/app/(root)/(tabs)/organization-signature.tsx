@@ -1,5 +1,5 @@
 import { useOrderStore } from '@/store/index';
-import { useAuthStore } from '@/store/auth';
+import { useAuthStore, authenticatedFetch } from '@/store/auth';
 import { Order } from '@/types/order';
 import { Ionicons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
@@ -70,7 +70,9 @@ const OrganizationSignature: React.FC = () => {
   }, [cartItems]);
 
   const organizationName = orderDetail?.customer_name || 'Organization';
-  const walletBalance = orderDetail?.wallet_balance ?? 0;
+  // Ensure walletBalance is always a number (handle string values from API like "0.00")
+  const walletBalanceRaw = orderDetail?.wallet_balance ?? 0;
+  const walletBalance = typeof walletBalanceRaw === 'string' ? parseFloat(walletBalanceRaw) || 0 : (typeof walletBalanceRaw === 'number' ? walletBalanceRaw : 0);
   const newBalance = walletBalance - parseFloat(totalWithVat);
 
   // Handle signature capture - closes modal when captured from modal
@@ -81,27 +83,19 @@ const OrganizationSignature: React.FC = () => {
       return;
     }
     
-    // Clean the signature data - remove data URL prefix if present
-    let cleanSignature = signature;
-    if (signature.startsWith('data:image')) {
-      // Extract base64 part after comma
-      const base64Index = signature.indexOf(',');
-      if (base64Index !== -1) {
-        cleanSignature = signature.substring(base64Index + 1);
-      }
-    }
+    // Keep the full signature data URL with prefix (data:image/png;base64,...)
+    // Don't strip the prefix - send it as-is to the server
+    console.log('Signature captured, length:', signature.length, 'First 50 chars:', signature.substring(0, 50),'...');
     
-    console.log('Signature captured, length:', cleanSignature.length, 'First 10 chars:', cleanSignature.substring(0, 10),'...');
-    
-    if (cleanSignature && cleanSignature.length > 0) {
-      setSignatureData(cleanSignature);
+    if (signature && signature.length > 0) {
+      setSignatureData(signature); // Store full data URL with prefix
       setHasSignature(true);
       // Close modal if it's open (when capturing from full-screen modal)
       if (showSignatureModal) {
         setShowSignatureModal(false);
       }
     } else {
-      console.log('Cleaned signature is empty');
+      console.log('Signature is empty');
       showErrorAlert('Error', 'Failed to capture signature. Please try again.');
     }
   }, [showSignatureModal]);
@@ -168,16 +162,19 @@ const OrganizationSignature: React.FC = () => {
         order_id: orderDetail.id,
         order_number: orderDetail.order_number,
         customer_id: orderDetail.customer_id,
+        customer_site_id: orderDetail.customer_site_id,
         customer_name: orderDetail.customer_name,
         customer_type: orderDetail.customer_type || 'organization',
         organization_name: organizationName,
         wallet_balance: walletBalance,
         amount: parseFloat(totalWithVat),
         items: cartItems.map(item => ({
+          id: item.id,
           name: item.name,
           quantity: item.quantity,
           price: item.price,
-          total: item.price * item.quantity
+          total: item.price * item.quantity,
+          category: item.category
         })),
         signature_data: signatureData,
         receiver_name: receiverName.trim(),
@@ -185,11 +182,10 @@ const OrganizationSignature: React.FC = () => {
         notes: notes.trim()
       };
 
-      const response = await fetch(
+      const response = await authenticatedFetch(
         `${IP_ADDRESS}/driver/orders/organization-credit-delivery?driver_id=${user?.id}`,
         {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify(requestData),
         }
       );
@@ -429,7 +425,7 @@ const OrganizationSignature: React.FC = () => {
                 <View style={styles.signaturePreviewContent}>
                   {signatureData ? (
                     <Image 
-                      source={{ uri: `data:image/png;base64,${signatureData}` }} 
+                      source={{ uri: signatureData.startsWith('data:image') ? signatureData : `data:image/png;base64,${signatureData}` }} 
                       style={styles.signatureImage}
                       resizeMode="contain"
                       onError={(error) => {

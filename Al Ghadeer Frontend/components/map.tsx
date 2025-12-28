@@ -46,21 +46,21 @@ export default function MyMap({orders}: {orders: Order[]}) {
                     },
                     async (location) => {
                         try {
-                            const coords = {
-                                latitude: location.coords.latitude,
-                                longitude: location.coords.longitude
-                            };
-                            
+                const coords = {
+                    latitude: location.coords.latitude,
+                    longitude: location.coords.longitude
+                };
+                
                             console.log('Driver location updated:', coords);
-                            setDriverLocation(coords);
-                            
-                            // Also update the location store
-                            const address = await Location.reverseGeocodeAsync(coords);
-                            setUserLocation({
-                                latitude: coords.latitude,
-                                longitude: coords.longitude,
-                                address: `${address[0]?.name || ''}, ${address[0]?.region || ''}`
-                            });
+                setDriverLocation(coords);
+                
+                // Also update the location store
+                const address = await Location.reverseGeocodeAsync(coords);
+                setUserLocation({
+                    latitude: coords.latitude,
+                    longitude: coords.longitude,
+                    address: `${address[0]?.name || ''}, ${address[0]?.region || ''}`
+                });
                         } catch (error) {
                             console.error('Error processing location update:', error);
                             // Still update location even if reverse geocoding fails

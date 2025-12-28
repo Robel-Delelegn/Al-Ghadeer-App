@@ -2,7 +2,7 @@ import { useOrderStore } from '@/store/index';
 import { Order } from '@/types/order';
 import { Ionicons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
-import React, { useCallback, useState, useMemo } from 'react';
+import React, { useCallback, useMemo } from 'react';
 import { 
   ActivityIndicator, 
   ScrollView, 
@@ -12,12 +12,12 @@ import {
   StyleSheet,
   Dimensions,
   Platform,
+  Image,
 } from 'react-native';
 import { showWarningAlert, showErrorAlert } from '@/store/utils/alert';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 const { width } = Dimensions.get('window');
-const IP_ADDRESS = process.env.EXPO_PUBLIC_IP_ADDRESS;
 
 type PaymentMethod = 'cash' | 'wallet' | 'credit_card';
 
@@ -46,7 +46,6 @@ const Checkout: React.FC = () => {
   } = useOrderStore();
   
   const orderDetail = assignedOrders.find(item => selectedOrder === item.id) as Order | undefined;
-  const [isLoading, setIsLoading] = useState(false);
   
   const { subtotal, vat, totalWithVat, itemCount } = useMemo(() => {
     const sub = cartItems.reduce((sum, item) => {
@@ -67,7 +66,7 @@ const Checkout: React.FC = () => {
     };
   }, [cartItems]);
 
-  const handleContinueToPayment = useCallback(async () => {
+  const handleContinueToPayment = useCallback(() => {
     if (cartItems.length === 0) {
       showWarningAlert('Empty Cart', 'Please add items to your cart.');
       return;
@@ -77,82 +76,33 @@ const Checkout: React.FC = () => {
       showWarningAlert('Payment Required', 'Please select a payment method.');
       return;
     }
-    
-    setIsLoading(true);
-    
-    try {
-      const validationData = {
-        payment_method: selectedPaymentMethod.toLowerCase(),
-        amount: parseFloat(totalWithVat),
-        order_id: orderDetail?.id || null,
-        customer_id: orderDetail?.customer_id || null,
-        customer_type: orderDetail?.customer_type || 'individual',
-        wallet_balance: orderDetail?.wallet_balance 
-      };
 
-      console.log('📤 Sending payment validation:', {
-        payment_method: validationData.payment_method,
-        amount: validationData.amount,
-        customer_id: validationData.customer_id,
-        customer_type: validationData.customer_type,
-        wallet_balance: validationData.wallet_balance
-      });
+    // Use requires_signature from order to determine navigation
+    const needsSignature = orderDetail?.requires_signature === true;
 
-      const response = await fetch(`${IP_ADDRESS}/driver/orders/validate-payment`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(validationData),
-      });
-
-      const result = await response.json();
-
-      console.log('📥 Payment validation response:', {
-        ok: response.ok,
-        status: response.status,
-        success: result.success,
-        requires_signature: result.requires_signature,
-        message: result.message
-      });
-
-      if (!response.ok || !result.success) {
-        showErrorAlert(
-          'Validation Failed',
-          result.message || 'Payment validation failed.'
-        );
-        return;
-      }
-
-      // Check if this is a credit card payment - redirect to QR code screen
-      if (selectedPaymentMethod === 'credit_card') {
-        console.log('💳 Redirecting to Stripe QR payment screen');
-        router.push('/(root)/(tabs)/stripe-qr-payment');
-        return;
-      }
-
-      // Check if this is an organization credit delivery requiring signature
-      if (result.requires_signature) {
-        console.log('🏢 Redirecting to organization signature screen');
-        // Redirect to signature screen for organization credit delivery
-        router.push('/(root)/(tabs)/organization-signature');
-        return;
-      }
-
-      router.push('/(root)/(tabs)/payment-confirmation');
-    } catch (error) {
-      showErrorAlert(
-        'Error',
-        error instanceof Error ? error.message : 'Failed to validate payment.'
-      );
-    } finally {
-      setIsLoading(false);
+    // Handle credit card payment - redirect to Stripe QR payment
+    if (selectedPaymentMethod === 'credit_card') {
+      router.push('/(root)/(tabs)/stripe-qr-payment');
+      return;
     }
-  }, [cartItems, router, selectedPaymentMethod, totalWithVat, orderDetail]);
+
+    // Handle orders that require signature - redirect to signature page
+    if (needsSignature) {
+      router.push('/(root)/(tabs)/organization-signature');
+      return;
+    }
+
+    // Default: go to payment confirmation
+    router.push('/(root)/(tabs)/payment-confirmation');
+  }, [cartItems, selectedPaymentMethod, orderDetail, router]);
 
   const customerName = orderDetail?.customer_name || 'Customer';
   const customerAddress =  orderDetail?.customer_address || '—';
   const customerPhone = orderDetail?.customer_phone || '—';
   const customerType = orderDetail?.customer_type || 'individual';
-  const walletBalance = orderDetail?.wallet_balance ?? 0;
+  // Ensure walletBalance is always a number (handle string values from API like "0.00")
+  const walletBalanceRaw = orderDetail?.wallet_balance ?? 0;
+  const walletBalance = typeof walletBalanceRaw === 'string' ? parseFloat(walletBalanceRaw) || 0 : (typeof walletBalanceRaw === 'number' ? walletBalanceRaw : 0);
   const isOrganization = customerType === 'organization';
 
   return (
@@ -203,7 +153,15 @@ const Checkout: React.FC = () => {
               <View key={item.id}>
                 <View style={styles.itemRow}>
                   <View style={styles.itemIconBox}>
-                    <Ionicons name="water" size={14} color="#0EA5E9" />
+                    {item.image?.uri ? (
+                      <Image 
+                        source={item.image} 
+                        style={styles.itemImage}
+                        resizeMode="cover"
+                      />
+                    ) : (
+                      <Ionicons name="water" size={14} color="#0EA5E9" />
+                    )}
                   </View>
                   <View style={styles.itemDetails}>
                     <Text style={styles.itemName} numberOfLines={1}>{item.name}</Text>
@@ -348,29 +306,23 @@ const Checkout: React.FC = () => {
           <TouchableOpacity
             style={[
               styles.continueButton,
-              (cartItems.length === 0 || isLoading || !selectedPaymentMethod) && styles.continueButtonDisabled
+              (cartItems.length === 0 || !selectedPaymentMethod) && styles.continueButtonDisabled
             ]}
             onPress={handleContinueToPayment}
-            disabled={isLoading || cartItems.length === 0 || !selectedPaymentMethod}
+            disabled={cartItems.length === 0 || !selectedPaymentMethod}
             activeOpacity={0.8}
           >
-            {isLoading ? (
-              <ActivityIndicator size="small" color="#FFFFFF" />
-            ) : (
-              <>
-                <Text style={styles.continueButtonText}>Continue</Text>
-                <View style={[
-                  styles.continueArrow,
-                  (cartItems.length === 0 || !selectedPaymentMethod) && styles.continueArrowDisabled
-                ]}>
-                  <Ionicons 
-                    name="arrow-forward" 
-                    size={16} 
-                    color={(cartItems.length === 0 || !selectedPaymentMethod) ? '#9CA3AF' : '#111827'} 
-                  />
-                </View>
-              </>
-            )}
+            <Text style={styles.continueButtonText}>Continue</Text>
+            <View style={[
+              styles.continueArrow,
+              (cartItems.length === 0 || !selectedPaymentMethod) && styles.continueArrowDisabled
+            ]}>
+              <Ionicons 
+                name="arrow-forward" 
+                size={16} 
+                color={(cartItems.length === 0 || !selectedPaymentMethod) ? '#9CA3AF' : '#111827'} 
+              />
+            </View>
           </TouchableOpacity>
         </View>
 
@@ -506,6 +458,11 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     alignItems: 'center',
     marginRight: 12,
+    overflow: 'hidden',
+  },
+  itemImage: {
+    width: '100%',
+    height: '100%',
   },
   itemDetails: {
     flex: 1,

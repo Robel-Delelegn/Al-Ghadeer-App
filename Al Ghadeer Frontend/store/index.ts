@@ -62,6 +62,7 @@ interface CartItem {
   price: number;
   quantity: number;
   currency: string;
+  category?: string; // Product category
   type?: '5L' | '10L' | '300ml' | '1L' | '20L' | 'dispenser'; // Optional - not used in UI
 }
 
@@ -235,7 +236,7 @@ export const useOrderStore = create<OrderStore>()(persist(
             price: typeof product.pricing === 'number' ? product.pricing : 0,
             quantity: quantity,
             currency: 'AED',
-            type: product.type // Optional field, not used in UI
+            category: product.category, // Include category from product
           }]
         };
       });

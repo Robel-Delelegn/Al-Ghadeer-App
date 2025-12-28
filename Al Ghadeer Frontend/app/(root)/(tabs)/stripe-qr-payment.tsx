@@ -1,5 +1,6 @@
 import { useOrderStore } from '@/store/index';
 import { Order } from '@/types/order';
+import { authenticatedFetch } from '@/store/auth';
 import { Ionicons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
 import React, { useEffect, useState, useMemo } from 'react';
@@ -97,9 +98,8 @@ const StripeQRPayment: React.FC = () => {
       try {
         const orderId = orderDetail.id || orderDetail.order_number || `order_${Date.now()}`;
         
-        const response = await fetch(`${IP_ADDRESS}/payments/create-checkout-session`, {
+        const response = await authenticatedFetch(`${IP_ADDRESS}/payments/create-checkout-session`, {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
             orderId: orderId,
             amount: parseFloat(totalWithVat),
@@ -129,7 +129,7 @@ const StripeQRPayment: React.FC = () => {
         
         pollInterval = setInterval(async () => {
           try {
-            const statusResponse = await fetch(`${IP_ADDRESS}/payments/status/${result.checkoutSessionId}`);
+            const statusResponse = await authenticatedFetch(`${IP_ADDRESS}/payments/status/${result.checkoutSessionId}`);
             
             if (!statusResponse.ok) {
               throw new Error('Failed to check payment status');

@@ -1,5 +1,6 @@
 import { Order } from '@/types/order';
-import { useAuthStore } from '@/store/auth';
+import { useAuthStore, authenticatedFetch } from '@/store/auth';
+import { getTotalItemsCount } from '@/utils/orderUtils';
 import { Ionicons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
 import React, { useEffect, useMemo, useState, useCallback } from 'react';
@@ -48,7 +49,7 @@ const DeliveryHistory = () => {
     try {
       setLoading(true);
       const url = `${IP_ADDRESS}/driver/history?driver_id=${user?.id}`;
-      const response = await fetch(url);
+      const response = await authenticatedFetch(url);
 
       if (!response.ok) {
         throw new Error(`HTTP error! Status: ${response.status}`);
@@ -65,20 +66,22 @@ const DeliveryHistory = () => {
         throw new Error('Invalid API response format');
       }
 
-      const transformedHistory: Order[] = orders.map(order => ({
-        ...order,
-        products: order.products || {},
-        customer: {
-          id: order.customer_id || '',
-          site_id: order.customer_site_id,
-          name: order.customer_name || '',
-          phone: order.customer_phone || '',
-          email: order.customer_email,
-          address: order.customer_address || '',
-          latitude: order.latitude || 0,
-          longitude: order.longitude || 0,
-        }
-      }));
+        // Normalize orders - handle both array and Record formats for products
+        const transformedHistory: Order[] = orders.map(order => ({
+          ...order,
+          // Keep products as-is (can be array or Record)
+          products: order.products || (Array.isArray(order.products) ? [] : {}),
+          customer: {
+            id: order.customer_id || '',
+            site_id: order.customer_site_id,
+            name: order.customer_name || '',
+            phone: order.customer_phone || '',
+            email: order.customer_email,
+            address: order.customer_address || '',
+            latitude: order.latitude || 0,
+            longitude: order.longitude || 0,
+          }
+        }));
 
       setHistory(transformedHistory);
     } catch (err) {
@@ -142,9 +145,7 @@ const DeliveryHistory = () => {
     const totalAmount = item.total_amount || 0;
     const config = statusConfig[item.status as StatusFilter] || statusConfig.cancelled;
     
-    const totalItems = item.products && typeof item.products === 'object'
-      ? Object.values(item.products).reduce((total, qty) => total + (typeof qty === 'number' ? qty : 0), 0)
-      : 0;
+    const totalItems = getTotalItemsCount(item);
 
     return (
       <TouchableOpacity 

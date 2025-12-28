@@ -43,14 +43,17 @@ const getCustomerTypeStyle = (customerType?: string) => {
 
 const DeliveryCard = ({ item, onPress }: { item: Order; onPress?: () => void }) => {
   // Handle both nested and flat structures for backward compatibility
-  const customerName = item.customer?.name || item.customer_name || 'N/A';
-  const customerAddress = item.customer?.address || item.customer_address || 'N/A';
-  const totalAmount = item.pricing?.total_amount || item.total_amount || 0;
-  const distanceKm = item.delivery?.distance_km || 0;
-  const scheduledTime = item.delivery?.scheduled_time || 'Time N/A';
+  const customerName =  item.customer_name || 'N/A';
+  const customerAddress = item.customer_address || 'N/A';
+  // Ensure totalAmount is always a number (handle string values from API like "0.00")
+  const totalAmountRaw = item.total_amount || 0;
+  const totalAmount = typeof totalAmountRaw === 'string' ? parseFloat(totalAmountRaw) || 0 : (typeof totalAmountRaw === 'number' ? totalAmountRaw : 0);
+  const scheduledTime = item.start_time || 'Time N/A';
   const customerType = item.customer_type || 'individual';
   const customerTypeStyle = getCustomerTypeStyle(customerType);
-  const walletBalance = item.wallet_balance ?? 0;
+  // Ensure walletBalance is always a number (handle string values from API)
+  const walletBalanceRaw = item.wallet_balance ?? 0;
+  const walletBalance = typeof walletBalanceRaw === 'string' ? parseFloat(walletBalanceRaw) || 0 : (typeof walletBalanceRaw === 'number' ? walletBalanceRaw : 0);
   
   // Format availability times (expects "18:30" format)
   const formatAvailabilityTime = (timeString?: string) => {

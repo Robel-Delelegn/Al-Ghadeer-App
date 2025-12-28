@@ -1,4 +1,5 @@
 import { useOrderStore } from '@/store/index';
+import { authenticatedFetch } from '@/store/auth';
 import { Ionicons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
 import React, { useState, useCallback } from 'react';
@@ -66,9 +67,8 @@ const LoadedItems = () => {
     
     try {
       const endpoint = `${API_BASE_URL}/drivers/loaded-items/request/?driver_id=${currentDriver.id}`;
-      const response = await fetch(endpoint, {
+      const response = await authenticatedFetch(endpoint, {
         method: 'GET',
-        headers: { 'Content-Type': 'application/json' }
       });
 
       const data: ItemsResponse = await response.json();
@@ -103,9 +103,8 @@ const LoadedItems = () => {
     
     try {
       const endpoint = `${API_BASE_URL}/drivers/loaded-items/confirm/?driver_id=${currentDriver.id}`;
-      const response = await fetch(endpoint, {
+      const response = await authenticatedFetch(endpoint, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
         items: items.map(item => ({
           id: item.id,

@@ -1,4 +1,5 @@
 import { useExpenseStore, useOrderStore } from '@/store/index';
+import { authenticatedFetch } from '@/store/auth';
 import { Ionicons } from '@expo/vector-icons';
 import * as ImagePicker from 'expo-image-picker';
 import * as FileSystem from 'expo-file-system';
@@ -102,7 +103,7 @@ const Expenses = () => {
       let url = `${IP_ADDRESS}/expenses?driver_id=${currentDriver.id}`;
       if (status) url += `&status=${status}`;
 
-      const response = await fetch(url);
+      const response = await authenticatedFetch(url);
       if (!response.ok) throw new Error(`HTTP error! Status: ${response.status}`);
 
       const data: ServerExpense[] = await response.json();
@@ -186,9 +187,8 @@ const Expenses = () => {
       };
 
       const url = `${IP_ADDRESS}/expenses/submit?driver_id=${currentDriver.id}`;
-      const response = await fetch(url, {
+      const response = await authenticatedFetch(url, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(expenseData),
       });
 

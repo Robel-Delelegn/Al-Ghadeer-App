@@ -263,6 +263,7 @@ export const useAuthStore = create<AuthStore>()(
        * GET /api/auth/me
        */
       checkAuth: async () => {
+        set({ isLoading: true });
         try {
           const token = await SecureStore.getItemAsync('auth_token');
           
@@ -270,11 +271,12 @@ export const useAuthStore = create<AuthStore>()(
             set({
               isAuthenticated: false,
               user: null,
+              isLoading: false,
             });
             return false;
           }
 
-          // Verify token with backend
+          // Verify token with backend API
           const baseUrl = API_BASE_URL?.endsWith('/api') ? API_BASE_URL : `${API_BASE_URL}/api`;
           const response = await fetch(`${baseUrl}/auth/me`, {
             method: 'GET',
@@ -285,12 +287,13 @@ export const useAuthStore = create<AuthStore>()(
           });
 
           if (!response.ok) {
-            // Token invalid, clear auth
+            // Token invalid or expired, clear auth
             await SecureStore.deleteItemAsync('auth_token');
             await SecureStore.deleteItemAsync('refresh_token');
             set({
               isAuthenticated: false,
               user: null,
+              isLoading: false,
             });
             return false;
           }
@@ -306,23 +309,35 @@ export const useAuthStore = create<AuthStore>()(
               set({
                 isAuthenticated: false,
                 user: null,
+                isLoading: false,
               });
               return false;
             }
 
+            // Token is valid and user is approved
             set({
               isAuthenticated: true,
               user: data.user,
+              isLoading: false,
             });
             return true;
           }
 
-          return false;
-        } catch (error) {
-          console.error('Auth check error:', error);
+          // Invalid response format
           set({
             isAuthenticated: false,
             user: null,
+            isLoading: false,
+          });
+          return false;
+        } catch (error) {
+          console.error('Auth check error:', error);
+          // On network error, keep token but mark as not authenticated
+          // This allows offline usage if needed, or you can clear token here
+          set({
+            isAuthenticated: false,
+            user: null,
+            isLoading: false,
           });
           return false;
         }
@@ -378,10 +393,12 @@ export const authenticatedFetch = async (
 ): Promise<Response> => {
   const token = await getAuthToken();
   
-  const headers = {
+  // Merge headers properly - user headers take precedence
+  const userHeaders = options.headers as Record<string, string> || {};
+  const headers: Record<string, string> = {
     'Content-Type': 'application/json',
     ...(token && { Authorization: `Bearer ${token}` }),
-    ...options.headers,
+    ...userHeaders,
   };
 
   return fetch(url, {

@@ -1,19 +1,22 @@
 import { Redirect } from 'expo-router';
-import { View, ActivityIndicator, Text } from 'react-native';
+import { View, ActivityIndicator } from 'react-native';
 import { useEffect, useState } from 'react';
 import { useAuthStore } from '@/store/auth';
-import * as SecureStore from 'expo-secure-store';
 
 export default function Index() {
   const { isAuthenticated, checkAuth, isLoading } = useAuthStore();
-  const [isChecking, setIsChecking] = useState(true);
+  const [hasChecked, setHasChecked] = useState(false);
 
   useEffect(() => {
-     checkAuth()},
-       [checkAuth]);
+    const verifyAuth = async () => {
+      await checkAuth();
+      setHasChecked(true);
+    };
+    verifyAuth();
+  }, [checkAuth]);
 
   // Show loading while checking auth status
-  if (isLoading) {
+  if (isLoading || !hasChecked) {
     return (
       <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center' }}>
         <ActivityIndicator size="large" />

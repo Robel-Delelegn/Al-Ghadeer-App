@@ -1,8 +1,9 @@
 import { useOrderStore } from '@/store/index';
-import { useAuthStore } from '@/store/auth';
+import { useAuthStore, authenticatedFetch } from '@/store/auth';
 import { Product } from '@/types/order';
+import { getProductQuantity, getProductCategory } from '@/utils/orderUtils';
 import { Ionicons } from '@expo/vector-icons';
-import { useRouter } from 'expo-router';
+import { useRouter, useFocusEffect } from 'expo-router';
 import React, { useCallback, useMemo, useState, useEffect } from 'react';
 import { 
   ScrollView, 
@@ -13,6 +14,7 @@ import {
   StyleSheet,
   Dimensions,
   Platform,
+  Image,
 } from 'react-native';
 import { showWarningAlert } from '@/store/utils/alert';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -20,25 +22,45 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 const { width } = Dimensions.get('window');
 const IP_ADDRESS = process.env.EXPO_PUBLIC_IP_ADDRESS;
 
+// Helper function to build full image URL from relative path
+const getImageUrl = (imagePath: string | null | undefined): string | null => {
+  if (!imagePath || imagePath.trim() === '') return null;
+  
+  // If already a full URL, return as-is
+  if (imagePath.startsWith('http://') || imagePath.startsWith('https://')) {
+    return imagePath;
+  }
+  
+  // Remove /api from IP_ADDRESS if present and build full URL
+  const baseUrl = IP_ADDRESS?.replace(/\/api$/, '') || '';
+  // Ensure imagePath starts with /
+  const normalizedPath = imagePath.startsWith('/') ? imagePath : `/${imagePath}`;
+  return `${baseUrl}${normalizedPath}`;
+};
+
 
 interface ServerProduct {
   id: string;
   name: string;
   price: number;
-  image_url: string;
-  description: string;
+  image_url: string | null; // Can be null
+  description: string | null; // Can be null
   category: string;
   originalPrice?: number; // Optional, for special offers
   badge?: string; // Optional, for special offers
 }
 
-// Server response structure - data is an object with category keys
-interface ProductsApiResponse {
-  success: boolean;
-  data: {
-    [category: string]: ServerProduct[];
-  };
-}
+// Server response structure - can be wrapped in success/data or direct object
+type ProductsApiResponse = 
+  | {
+      success: boolean;
+      data: {
+        [category: string]: ServerProduct[];
+      };
+    }
+  | {
+      [category: string]: ServerProduct[];
+    };
 
 const ProductItem: React.FC<{
   product: ServerProduct;
@@ -62,7 +84,18 @@ const ProductItem: React.FC<{
     <View style={[styles.productCard, isSelected && styles.productCardSelected]}>
       <View style={styles.productMain}>
         <View style={[styles.productIconBox, isSelected && styles.productIconBoxSelected]}>
-          <Ionicons name="water" size={18} color={isSelected ? "#FFFFFF" : "#0EA5E9"} />
+          {(() => {
+            const imageUrl = getImageUrl(product.image_url);
+            return imageUrl ? (
+              <Image 
+                source={{ uri: imageUrl }} 
+                style={styles.productImage}
+                resizeMode="cover"
+              />
+            ) : (
+              <Ionicons name="water" size={18} color={isSelected ? "#FFFFFF" : "#0EA5E9"} />
+            );
+          })()}
         </View>
 
         <View style={styles.productInfo}>
@@ -129,35 +162,62 @@ const ProductList: React.FC = () => {
       let url = `${IP_ADDRESS}/products`;
       url += `?driver_id=${user?.id}`;
       
-      const currentOrder = assignedOrders.find(order => order.id === selectedOrder);
+      // Get latest assignedOrders from store to avoid stale closure
+      const store = useOrderStore.getState();
+      const currentOrder = store.assignedOrders.find(order => order.id === selectedOrder);
       const customerSiteId = currentOrder?.customer_site_id;
       
       if (customerSiteId) {
         url += `&customer_site_id=${customerSiteId}&customer_id=${currentOrder.customer_id}`;
       }
       
-      const response = await fetch(url);
+      const response = await authenticatedFetch(url);
       
       if (!response.ok) {
         throw new Error(`HTTP error! Status: ${response.status}`);
       }
       
-      const apiResponse: ProductsApiResponse = await response.json();
+      const rawResponse = await response.json();
       
-      if (!apiResponse.success || !apiResponse.data) {
+      // Handle both response formats: {success: true, data: {...}} or direct {...}
+      let productsData: { [category: string]: ServerProduct[] };
+      
+      // Check if it's wrapped format
+      if (typeof rawResponse === 'object' && rawResponse !== null && 'success' in rawResponse) {
+        const wrappedResponse = rawResponse as { success: boolean; data?: { [category: string]: ServerProduct[] } };
+        if (!wrappedResponse.success || !wrappedResponse.data) {
+          throw new Error('Invalid API response format');
+        }
+        productsData = wrappedResponse.data;
+      } else if (typeof rawResponse === 'object' && rawResponse !== null && !Array.isArray(rawResponse)) {
+        // Direct format - response is the data object itself
+        // Verify it has category-like structure (values are arrays)
+        const directData = rawResponse as Record<string, unknown>;
+        const isValid = Object.values(directData).every(val => Array.isArray(val));
+        if (isValid) {
+          productsData = directData as { [category: string]: ServerProduct[] };
+        } else {
+          throw new Error('Invalid API response format');
+        }
+      } else {
         throw new Error('Invalid API response format');
       }
       
       // Flatten the category-based object into a single array
-      // Use the server response as-is without normalization
       const flattenedProducts: ServerProduct[] = [];
-      Object.keys(apiResponse.data).forEach(category => {
-        const categoryProducts = apiResponse.data[category];
+      Object.keys(productsData).forEach(category => {
+        const categoryProducts = productsData[category];
+        // Skip empty categories
+        if (!Array.isArray(categoryProducts) || categoryProducts.length === 0) {
+          return;
+        }
         // Ensure each product has the category from the key if not in the product object
         categoryProducts.forEach(product => {
           flattenedProducts.push({
             ...product,
-            category: product.category || category
+            category: product.category || category,
+            image_url: product.image_url || '', // Handle null image_url
+            description: product.description || '' // Handle null description
           });
         });
       });
@@ -170,11 +230,19 @@ const ProductList: React.FC = () => {
     } finally {
       setLoading(false);
     }
-  }, [user?.id, assignedOrders, selectedOrder]);
+  }, [user?.id, selectedOrder]); // Removed assignedOrders - we access it inside but don't need it as dependency
 
+  // Only fetch products when screen is focused, not when assignedOrders changes in background
+  useFocusEffect(
+    useCallback(() => {
+      fetchProducts();
+    }, [fetchProducts])
+  );
+
+  // Also fetch when refreshTrigger changes (for manual refresh)
   useEffect(() => {
     fetchProducts();
-  }, [fetchProducts, refreshTrigger]);
+  }, [refreshTrigger]);
 
   const categories = useMemo(() => {
     const uniqueCategories = [...new Set(products.map(p => p.category))];
@@ -187,16 +255,8 @@ const ProductList: React.FC = () => {
     const record: Record<string, number> = {};
     
     products.forEach((p) => {
-      let initialQty = 0;
-      
-      // Exact name matching from assignedOrders
-      if (currentOrder?.products && currentOrder.products[p.name] !== undefined) {
-        const orderProductQty = currentOrder.products[p.name];
-        if (typeof orderProductQty === 'number') {
-          initialQty = orderProductQty;
-        }
-      }
-      
+      // Use utility function to get quantity (works with both array and Record formats)
+      const initialQty = currentOrder ? getProductQuantity(currentOrder, p.name) : 0;
       record[p.id] = initialQty;
     });
     
@@ -229,12 +289,17 @@ const ProductList: React.FC = () => {
     }
 
     const cartProducts: Product[] = selected.map(serverProduct => {
+      // Build full image URL for cart items
+      const fullImageUrl = getImageUrl(serverProduct.image_url) || '';
+      // Prefer category from order if available, otherwise use product category
+      const orderCategory = currentOrder ? getProductCategory(currentOrder, serverProduct.name) : undefined;
       return {
         id: serverProduct.id,
         name: serverProduct.name,
         description: serverProduct.description || '',
-        image_url: serverProduct.image_url,
+        image_url: fullImageUrl,
         pricing: serverProduct.price,
+        category: orderCategory || serverProduct.category || '', // Prefer order category, then product category
       };
     });
 
@@ -255,7 +320,7 @@ const ProductList: React.FC = () => {
     }
     
     router.push('/(root)/(tabs)/checkout');
-  }, [products, quantities, addToCart, clearCart, router]);
+  }, [products, quantities, addToCart, clearCart, router, currentOrder, selectedOrder, assignedOrders]);
 
   if (loading) {
     return (
@@ -327,7 +392,10 @@ const ProductList: React.FC = () => {
         showsVerticalScrollIndicator={false}
       >
         {/* Order Context */}
-          {currentOrder?.products && Object.keys(currentOrder.products).length > 0 && (
+          {currentOrder?.products && (
+            (Array.isArray(currentOrder.products) && currentOrder.products.length > 0) ||
+            (typeof currentOrder.products === 'object' && Object.keys(currentOrder.products).length > 0)
+          ) && (
           <View style={styles.contextCard}>
             <View style={styles.contextIcon}>
               <Ionicons name="information-circle" size={16} color="#2563EB" />
@@ -350,7 +418,7 @@ const ProductList: React.FC = () => {
                 </View>
                 
                 {productsInCategory.map((product) => {
-                  const initialQty = currentOrder?.products?.[product.name] || 0;
+                  const initialQty = currentOrder ? getProductQuantity(currentOrder, product.name) : 0;
                   return (
                     <ProductItem
                       key={product.id}
@@ -574,9 +642,16 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     alignItems: 'center',
     marginRight: 12,
+    overflow: 'hidden',
   },
   productIconBoxSelected: {
     backgroundColor: '#111827',
+    borderWidth: 2,
+    borderColor: '#111827',
+  },
+  productImage: {
+    width: '100%',
+    height: '100%',
   },
   productInfo: {
     flex: 1,

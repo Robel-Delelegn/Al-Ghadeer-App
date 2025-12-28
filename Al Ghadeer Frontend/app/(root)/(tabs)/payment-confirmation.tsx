@@ -1,5 +1,5 @@
 import { useOrderStore } from '@/store/index';
-import { useAuthStore } from '@/store/auth';
+import { useAuthStore, authenticatedFetch } from '@/store/auth';
 import { Order } from '@/types/order';
 import { Ionicons } from '@expo/vector-icons';
 import { useRouter, useLocalSearchParams } from 'expo-router';
@@ -13,6 +13,7 @@ import {
   StyleSheet,
   Dimensions,
   Platform,
+  Image,
 } from 'react-native';
 import { showErrorAlert, showSuccessAlert } from '@/store/utils/alert';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -105,9 +106,13 @@ const PaymentConfirmation: React.FC = () => {
         customer_name: orderDetail.customer_name || 'N/A',
         customer_phone: orderDetail.customer_phone || 'N/A',
         products: cartItems.filter(item => item?.name).map(item => ({
+          id: item.id,
           name: item.name,
           quantity: item.quantity,
-          price: item.price
+          price: item.price,
+          category: item.category || '', // Add category if available in cart item
+          customer_id: orderDetail.customer_id || '',
+          customer_site_id: orderDetail.customer_site_id || '',
         })),
         subtotal: parseFloat(subtotal),
         vat: parseFloat(vat),
@@ -119,9 +124,8 @@ const PaymentConfirmation: React.FC = () => {
 
       const url = `${IP_ADDRESS}/driver/orders/confirm-payment?driver_id=${user?.id}`;
       
-      const response = await fetch(url, {
+      const response = await authenticatedFetch(url, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(orderData),
       });
 
@@ -161,7 +165,9 @@ const PaymentConfirmation: React.FC = () => {
   const customerAddress = orderDetail?.customer_address || '—';
   const customerPhone = orderDetail?.customer_phone || '—';
   const customerType = orderDetail?.customer_type || 'individual';
-  const walletBalance = orderDetail?.wallet_balance ?? 0;
+  // Ensure walletBalance is always a number (handle string values from API like "0.00")
+  const walletBalanceRaw = orderDetail?.wallet_balance ?? 0;
+  const walletBalance = typeof walletBalanceRaw === 'string' ? parseFloat(walletBalanceRaw) || 0 : (typeof walletBalanceRaw === 'number' ? walletBalanceRaw : 0);
   const isOrganization = customerType === 'organization';
 
   return (
@@ -212,7 +218,15 @@ const PaymentConfirmation: React.FC = () => {
               <View key={item.id}>
                 <View style={styles.itemRow}>
                   <View style={styles.itemIconBox}>
-                    <Ionicons name="water" size={14} color="#0EA5E9" />
+                    {item.image?.uri ? (
+                      <Image 
+                        source={item.image} 
+                        style={styles.itemImage}
+                        resizeMode="cover"
+                      />
+                    ) : (
+                      <Ionicons name="water" size={14} color="#0EA5E9" />
+                    )}
                   </View>
                   <View style={styles.itemInfo}>
                     <Text style={styles.itemName} numberOfLines={1}>{item.name}</Text>
@@ -482,6 +496,11 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     alignItems: 'center',
     marginRight: 12,
+    overflow: 'hidden',
+  },
+  itemImage: {
+    width: '100%',
+    height: '100%',
   },
   itemInfo: {
     flex: 1,
@@ -715,9 +734,5 @@ const styles = StyleSheet.create({
 
 export default PaymentConfirmation;
 
-
-
-
-export default PaymentConfirmation;
 
 

@@ -118,8 +118,10 @@ const SignIn = () => {
 
     const newOtp = [...otp];
     newOtp[index] = value.slice(-1);
-    setOtp(newOtp);
+    
+    // Clear error immediately when user types
     setOtpError('');
+    setOtp(newOtp);
 
     // Auto-focus next input
     if (value && index < 5) {
@@ -127,19 +129,18 @@ const SignIn = () => {
     }
 
     // Auto-submit when all 6 digits are entered
-    if (newOtp.every(digit => digit !== '') && newOtp.join('').length === 6) {
-      setTimeout(() => onVerifyOtp(), 300);
+    // Use the newOtp value directly to avoid state update timing issues
+    const otpString = newOtp.join('');
+    if (otpString.length === 6 && newOtp.every(digit => digit !== '')) {
+      // Wait for state to update and error to clear before auto-verifying
+      setTimeout(() => {
+        // Use the latest OTP value directly instead of relying on state
+        verifyOtpWithValue(otpString);
+      }, 400);
     }
   };
 
-  const handleOtpKeyPress = (e: any, index: number) => {
-    if (e.nativeEvent.key === 'Backspace' && !otp[index] && index > 0) {
-      otpRefs.current[index - 1]?.focus();
-    }
-  };
-
-  const onVerifyOtp = async () => {
-    const otpString = otp.join('');
+  const verifyOtpWithValue = async (otpString: string) => {
     if (otpString.length !== 6) {
       setOtpError('Please enter a valid 6-digit OTP');
       try {
@@ -210,6 +211,17 @@ const SignIn = () => {
     }
 
     setIsVerifyingOtp(false);
+  };
+
+  const handleOtpKeyPress = (e: any, index: number) => {
+    if (e.nativeEvent.key === 'Backspace' && !otp[index] && index > 0) {
+      otpRefs.current[index - 1]?.focus();
+    }
+  };
+
+  const onVerifyOtp = async () => {
+    const otpString = otp.join('');
+    await verifyOtpWithValue(otpString);
   };
 
   const onResendOtp = async () => {

@@ -1,4 +1,5 @@
 import { useLocationStore, useOrderStore } from '@/store/index';
+import { getTotalItemsCount, normalizeOrderProducts } from '@/utils/orderUtils';
 import { Ionicons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
 import React, { useCallback, useState, useEffect } from 'react';
@@ -147,9 +148,7 @@ const OrderDetails = () => {
 
   const currentStatus = statusConfig[order.status] || statusConfig.pending;
 
-  const productCount = order.products && typeof order.products === 'object'
-    ? Object.values(order.products).reduce((total, qty) => total + (typeof qty === 'number' ? qty : 0), 0)
-    : 0;
+  const productCount = order ? getTotalItemsCount(order) : 0;
 
   return (
     <View style={[styles.container, { paddingTop: insets.top }]}>
@@ -293,25 +292,31 @@ const OrderDetails = () => {
         </View>
 
         {/* Products Card */}
-        {order.products && Object.keys(order.products).length > 0 && (
+        {order.products && (
+          (Array.isArray(order.products) && order.products.length > 0) ||
+          (typeof order.products === 'object' && Object.keys(order.products).length > 0)
+        ) && (
           <View style={styles.card}>
             <Text style={styles.sectionLabel}>ITEMS</Text>
-              {Object.entries(order.products).map(([productName, quantity], index) => (
-                <View key={productName}>
-                  <View style={styles.productRow}>
-                    <View style={styles.productIcon}>
-                    <Ionicons name="water" size={14} color="#0EA5E9" />
+              {(() => {
+                const { productsArray } = normalizeOrderProducts(order.products);
+                return productsArray.map((product, index) => (
+                  <View key={product.id || product.name}>
+                    <View style={styles.productRow}>
+                      <View style={styles.productIcon}>
+                        <Ionicons name="water" size={14} color="#0EA5E9" />
+                      </View>
+                      <Text style={styles.productName}>{product.name}</Text>
+                      <View style={styles.productQtyBadge}>
+                        <Text style={styles.productQty}>×{product.quantity}</Text>
+                      </View>
                     </View>
-                    <Text style={styles.productName}>{productName}</Text>
-                  <View style={styles.productQtyBadge}>
-                    <Text style={styles.productQty}>×{quantity}</Text>
+                    {index < productsArray.length - 1 && (
+                      <View style={styles.productDivider} />
+                    )}
                   </View>
-                </View>
-                {index < Object.keys(order.products || {}).length - 1 && (
-                    <View style={styles.productDivider} />
-                  )}
-                </View>
-              ))}
+                ));
+              })()}
           </View>
         )}
 

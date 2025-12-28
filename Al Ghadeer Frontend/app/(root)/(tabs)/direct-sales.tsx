@@ -27,20 +27,24 @@ interface ServerProduct {
   id: string;
   name: string;
   price: number;
-  image_url: string;
-  description: string;
+  image_url: string | null; // Can be null
+  description: string | null; // Can be null
   category: string;
   originalPrice?: number; // Optional, for special offers
   badge?: string; // Optional, for special offers
 }
 
-// Server response structure - data is an object with category keys
-interface ProductsApiResponse {
-  success: boolean;
-  data: {
-    [category: string]: ServerProduct[];
-  };
-}
+// Server response structure - can be wrapped in success/data or direct object
+type ProductsApiResponse = 
+  | {
+      success: boolean;
+      data: {
+        [category: string]: ServerProduct[];
+      };
+    }
+  | {
+      [category: string]: ServerProduct[];
+    };
 
 const PAYMENT_METHODS = [
   { id: 'cash', label: 'Cash', icon: 'cash-outline' as const },
@@ -69,24 +73,51 @@ const DirectSales: React.FC = () => {
       const url = `${IP_ADDRESS}/products?driver_id=${driverId}`;
       console.log('Fetching products from:', url);
       
-      const response = await fetch(url);
+      const response = await authenticatedFetch(url);
       if (!response.ok) throw new Error(`HTTP error! Status: ${response.status}`);
       
-      const apiResponse: ProductsApiResponse = await response.json();
-      console.log('Products API response:', apiResponse);
+      const rawResponse = await response.json();
+      console.log('Products API response:', rawResponse);
       
-      if (!apiResponse.success || !apiResponse.data) throw new Error('Invalid API response');
+      // Handle both response formats: {success: true, data: {...}} or direct {...}
+      let productsData: { [category: string]: ServerProduct[] };
+      
+      // Check if it's wrapped format
+      if (typeof rawResponse === 'object' && rawResponse !== null && 'success' in rawResponse) {
+        const wrappedResponse = rawResponse as { success: boolean; data?: { [category: string]: ServerProduct[] } };
+        if (!wrappedResponse.success || !wrappedResponse.data) {
+          throw new Error('Invalid API response format');
+        }
+        productsData = wrappedResponse.data;
+      } else if (typeof rawResponse === 'object' && rawResponse !== null && !Array.isArray(rawResponse)) {
+        // Direct format - response is the data object itself
+        // Verify it has category-like structure (values are arrays)
+        const directData = rawResponse as Record<string, unknown>;
+        const isValid = Object.values(directData).every(val => Array.isArray(val));
+        if (isValid) {
+          productsData = directData as { [category: string]: ServerProduct[] };
+        } else {
+          throw new Error('Invalid API response format');
+        }
+      } else {
+        throw new Error('Invalid API response format');
+      }
       
       // Flatten the category-based object into a single array
-      // Use the server response as-is without normalization
       const flattenedProducts: ServerProduct[] = [];
-      Object.keys(apiResponse.data).forEach(category => {
-        const categoryProducts = apiResponse.data[category];
+      Object.keys(productsData).forEach(category => {
+        const categoryProducts = productsData[category];
+        // Skip empty categories
+        if (!Array.isArray(categoryProducts) || categoryProducts.length === 0) {
+          return;
+        }
         // Ensure each product has the category from the key if not in the product object
         categoryProducts.forEach(product => {
           flattenedProducts.push({
             ...product,
-            category: product.category || category
+            category: product.category || category,
+            image_url: product.image_url || '', // Handle null image_url
+            description: product.description || '' // Handle null description
           });
         });
       });
@@ -193,9 +224,8 @@ const DirectSales: React.FC = () => {
         sale_date: new Date().toISOString()
       };
 
-      const response = await fetch(`${IP_ADDRESS}/driver/direct-sales`, {
+      const response = await authenticatedFetch(`${IP_ADDRESS}/driver/direct-sales`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(saleData),
       });
 
