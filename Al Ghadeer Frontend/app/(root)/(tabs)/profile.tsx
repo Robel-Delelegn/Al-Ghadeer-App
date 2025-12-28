@@ -12,7 +12,7 @@ import {
   ScrollView, 
   StyleSheet,
 } from 'react-native';
-import { showWarningAlert } from '@/utils/alert';
+import { showWarningAlert } from '@/store/utils/alert';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 const Profile = () => {
@@ -40,7 +40,7 @@ const Profile = () => {
   };
 
   const avatar = currentDriver?.profile_image || icons.person;
-  const driverName = currentDriver?.name || user?.driver_name || user?.name || 'Driver';
+  const driverName = currentDriver?.name || user?.name || user?.name || 'Driver';
   const helperName = currentDriver?.helper_name || user?.helper_name;
   const helperPhone = (currentDriver as any)?.helper_phone || '—';
   const phone = currentDriver?.phone || user?.phone || '—';
@@ -50,19 +50,15 @@ const Profile = () => {
   const status = currentDriver?.status || 'online';
 
   const stats = useMemo(() => {
-    const delivered = assignedOrders.filter(o => o.status === 'delivered').length;
-    const inProgress = assignedOrders.filter(o => o.status === 'in_progress').length;
+    const delivered = assignedOrders.filter(o => o.status === 'delivered').length;;
     const pending = assignedOrders.filter(o => o.status === 'pending' || o.status === 'assigned').length;
-    return { delivered, inProgress, pending };
+    return { delivered, pending };
   }, [assignedOrders]);
 
-  const driverMetrics = getDriverMetrics();
-  const rating = driverMetrics?.average_rating || 0;
 
   const getStatusConfig = () => {
     switch (status) {
       case 'online': return { color: '#10B981', bg: '#ECFDF5', label: 'Online' };
-      case 'busy': return { color: '#F59E0B', bg: '#FFFBEB', label: 'Busy' };
       default: return { color: '#64748B', bg: '#F1F5F9', label: 'Offline' };
     }
   };
@@ -114,14 +110,6 @@ const Profile = () => {
               {statusConfig.label}
             </Text>
           </View>
-
-          {/* Rating */}
-          {rating > 0 && (
-            <View style={styles.ratingContainer}>
-              <Ionicons name="star" size={16} color="#FBBF24" />
-              <Text style={styles.ratingText}>{rating.toFixed(1)}</Text>
-            </View>
-          )}
         </View>
 
         {/* Stats Section */}
@@ -131,10 +119,6 @@ const Profile = () => {
             <Text style={styles.statLabel}>Delivered</Text>
           </View>
           <View style={styles.statDivider} />
-          <View style={styles.statItem}>
-            <Text style={styles.statValue}>{stats.inProgress}</Text>
-            <Text style={styles.statLabel}>Active</Text>
-          </View>
           <View style={styles.statDivider} />
           <View style={styles.statItem}>
             <Text style={styles.statValue}>{stats.pending}</Text>

@@ -17,7 +17,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
 import { useAuthStore } from '@/store/auth';
 import { Ionicons } from '@expo/vector-icons';
-import { showErrorAlert, showSuccessAlert, showWarningAlert } from '@/utils/alert';
+import { showErrorAlert, showSuccessAlert, showWarningAlert } from '@/store/utils/alert';
 import * as Haptics from 'expo-haptics';
 
 const { width, height } = Dimensions.get('window');
@@ -25,7 +25,7 @@ const { width, height } = Dimensions.get('window');
 const SignIn = () => {
   const router = useRouter();
   const { requestOtp, verifyOtp, resendOtp, isLoading } = useAuthStore();
-  const [phone, setPhone] = useState('');
+  const [phone, setPhone] = useState('+971');
   const [errors, setErrors] = useState<{ [key: string]: string }>({});
   const [showOtpModal, setShowOtpModal] = useState(false);
   const [otp, setOtp] = useState(['', '', '', '', '', '']);
@@ -167,36 +167,46 @@ const SignIn = () => {
         await Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
       } catch {}
 
-      setShowOtpModal(false);
+      // Clear error state immediately before closing modal to prevent red flash
+      setOtpError('');
       setOtp(['', '', '', '', '', '']);
-      setTempToken(null);
+      setIsVerifyingOtp(false);
+      
+      // Small delay to ensure UI updates before closing modal
+      setTimeout(() => {
+        setShowOtpModal(false);
+        setTempToken(null);
+        
+        const user = useAuthStore.getState().user;
 
-      const user = useAuthStore.getState().user;
-
-      if (user?.status === 'pending') {
-        showWarningAlert(
-          'Account Pending Approval',
-          'Your phone number has been verified. Please wait for approval from the administrator.',
-          [
-            {
-              text: 'OK',
-              onPress: async () => {
-                await useAuthStore.getState().signOut();
+        if (user?.status === 'pending') {
+          showWarningAlert(
+            'Account Pending Approval',
+            'Your phone number has been verified. Please wait for approval from the administrator.',
+            [
+              {
+                text: 'OK',
+                onPress: async () => {
+                  await useAuthStore.getState().signOut();
+                },
               },
-            },
-          ]
-        );
-      } else if (user?.status === 'approved') {
-        router.replace('/(root)/(tabs)/home');
-      } else {
-        showErrorAlert('Account Rejected', 'Your account has been rejected. Please contact the administrator.');
-        await useAuthStore.getState().signOut();
-      }
+            ]
+          );
+        } else if (user?.status === 'approved') {
+          router.replace('/(root)/(tabs)/home');
+        } else {
+          showErrorAlert('Account Rejected', 'Your account has been rejected. Please contact the administrator.');
+          useAuthStore.getState().signOut();
+        }
+      }, 100);
+      
+      return;
     } else {
       setOtpError(result.message || 'Invalid OTP. Please try again.');
       try {
         await Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
       } catch {}
+      setIsVerifyingOtp(false);
     }
 
     setIsVerifyingOtp(false);
@@ -397,7 +407,9 @@ const SignIn = () => {
               {otp.map((digit, index) => (
                 <TextInput
                   key={index}
-                  ref={(ref) => (otpRefs.current[index] = ref)}
+                  ref={(ref) => {
+                    otpRefs.current[index] = ref;
+                  }}
                   style={[
                     styles.otpInput,
                     digit && styles.otpInputFilled,

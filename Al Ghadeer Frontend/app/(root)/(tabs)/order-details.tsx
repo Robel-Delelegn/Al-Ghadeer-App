@@ -13,7 +13,7 @@ import {
   Dimensions,
   Platform,
 } from 'react-native';
-import { showErrorAlert } from '@/utils/alert';
+import { showErrorAlert } from '@/store/utils/alert';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 const { width } = Dimensions.get('window');
@@ -108,7 +108,6 @@ const OrderDetails = () => {
 
   const handleProceed = () => {
     if (!order) return;
-    updateOrderStatus(order.id, 'in_progress');
     router.push('/(root)/(tabs)/add-products');
   };
 
@@ -273,18 +272,6 @@ const OrderDetails = () => {
           <View style={styles.detailRow}>
             <Text style={styles.detailLabel}>Order ID</Text>
             <Text style={styles.detailValue}>{order.order_number}</Text>
-            </View>
-          <View style={styles.detailRowDivider} />
-          <View style={styles.detailRow}>
-            <Text style={styles.detailLabel}>Created</Text>
-            <Text style={styles.detailValue}>
-                {new Date(order.created_at).toLocaleDateString('en-US', { 
-                  month: 'short', 
-                  day: 'numeric',
-                  hour: '2-digit',
-                  minute: '2-digit'
-                })}
-              </Text>
             </View>
           <View style={styles.detailRowDivider} />
           <View style={styles.detailRow}>

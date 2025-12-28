@@ -6,6 +6,7 @@ import React, { useEffect, useMemo, useState, useCallback } from 'react';
 import { 
   ActivityIndicator, 
   FlatList, 
+  RefreshControl,
   Text, 
   TextInput, 
   TouchableOpacity, 
@@ -40,56 +41,63 @@ const DeliveryHistory = () => {
   const [statusFilter, setStatusFilter] = useState<StatusFilter>('all');
   const [history, setHistory] = useState<Order[]>([]);
   const [loading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
   const { user } = useAuthStore()
 
-  useEffect(() => {
-    const fetchHistory = async () => {
-      try {
-        setLoading(true);
-        const url = `${IP_ADDRESS}/driver/history?driver_id=${user?.id}`;
-        const response = await fetch(url);
+  const fetchHistory = useCallback(async () => {
+    try {
+      setLoading(true);
+      const url = `${IP_ADDRESS}/driver/history?driver_id=${user?.id}`;
+      const response = await fetch(url);
 
-        if (!response.ok) {
-          throw new Error(`HTTP error! Status: ${response.status}`);
-        }
-
-        const responseData = await response.json();
-        let orders: Order[] = [];
-        
-        if (responseData.success && responseData.data) {
-          orders = responseData.data;
-        } else if (Array.isArray(responseData)) {
-          orders = responseData;
-        } else {
-          throw new Error('Invalid API response format');
-        }
-
-        const transformedHistory: Order[] = orders.map(order => ({
-          ...order,
-          products: order.products || {},
-          customer: {
-            id: order.customer_id || '',
-            site_id: order.customer_site_id,
-            name: order.customer_name || '',
-            phone: order.customer_phone || '',
-            email: order.customer_email,
-            address: order.customer_address || '',
-            latitude: order.latitude || 0,
-            longitude: order.longitude || 0,
-          }
-        }));
-
-        setHistory(transformedHistory);
-      } catch (err) {
-        console.error('Error fetching history:', err);
-        setHistory([]);
-      } finally {
-        setLoading(false);
+      if (!response.ok) {
+        throw new Error(`HTTP error! Status: ${response.status}`);
       }
-    };
-    
+
+      const responseData = await response.json();
+      let orders: Order[] = [];
+      
+      if (responseData.success && responseData.data) {
+        orders = responseData.data;
+      } else if (Array.isArray(responseData)) {
+        orders = responseData;
+      } else {
+        throw new Error('Invalid API response format');
+      }
+
+      const transformedHistory: Order[] = orders.map(order => ({
+        ...order,
+        products: order.products || {},
+        customer: {
+          id: order.customer_id || '',
+          site_id: order.customer_site_id,
+          name: order.customer_name || '',
+          phone: order.customer_phone || '',
+          email: order.customer_email,
+          address: order.customer_address || '',
+          latitude: order.latitude || 0,
+          longitude: order.longitude || 0,
+        }
+      }));
+
+      setHistory(transformedHistory);
+    } catch (err) {
+      console.error('Error fetching history:', err);
+      setHistory([]);
+    } finally {
+      setLoading(false);
+      setRefreshing(false);
+    }
+  }, [user?.id]);
+
+  const onRefresh = useCallback(() => {
+    setRefreshing(true);
     fetchHistory();
-  }, []);
+  }, [fetchHistory]);
+
+  useEffect(() => {
+    fetchHistory();
+  }, [fetchHistory]);
 
   const filtered = useMemo(() => {
     const query = search.trim().toLowerCase();
@@ -131,7 +139,7 @@ const DeliveryHistory = () => {
   const renderItem = useCallback(({ item }: { item: Order }) => {
     const customerName = item.customer_name || 'Unknown';
     const customerAddress = item.customer_address || '';
-    const totalAmount = item.pricing?.total_amount || item.total_amount || 0;
+    const totalAmount = item.total_amount || 0;
     const config = statusConfig[item.status as StatusFilter] || statusConfig.cancelled;
     
     const totalItems = item.products && typeof item.products === 'object'
@@ -152,11 +160,6 @@ const DeliveryHistory = () => {
           <View style={styles.cardTopRow}>
             <View style={styles.orderIdContainer}>
               <Text style={styles.orderId}>{item.order_number}</Text>
-              <View style={styles.dateBadge}>
-                <Text style={styles.dateText}>
-                  {item.created_at ? formatDate(item.created_at) : '—'}
-                </Text>
-              </View>
             </View>
             <View style={[styles.statusChip, { backgroundColor: config.bgColor }]}>
               <View style={[styles.statusDot, { backgroundColor: config.color }]} />
@@ -309,6 +312,14 @@ const DeliveryHistory = () => {
           renderItem={renderItem}
           contentContainerStyle={styles.listContent}
           showsVerticalScrollIndicator={false}
+          refreshControl={
+            <RefreshControl
+              refreshing={refreshing}
+              onRefresh={onRefresh}
+              tintColor="#0F172A"
+              colors={["#0F172A"]}
+            />
+          }
           ListEmptyComponent={
             <View style={styles.emptyContainer}>
               <View style={styles.emptyIconContainer}>

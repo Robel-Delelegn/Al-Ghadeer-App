@@ -62,7 +62,7 @@ interface CartItem {
   price: number;
   quantity: number;
   currency: string;
-  type: '5L' | '10L' | '300ml' | '1L' | '20L' | 'dispenser';
+  type?: '5L' | '10L' | '300ml' | '1L' | '20L' | 'dispenser'; // Optional - not used in UI
 }
 
 // Enhanced Order Store with new Order structure
@@ -235,7 +235,7 @@ export const useOrderStore = create<OrderStore>()(persist(
             price: typeof product.pricing === 'number' ? product.pricing : 0,
             quantity: quantity,
             currency: 'AED',
-            type: product.type
+            type: product.type // Optional field, not used in UI
           }]
         };
       });

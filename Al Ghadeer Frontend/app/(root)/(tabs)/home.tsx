@@ -7,8 +7,8 @@ import { Order } from '@/types/order';
 import { useAuthStore } from '@/store/auth';
 import * as Location from 'expo-location';
 import { useRouter } from 'expo-router';
-import React, { useEffect, useState } from 'react';
-import { FlatList, Image, Text, TextInput, TouchableOpacity, View } from 'react-native';
+import React, { useEffect, useState, useCallback } from 'react';
+import { FlatList, Image, RefreshControl, Text, TextInput, TouchableOpacity, View } from 'react-native';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import { ActivityIndicator } from 'react-native-paper';
 import { Ionicons } from '@expo/vector-icons';
@@ -16,7 +16,7 @@ import { Ionicons } from '@expo/vector-icons';
 const formatDate = (date: Date) =>
   date.toLocaleDateString(undefined, { weekday: 'long', month: 'short', day: 'numeric' });
 
-const IP_ADDRESS = process.env.EXPO_PUBLIC_IP_ADDRESS || 'http://localhost:3000/api';
+const IP_ADDRESS = process.env.EXPO_PUBLIC_IP_ADDRESS;
 
 // API Response interface
 interface ApiResponse {
@@ -33,8 +33,8 @@ const Home = () => {
   // Use useMemo to ensure these values update when currentDriver changes
   // Depend on currentDriver object itself, not nested properties, for proper reactivity
   const driverName = React.useMemo(
-    () => currentDriver?.name || user?.driver_name || user?.name || user?.phone || 'Driver',
-    [currentDriver, user?.driver_name, user?.name, user?.phone]
+    () => currentDriver?.name || user?.name || user?.phone || 'Driver',
+    [currentDriver, user?.name, user?.phone]
   );
   
   const helperName = React.useMemo(
@@ -49,6 +49,7 @@ const Home = () => {
   const today = new Date();
   const [searchQuery, setSearchQuery] = useState('');
   const [isloading, setIsloading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
   const [isProfileModalVisible, setIsProfileModalVisible] = useState(false);
   
   // Helper function to check if order is currently available
@@ -104,22 +105,58 @@ const Home = () => {
 
 
   useEffect(() => {
-    const requestLocation = async () => {
-      const { status } = await Location.requestForegroundPermissionsAsync();
-      if (status !== "granted") return;
+    let subscription: Location.LocationSubscription | null = null;
 
-      const location = await Location.getCurrentPositionAsync();
-      const address = await Location.reverseGeocodeAsync({
-        latitude: location.coords.latitude,
-        longitude: location.coords.longitude,
-      });
-      setUserLocation({
-        latitude: location.coords.latitude, 
-        longitude: location.coords.longitude, 
-        address: `${address[0]?.name || ''}, ${address[0]?.region || ''}`
-      });
+    const startLocationTracking = async () => {
+      try {
+        const { status } = await Location.requestForegroundPermissionsAsync();
+        if (status !== "granted") {
+          console.log('Location permission denied');
+          return;
+        }
+
+        // Start watching position with updates
+        subscription = await Location.watchPositionAsync(
+          {
+            accuracy: Location.Accuracy.Balanced,
+            distanceInterval: 10, // Update every 10 meters
+            timeInterval: 5000, // Or every 5 seconds, whichever comes first
+          },
+          async (location) => {
+            try {
+              const address = await Location.reverseGeocodeAsync({
+                latitude: location.coords.latitude,
+                longitude: location.coords.longitude,
+              });
+              setUserLocation({
+                latitude: location.coords.latitude, 
+                longitude: location.coords.longitude, 
+                address: `${address[0]?.name || ''}, ${address[0]?.region || ''}`
+              });
+            } catch (error) {
+              console.error('Error reverse geocoding:', error);
+              // Still update location even if reverse geocoding fails
+              setUserLocation({
+                latitude: location.coords.latitude, 
+                longitude: location.coords.longitude, 
+                address: ''
+              });
+            }
+          }
+        );
+      } catch (error) {
+        console.error('Error starting location tracking:', error);
+      }
     };
-    void requestLocation();
+
+    void startLocationTracking();
+
+    // Cleanup subscription on unmount
+    return () => {
+      if (subscription) {
+        subscription.remove();
+      }
+    };
   }, [setUserLocation]);
 
   const handleViewDetails = (id:string) => {
@@ -135,65 +172,72 @@ const Home = () => {
     return new Date(timeStr).getTime();
   }, []);
 
-  useEffect(() => {
+  const fetchDeliveries = useCallback(async () => {
     const driverId = user?.id || currentDriver?.id;
+    try {
+      setIsloading(true);
+      const url = `${IP_ADDRESS}/driver/orders?driver_id=${driverId}`;
+      const response = await fetch(url);
 
-    const fetchDeliveries = async () => {
-      try {
-        setIsloading(true);
-        const url = `${IP_ADDRESS}/driver/orders?driver_id=${driverId}`;
-        const response = await fetch(url);
-
-        if (!response.ok) {
-          throw new Error(`HTTP error! Status: ${response.status}`);
-        }
-        
-        const apiResponse: ApiResponse = await response.json();
-        
-        if (!apiResponse.success || !apiResponse.data) {
-          throw new Error('Invalid API response format');
-        }
-        
-        const transformedOrders: Order[] = apiResponse.data.map(order => ({
-          ...order,
-          products: order.products || {}, 
-          customer_site_id: order.customer_site_id,
-        }));
-        
-        const sortedOrders = transformedOrders.sort((a, b) => {
-          if (!a.start_time && !b.start_time) return 0;
-          if (!a.start_time) return 1;
-          if (!b.start_time) return -1;
-          return parseTime(a.start_time) - parseTime(b.start_time);
-        });
-
-        setAssignedOrders(sortedOrders);
-      } catch (err) {
-        console.error('Error fetching orders:', err);
-      } finally {
-        setIsloading(false);
+      if (!response.ok) {
+        throw new Error(`HTTP error! Status: ${response.status}`);
       }
-    };
-
-    const fetchDriverInfo = async () => {
-      try {
-        const url = `${IP_ADDRESS}/driver/info?driver_id=${driverId}`;
-        const response = await fetch(url);
-        console.log('Driver info response:', response);
-        if (!response.ok) return;
-        
-        const apiResponse = await response.json();
-        if (apiResponse.success && apiResponse.data) {
-          updateDriverInfo(apiResponse.data);
-        }
-      } catch (err) {
-        // Silently fail - driver info is not critical
+      
+      const apiResponse: ApiResponse = await response.json();
+      
+      if (!apiResponse.success || !apiResponse.data) {
+        throw new Error('Invalid API response format');
       }
-    };
+      
+      const transformedOrders: Order[] = apiResponse.data.map(order => ({
+        ...order,
+        products: order.products || {}, 
+        customer_site_id: order.customer_site_id,
+      }));
+      
+      const sortedOrders = transformedOrders.sort((a, b) => {
+        if (!a.start_time && !b.start_time) return 0;
+        if (!a.start_time) return 1;
+        if (!b.start_time) return -1;
+        return parseTime(a.start_time) - parseTime(b.start_time);
+      });
 
+      setAssignedOrders(sortedOrders);
+    } catch (err) {
+      console.error('Error fetching orders:', err);
+    } finally {
+      setIsloading(false);
+      setRefreshing(false);
+    }
+  }, [user?.id, currentDriver?.id, IP_ADDRESS, setAssignedOrders, parseTime]);
+
+  const fetchDriverInfo = useCallback(async () => {
+    const driverId = user?.id || currentDriver?.id;
+    try {
+      const url = `${IP_ADDRESS}/driver/info?driver_id=${driverId}`;
+      const response = await fetch(url);
+      console.log('Driver info response:', response);
+      if (!response.ok) return;
+      
+      const apiResponse = await response.json();
+      if (apiResponse.success && apiResponse.data) {
+        updateDriverInfo(apiResponse.data);
+      }
+    } catch (err) {
+      // Silently fail - driver info is not critical
+    }
+  }, [user?.id, currentDriver?.id, IP_ADDRESS, updateDriverInfo]);
+
+  const onRefresh = useCallback(() => {
+    setRefreshing(true);
     fetchDeliveries();
     fetchDriverInfo();
-  }, [user?.id, currentDriver?.id, IP_ADDRESS, setAssignedOrders, updateDriverInfo, parseTime]);
+  }, [fetchDeliveries, fetchDriverInfo]);
+
+  useEffect(() => {
+    fetchDeliveries();
+    fetchDriverInfo();
+  }, [fetchDeliveries, fetchDriverInfo]);
   return (
     <GestureHandlerRootView style={{ flex: 1 }}>
       <View className="flex-1 bg-white">
@@ -316,6 +360,14 @@ const Home = () => {
               />
             )}
             contentContainerStyle={{ paddingHorizontal: 24, paddingBottom: 100 }}
+            refreshControl={
+              <RefreshControl
+                refreshing={refreshing}
+                onRefresh={onRefresh}
+                tintColor="#0F172A"
+                colors={["#0F172A"]}
+              />
+            }
             ListEmptyComponent={
               <View className="flex-1 items-center justify-center mt-24">
                 <Image source={images.noResult} className="w-40 h-40 mb-6" resizeMode="contain" />

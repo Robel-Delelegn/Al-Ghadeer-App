@@ -14,11 +14,11 @@ import {
   Dimensions,
   Platform,
 } from 'react-native';
-import { showErrorAlert, showSuccessAlert } from '@/utils/alert';
+import { showErrorAlert, showSuccessAlert } from '@/store/utils/alert';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 const { width } = Dimensions.get('window');
-const IP_ADDRESS = process.env.EXPO_PUBLIC_IP_ADDRESS || 'http://localhost:3000/api';
+const IP_ADDRESS = process.env.EXPO_PUBLIC_IP_ADDRESS;
 
 interface ApiResponse {
   success: boolean;
@@ -104,11 +104,6 @@ const PaymentConfirmation: React.FC = () => {
         customer_id:  orderDetail.customer_id || '',
         customer_name: orderDetail.customer_name || 'N/A',
         customer_phone: orderDetail.customer_phone || 'N/A',
-        customer_email: orderDetail.customer_email || '',
-        customer_address: orderDetail.customer_address || 'N/A',
-        latitude: orderDetail.latitude || 0,
-        longitude: orderDetail.longitude || 0,
-        delivery_instructions: orderDetail.delivery_instructions || '',
         products: cartItems.filter(item => item?.name).map(item => ({
           name: item.name,
           quantity: item.quantity,
@@ -118,7 +113,6 @@ const PaymentConfirmation: React.FC = () => {
         vat: parseFloat(vat),
         total_amount: parseFloat(totalWithVat),
         payment_method: selectedPaymentMethod.toLowerCase(),
-        delivery_zone: orderDetail.delivery_zone || 'General',
         // Include checkout session ID if this is a credit card payment
         ...(checkoutSessionId && selectedPaymentMethod === 'credit_card' && { checkout_session_id: checkoutSessionId })
       };

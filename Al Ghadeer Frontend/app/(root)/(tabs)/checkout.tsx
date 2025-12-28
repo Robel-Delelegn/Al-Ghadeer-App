@@ -13,11 +13,11 @@ import {
   Dimensions,
   Platform,
 } from 'react-native';
-import { showWarningAlert, showErrorAlert } from '@/utils/alert';
+import { showWarningAlert, showErrorAlert } from '@/store/utils/alert';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 const { width } = Dimensions.get('window');
-const IP_ADDRESS = process.env.EXPO_PUBLIC_IP_ADDRESS || 'http://localhost:3000/api';
+const IP_ADDRESS = process.env.EXPO_PUBLIC_IP_ADDRESS;
 
 type PaymentMethod = 'cash' | 'wallet' | 'credit_card';
 
@@ -84,7 +84,7 @@ const Checkout: React.FC = () => {
       const validationData = {
         payment_method: selectedPaymentMethod.toLowerCase(),
         amount: parseFloat(totalWithVat),
-        order_id: orderDetail?.id || orderDetail?.order_number || null,
+        order_id: orderDetail?.id || null,
         customer_id: orderDetail?.customer_id || null,
         customer_type: orderDetail?.customer_type || 'individual',
         wallet_balance: orderDetail?.wallet_balance 
@@ -111,7 +111,6 @@ const Checkout: React.FC = () => {
         status: response.status,
         success: result.success,
         requires_signature: result.requires_signature,
-        is_organization: result.is_organization,
         message: result.message
       });
 
@@ -131,7 +130,7 @@ const Checkout: React.FC = () => {
       }
 
       // Check if this is an organization credit delivery requiring signature
-      if (result.requires_signature && result.is_organization) {
+      if (result.requires_signature) {
         console.log('🏢 Redirecting to organization signature screen');
         // Redirect to signature screen for organization credit delivery
         router.push('/(root)/(tabs)/organization-signature');

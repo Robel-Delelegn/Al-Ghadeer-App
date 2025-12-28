@@ -3,7 +3,7 @@ import { Ionicons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
 import React, { useState, useCallback, useMemo } from 'react';
 import { ScrollView, Text, TextInput, TouchableOpacity, View, ActivityIndicator, Modal, Image } from 'react-native';
-import { showErrorAlert, showSuccessAlert } from '@/utils/alert';
+import { showErrorAlert, showSuccessAlert, showWarningAlert } from '@/store/utils/alert';
 
 const IP_ADDRESS = process.env.EXPO_PUBLIC_IP_ADDRESS || 'http://localhost:3000/api';
 
@@ -41,12 +41,10 @@ const FailedDeliveries = () => {
       showErrorAlert('Error', 'Order information not found.');
       return;
     }
-
     if (!selectedReason) {
       showErrorAlert('Error', 'Please select a reason for failed delivery.');
       return;
     }
-
     if (!currentDriver) {
       showErrorAlert('Error', 'Driver information not found.');
       return;
@@ -65,8 +63,6 @@ const FailedDeliveries = () => {
 
       // Send to server
       const url = `${IP_ADDRESS}/failed-deliveries/submit?driver_id=${currentDriver.id}`;
-      console.log('Submitting failed delivery to:', url);
-      console.log('Failed delivery data:', failureDetails);
       
       const response = await fetch(url, {
         method: 'POST',

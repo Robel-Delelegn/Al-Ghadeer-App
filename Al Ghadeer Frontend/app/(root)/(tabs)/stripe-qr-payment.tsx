@@ -14,7 +14,7 @@ import {
   Platform,
   Image,
 } from 'react-native';
-import { showErrorAlert, showSuccessAlert } from '@/utils/alert';
+import { showErrorAlert, showSuccessAlert } from '@/store/utils/alert';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import QRCode from 'react-native-qrcode-svg';
 

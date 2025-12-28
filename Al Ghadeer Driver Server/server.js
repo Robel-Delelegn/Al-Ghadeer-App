@@ -107,7 +107,7 @@ const drivers = [
         status: 'approved'
     },
     {
-        id: 'b97f3fc1-0708-4b97-bf5d-deb424b2cd93',
+        id: 'driver_002',
         phone: '+971501234568',
         driver_name: 'Fatima Noor',
         helper_name: 'Salem Mansoor',
@@ -366,7 +366,7 @@ app.post('/api/auth/resend-otp', async (req, res) => {
     console.log(`Expires in: 10 minutes`);
     console.log('========================================\n');
 
-        res.status(200).json({ 
+    res.status(200).json({ 
         success: true,
         message: 'OTP resent to your phone number'
     });
@@ -441,8 +441,8 @@ app.get('/api/driver/orders', async (req, res) => {
                 '5L Water Bottle': 5,
                 '300ml Water Bottle': 2
             },
-            created_at: new Date().toISOString(),
-            updated_at: new Date().toISOString()
+            payment_method: 'cash',
+            payment_status: 'pending',
         },
         {
             id: '2',
@@ -468,8 +468,8 @@ app.get('/api/driver/orders', async (req, res) => {
                 '5L Water Bottle': 3,
                 '300ml Water Bottle': 10
             },
-            created_at: new Date().toISOString(),
-            updated_at: new Date().toISOString()
+            payment_method: 'wallet',
+            payment_status: 'paid',
         },
         {
             id: '3',
@@ -493,10 +493,10 @@ app.get('/api/driver/orders', async (req, res) => {
             wallet_balance: 0,
             products: {
                 '5L Water Bottle': 4,
-                water_dispenser: 1
+                "Water Dispenser": 1
             },
-            created_at: new Date().toISOString(),
-            updated_at: new Date().toISOString()
+            payment_method: 'cash',
+            payment_status: 'pending',
         },
         {
             id: '4',
@@ -522,8 +522,8 @@ app.get('/api/driver/orders', async (req, res) => {
                 '5L Water Bottle': 100,
                 "10L Water Bottle": 30
             },
-            created_at: new Date().toISOString(),
-            updated_at: new Date().toISOString()
+            payment_method: 'wallet',
+            payment_status: 'paid',
         },
         {
             id: '5',
@@ -549,8 +549,8 @@ app.get('/api/driver/orders', async (req, res) => {
                 '5L Water Bottle': 500,
                 "10L Water Bottle": 200
             },
-            created_at: new Date().toISOString(),
-            updated_at: new Date().toISOString()
+            payment_method: 'wallet',
+            payment_status: 'due',
         }
     ];
 
@@ -624,10 +624,9 @@ app.get('/api/driver/history', async (req, res) => {
             customer_site_id: 'site_101',
             customer_id: 'cust_001',
             products: {
-                five_litre_bottles: 3
+                "5L Water Bottle": 3,
+                "10L Water Bottle": 2
             },
-            created_at: new Date(Date.now() - 86400000).toISOString(),
-            assigned_at: new Date(Date.now() - 86400000).toISOString(),
             completed_at: new Date(Date.now() - 82800000).toISOString(),
         },
         {
@@ -647,10 +646,9 @@ app.get('/api/driver/history', async (req, res) => {
             customer_site_id: 'site_102',
             customer_id: 'cust_002',
             products: {
-                ten_litre_bottles: 2
+                "5L Water Bottle": 2,
+                "10L Water Bottle": 2
             },
-            created_at: new Date(Date.now() - 172800000).toISOString(),
-            assigned_at: new Date(Date.now() - 172800000).toISOString(),
             completed_at: null,
         },
         {
@@ -670,11 +668,9 @@ app.get('/api/driver/history', async (req, res) => {
             customer_site_id: 'site_103',
             customer_id: 'cust_003',
             products: {
-                five_litre_bottles: 4,
-                one_litre_bottles: 5
+                "5L Water Bottle": 4,
+                "1L Water Bottle": 5
             },
-            created_at: new Date(Date.now() - 259200000).toISOString(),
-            assigned_at: new Date(Date.now() - 259200000).toISOString(),
             completed_at: new Date(Date.now() - 255600000).toISOString(),
 
         },
@@ -695,10 +691,9 @@ app.get('/api/driver/history', async (req, res) => {
             customer_site_id: 'site_104',
             customer_id: 'cust_004',
             products: {
-                ten_litre_bottles: 3
+                "10L Water Bottle": 3,
+                "5L Water Bottle": 2
             },
-            created_at: new Date(Date.now() - 345600000).toISOString(),
-            assigned_at: new Date(Date.now() - 345600000).toISOString(),
             completed_at: null,
         }
     ];
@@ -869,7 +864,6 @@ app.post('/api/driver/orders/validate-payment', async (req, res) => {
                 amount: amount,
                 wallet_balance: wallet_balance,
                 requires_signature: true,
-                is_organization: true,
             });
         }
         
@@ -896,7 +890,6 @@ app.post('/api/driver/orders/validate-payment', async (req, res) => {
         payment_method: normalizedMethod,
         amount: amount,
         requires_signature: false,
-        is_organization: false
     });
 });
 
@@ -1145,28 +1138,14 @@ app.post('/api/driver/direct-sales', async (req, res) => {
     const sale = {
         id: `sale_${Date.now()}`,
         sale_number: `DS-${Date.now()}`,
-        driver_id: saleData.driver_id,
-        customer_name: saleData.customer_name.trim(),
-        customer_phone: saleData.customer_phone.trim(),
-        latitude: saleData.latitude,
-        longitude: saleData.longitude,
-        address: saleData.address || 'Location from device',
-        products: saleData.products,
-        subtotal: saleData.subtotal,
-        vat: saleData.vat,
-        total_amount: saleData.total_amount,
-        payment_method: 'cash', // Always cash for direct sales
-        payment_status: 'paid',
-        sale_date: saleData.sale_date || new Date().toISOString(),
-        created_at: new Date().toISOString()
     };
 
     console.log('✅ Direct sale created:', sale.sale_number);
 
-        res.status(201).json({
+    res.status(201).json({
             success: true,
         message: `Direct sale ${sale.sale_number} has been recorded successfully.`,
-        sale: sale
+        sale_number: sale.sale_number
     });
 });
 
@@ -1184,7 +1163,7 @@ app.get('/api/drivers/loaded-items/request', async (req, res) => {
             name: '5L Water Bottles',
             quantity: 50,
             unit: 'bottles',
-            category: 'Water',
+            category: 'Drinking Water',
             condition: 'full'
         },
         {
@@ -1192,7 +1171,7 @@ app.get('/api/drivers/loaded-items/request', async (req, res) => {
             name: '10L Water Bottles',
             quantity: 25,
             unit: 'bottles',
-            category: 'Water',
+            category: 'Drinking Water',
             condition: 'full'
         },
         {
@@ -1200,7 +1179,7 @@ app.get('/api/drivers/loaded-items/request', async (req, res) => {
             name: '300ml Water Bottles',
             quantity: 100,
             unit: 'bottles',
-            category: 'Water',
+            category: 'Drinking Water',
             condition: 'full'
         },
         {
@@ -1208,7 +1187,7 @@ app.get('/api/drivers/loaded-items/request', async (req, res) => {
             name: 'Water Dispensers',
             quantity: 5,
             unit: 'units',
-            category: 'Equipment',
+            category: 'Accessories',
             condition: 'full'
         },
         {
@@ -1216,7 +1195,7 @@ app.get('/api/drivers/loaded-items/request', async (req, res) => {
             name: '1L Water Bottles',
             quantity: 75,
             unit: 'bottles',
-            category: 'Water',
+            category: 'Drinking Water',
             condition: 'full'
         }
     ];
@@ -1225,7 +1204,6 @@ app.get('/api/drivers/loaded-items/request', async (req, res) => {
         success: true,
         message: 'Items retrieved successfully',
         data: items,
-        requested_at: new Date().toISOString()
     });
 });
 
@@ -1326,8 +1304,6 @@ app.get('/api/expenses', async (req, res) => {
             receipt_image: null,
             status: 'pending',
             submission_date: new Date(Date.now() - 86400000).toISOString(),
-            created_at: new Date(Date.now() - 86400000).toISOString(),
-            updated_at: new Date(Date.now() - 86400000).toISOString(),
             reviewed_at: null,
             reviewed_by: null,
             review_notes: null
@@ -1341,8 +1317,6 @@ app.get('/api/expenses', async (req, res) => {
             receipt_image: 'base64_image_data_here',
             status: 'approved',
             submission_date: new Date(Date.now() - 172800000).toISOString(),
-            created_at: new Date(Date.now() - 172800000).toISOString(),
-            updated_at: new Date(Date.now() - 86400000).toISOString(),
             reviewed_at: new Date(Date.now() - 86400000).toISOString(),
             reviewed_by: 'admin_001',
             review_notes: 'Approved'
@@ -1356,8 +1330,6 @@ app.get('/api/expenses', async (req, res) => {
             receipt_image: null,
             status: 'rejected',
             submission_date: new Date(Date.now() - 259200000).toISOString(),
-            created_at: new Date(Date.now() - 259200000).toISOString(),
-            updated_at: new Date(Date.now() - 172800000).toISOString(),
             reviewed_at: new Date(Date.now() - 172800000).toISOString(),
             reviewed_by: 'admin_001',
             review_notes: 'Receipt required'
@@ -1381,7 +1353,6 @@ app.post('/api/expenses/submit', async (req, res) => {
         id: `exp_${Date.now()}`,
         request_id: `EXP-${Date.now()}`,
         status: 'pending',
-        created_at: new Date().toISOString()
     };
 
         res.status(201).json({
@@ -1399,92 +1370,128 @@ app.post('/api/expenses/submit', async (req, res) => {
 app.get('/api/products', async (req, res) => {
     const { driver_id, customer_site_id, customer_id } = req.query;
 
-    const products = [
-        {
-            id: 'prod_001',
-            name: '5L Water Bottle',
-            description: 'Premium 5-liter water bottle',
-            price: 8.50,
-            unit: 'bottle',
-            available_stock: 500,
-            category: 'Water',
-            image_url: 'https://example.com/images/5l-bottle.jpg',
-            is_active: true,
-            customer_site_id: customer_site_id || 'site_001',
-            customer_id: customer_id || 'cust_001'
-        },
-        {
-            id: 'prod_002',
-            name: '10L Water Bottle',
-            description: 'Premium 10-liter water bottle',
-            price: 15.00,
-            unit: 'bottle',
-            available_stock: 300,
-            category: 'Water',
-            image_url: 'https://example.com/images/10l-bottle.jpg',
-            is_active: true,
-            customer_site_id: customer_site_id || 'site_001',
-            customer_id: customer_id || 'cust_001'
-        },
-        {
-            id: 'prod_003',
-            name: '300ml Water Bottle',
-            description: 'Compact 300ml water bottle',
-            price: 2.00,
-            unit: 'bottle',
-            available_stock: 1000,
-            category: 'Water',
-            image_url: 'https://example.com/images/300ml-bottle.jpg',
-            is_active: true,
-            customer_site_id: customer_site_id || 'site_001',
-            customer_id: customer_id || 'cust_001'
-        },
-        {
-            id: 'prod_004',
-            name: '1L Water Bottle',
-            description: 'Standard 1-liter water bottle',
-            price: 3.50,
-            unit: 'bottle',
-            available_stock: 800,
-            category: 'Water',
-            image_url: 'https://example.com/images/1l-bottle.jpg',
-            is_active: true,
-            customer_site_id: customer_site_id || 'site_001',
-            customer_id: customer_id || 'cust_001'
-        },
-        {
-            id: 'prod_005',
-            name: '20L Water Bottle',
-            description: 'Large 20-liter water bottle',
-            price: 25.00,
-            unit: 'bottle',
-            available_stock: 200,
-            category: 'Water',
-            image_url: 'https://example.com/images/20l-bottle.jpg',
-            is_active: true,
-            customer_site_id: customer_site_id || 'site_001',
-            customer_id: customer_id || 'cust_001'
-        },
-        {
-            id: 'prod_006',
-            name: 'Water Dispenser',
-            description: 'Premium water dispenser unit',
-            price: 150.00,
-            unit: 'unit',
-            available_stock: 50,
-            category: 'Equipment',
-            image_url: 'https://example.com/images/dispenser.jpg',
-            is_active: true,
-            customer_site_id: customer_site_id || 'site_001',
-            customer_id: customer_id || 'cust_001'
-        }
-    ];
+    const products = {
+        "Drinking waters": [
+          {
+            id: "200ml-cup",
+            name: "200ml Cup",
+            price: 7.35,
+            image_url: "https://www.alghadeerwater.com/lovable-uploads/e97e8c8a-a180-42e5-b588-5013648484bb.png",
+            description: "Premium quality drinking water in a convenient 200ml cup. Perfect for on-the-go hydration with BPA-free materials.",
+            category: "Drinking Water"
+          },
+          {
+            id: "200ml-bottle-30",
+            name: "200ml Bottle",
+            price: 10.5,
+            image_url: "https://images.unsplash.com/photo-1698664434322-94a43b98b9ba?q=80&w=765&auto=format&fit=crop&ixlib=rb-4.1.0&ixid=M3wxMjA3fDB8MHxwaG90by1wYWdlfHx8fGVufDB8fHx8fA%3D%3D",
+            description: "Compact 200ml bottle ideal for daily hydration. Made with eco-friendly materials.",
+            category: "Drinking Water"
+          },
+          {
+            id: "330ml-bottle-12",
+            name: "330ml Bottle",
+            price: 5.25,
+            image_url: "https://www.alghadeerwater.com/lovable-uploads/46c6c613-4f2b-4bc0-8e8e-b20545592e93.png",
+            description: "Standard 330ml bottle of premium purified water. Great value for everyday use.",
+            category: "Drinking Water"
+          },
+          {
+            id: "500ml-bottle-12",
+            name: "500ml Bottle",
+            price: 5.25,
+            image_url: "https://encrypted-tbn0.gstatic.com/images?q=tbn:ANd9GcRYjjcwgr-oWl6b3iTio1sYOj-Y-iB5RHfOzQ&s",
+            description: "500ml bottle of pure drinking water. Perfect size for work or travel.",
+            category: "Drinking Water"
+          },
+          {
+            id: "w19",
+            name: "19L Water Bottle",
+            price: 12.0,
+            image_url: "https://encrypted-tbn0.gstatic.com/images?q=tbn:ANd9GcRB8Ozlj1C0ndAc2SmXnKckp99URIGms7nvHw&s",
+            description: "Large 19-liter bottle for home or office use. Premium quality water delivered fresh.",
+            category: "Drinking Water"
+          },
+          {
+            id: "w05",
+            name: "5L Water Bottle",
+            price: 6.0,
+            image_url: "https://encrypted-tbn0.gstatic.com/images?q=tbn:ANd9GcRHNxKaqhMnBJGK8ccZvgv65-SMZUQn84vpNg&s",
+            description: "Convenient 5-liter bottle. Ideal for small families or single households.",
+            category: "Drinking Water"
+          }
+        ],
+        "Accessories": [
+          {
+            id: "cooler",
+            name: "Water Cooler",
+            price: 350,
+            image_url: "https://www.alghadeerwater.com/lovable-uploads/33ae9524-aa29-4945-a1a0-90d4e13adccd.png",
+            description: "Premium water cooler with hot and cold water dispensing. Modern design with energy-efficient operation.",
+            category: "Accessories"
+          },
+          {
+            id: "kitchen-dispenser",
+            name: "Kitchen Dispenser",
+            price: 40,
+            image_url: "https://images.unsplash.com/photo-1544198841-10f34f31f8dd?q=80&w=687&auto=format&fit=crop&ixlib=rb-4.1.0&ixid=M3wxMjA3fDB8MHxwaG90by1wYWdlfHx8fGVufDB8fHx8fA%3D%3D",
+            description: "Compact kitchen water dispenser. Easy to install and perfect for any kitchen space.",
+            category: "Accessories"
+          },
+          {
+            id: "manual-pump",
+            name: "Manual Pump",
+            price: 25,
+            image_url: "https://plus.unsplash.com/premium_photo-1667516700355-4e153de39581?w=600&auto=format&fit=crop&q=60&ixlib=rb-4.1.0&ixid=M3wxMjA3fDB8MHxwaG90by1yZWxhdGVkfDEyfHx8ZW58MHx8fHx8",
+            description: "Durable manual water pump. No electricity required, perfect for any location.",
+            category: "Accessories"
+          },
+          {
+            id: "disp",
+            name: "Water Dispenser Rental",
+            price: 30.0,
+            image_url: "https://images.unsplash.com/photo-1593784991095-a205069470b6?w=300&h=300&fit=crop",
+            description: "Monthly rental for premium water dispenser. Includes maintenance and service.",
+            category: "Accessories"
+          }
+        ],
+        "Special offers": [
+          {
+            id: "family-pack",
+            name: "Family Pack",
+            price: 420,
+            originalPrice: 495,
+            image_url: "https://www.alghadeerwater.com/lovable-uploads/d2973658-4577-4d76-834d-0259988c1eaf.png",
+            description: "Cooler + 5 full bottles + coupon book + free 200ml carton. Best value for families. Everything you need to start your water delivery service.",
+            category: "Special Offers",
+            badge: "Best Value"
+          },
+          {
+            id: "standard-pack",
+            name: "Standard Pack",
+            price: 380,
+            originalPrice: 425,
+            image_url: "https://www.alghadeerwater.com/assets/build-your-own-bundle-Cq1_iSCi.png",
+            description: "Cooler + 3 full bottles + coupon book + free 200ml carton. Most popular starter package for new customers.",
+            category: "Special Offers",
+            badge: "Most Popular"
+          },
+          {
+            id: "starter-pack",
+            name: "Starter Pack",
+            price: 125,
+            originalPrice: 140,
+            image_url: "https://www.alghadeerwater.com/lovable-uploads/36bdc5fe-0ba9-4c4d-a9f5-946184d4a039.png",
+            description: "Manual pump + 3 full bottles + coupon book + free 200ml carton. Perfect for trying our service.",
+            category: "Special Offers",
+            badge: "Starter Pack"
+          }
+        ]
+      }
 
     res.status(200).json({
         success: true,
-        message: 'Products retrieved successfully',
         data: products,
-        count: products.length
         });
 });
 

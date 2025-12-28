@@ -7,7 +7,7 @@ import { useRouter } from 'expo-router';
 import * as Sharing from 'expo-sharing';
 import React, { useCallback, useState } from 'react';
 import { ActivityIndicator, ScrollView, Text, TouchableOpacity, View } from 'react-native';
-import { showSuccessAlert, showErrorAlert } from '@/utils/alert';
+import { showSuccessAlert, showErrorAlert } from '@/store/utils/alert';
 
 const PaymentReceipt: React.FC = () => {
   const router = useRouter();

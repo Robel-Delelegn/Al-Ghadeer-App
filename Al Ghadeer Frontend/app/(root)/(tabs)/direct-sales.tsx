@@ -16,28 +16,30 @@ import {
   KeyboardAvoidingView,
   Animated,
 } from 'react-native';
-import { showErrorAlert, showWarningAlert, showSuccessAlert } from '@/utils/alert';
+import { showErrorAlert, showWarningAlert, showSuccessAlert } from '@/store/utils/alert';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 const { width } = Dimensions.get('window');
-const IP_ADDRESS = process.env.EXPO_PUBLIC_IP_ADDRESS || 'http://localhost:3000/api';
+const IP_ADDRESS = process.env.EXPO_PUBLIC_IP_ADDRESS;
 
+// Server product structure - matches /api/products response exactly
 interface ServerProduct {
   id: string;
   name: string;
-  description: string;
   price: number;
-  unit: string;
-  available_stock: string | number;
-  category: string;
   image_url: string;
-  is_active: boolean;
+  description: string;
+  category: string;
+  originalPrice?: number; // Optional, for special offers
+  badge?: string; // Optional, for special offers
 }
 
+// Server response structure - data is an object with category keys
 interface ProductsApiResponse {
   success: boolean;
-  data: ServerProduct[];
-  count: number;
+  data: {
+    [category: string]: ServerProduct[];
+  };
 }
 
 const PAYMENT_METHODS = [
@@ -60,32 +62,47 @@ const DirectSales: React.FC = () => {
   const [location, setLocation] = useState<{ latitude: number; longitude: number; address: string } | null>(null);
   const [locationLoading, setLocationLoading] = useState(false);
 
+  const fetchProducts = useCallback(async () => {
+    try {
+      setLoading(true);
+      const driverId = currentDriver?.id;
+      const url = `${IP_ADDRESS}/products?driver_id=${driverId}`;
+      console.log('Fetching products from:', url);
+      
+      const response = await fetch(url);
+      if (!response.ok) throw new Error(`HTTP error! Status: ${response.status}`);
+      
+      const apiResponse: ProductsApiResponse = await response.json();
+      console.log('Products API response:', apiResponse);
+      
+      if (!apiResponse.success || !apiResponse.data) throw new Error('Invalid API response');
+      
+      // Flatten the category-based object into a single array
+      // Use the server response as-is without normalization
+      const flattenedProducts: ServerProduct[] = [];
+      Object.keys(apiResponse.data).forEach(category => {
+        const categoryProducts = apiResponse.data[category];
+        // Ensure each product has the category from the key if not in the product object
+        categoryProducts.forEach(product => {
+          flattenedProducts.push({
+            ...product,
+            category: product.category || category
+          });
+        });
+      });
+      
+      setProducts(flattenedProducts);
+    } catch (err) {
+      console.error('Error fetching products:', err);
+      showErrorAlert('Error', 'Failed to load products.');
+    } finally {
+      setLoading(false);
+    }
+  }, [currentDriver?.id]);
+
   useEffect(() => {
-    const fetchProducts = async () => {
-      try {
-        setLoading(true);
-        const driverId = currentDriver?.id || 'b97f3fc1-0708-4b97-bf5d-deb424b2cd93';
-        const url = `${IP_ADDRESS}/products?driver_id=${driverId}`;
-        console.log('Fetching products from:', url);
-        
-        const response = await fetch(url);
-        if (!response.ok) throw new Error(`HTTP error! Status: ${response.status}`);
-        
-        const apiResponse: ProductsApiResponse = await response.json();
-        console.log('Products API response:', apiResponse);
-        
-        if (!apiResponse.success || !apiResponse.data) throw new Error('Invalid API response');
-        
-        setProducts(apiResponse.data);
-      } catch (err) {
-        console.error('Error fetching products:', err);
-        showErrorAlert('Error', 'Failed to load products.');
-      } finally {
-        setLoading(false);
-      }
-    };
     fetchProducts();
-  }, [currentDriver]);
+  }, [fetchProducts]);
 
   useEffect(() => {
     const getLocation = async () => {
@@ -156,7 +173,7 @@ const DirectSales: React.FC = () => {
     setIsSubmitting(true);
     try {
       const saleData = {
-        driver_id: currentDriver?.id || 'b97f3fc1-0708-4b97-bf5d-deb424b2cd93',
+        driver_id: currentDriver?.id ,
         customer_name: customerName.trim(),
         customer_phone: customerPhone.trim(),
         latitude: location.latitude,
@@ -303,11 +320,27 @@ const DirectSales: React.FC = () => {
                 const quantity = quantities[product.id] || 0;
                   const isSelected = quantity > 0;
 
+                const displayPrice = product.originalPrice ? (
+                  <View style={styles.priceContainer}>
+                    <Text style={styles.productPriceOriginal}>AED {product.originalPrice}</Text>
+                    <Text style={styles.productPrice}>AED {product.price}</Text>
+                  </View>
+                ) : (
+                  <Text style={styles.productPrice}>AED {product.price}</Text>
+                );
+
                 return (
                     <View key={product.id} style={[styles.productCard, isSelected && styles.productCardSelected]}>
                       <View style={styles.productInfo}>
-                        <Text style={styles.productName} numberOfLines={1}>{product.name}</Text>
-                        <Text style={styles.productPrice}>AED {product.price}</Text>
+                        <View style={styles.productNameContainer}>
+                          <Text style={styles.productName} numberOfLines={1}>{product.name}</Text>
+                          {product.badge && (
+                            <View style={styles.badge}>
+                              <Text style={styles.badgeText}>{product.badge}</Text>
+                            </View>
+                          )}
+                        </View>
+                        {displayPrice}
                       </View>
 
                       <View style={styles.quantityControl}>
@@ -547,11 +580,39 @@ const styles = StyleSheet.create({
     flex: 1,
     marginRight: 16,
   },
+  productNameContainer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginBottom: 4,
+    gap: 8,
+  },
   productName: {
     fontSize: 15,
     fontWeight: '600',
     color: '#0F172A',
-    marginBottom: 4,
+    flex: 1,
+  },
+  badge: {
+    backgroundColor: '#FEF3C7',
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+    borderRadius: 4,
+  },
+  badgeText: {
+    fontSize: 10,
+    fontWeight: '600',
+    color: '#92400E',
+  },
+  priceContainer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+  },
+  productPriceOriginal: {
+    fontSize: 12,
+    fontWeight: '400',
+    color: '#9CA3AF',
+    textDecorationLine: 'line-through',
   },
   productPrice: {
     fontSize: 14,

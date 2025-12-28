@@ -18,7 +18,7 @@ import {
   Pressable,
   KeyboardAvoidingView
 } from 'react-native';
-import { showErrorAlert, showWarningAlert, showSuccessAlert } from '@/utils/alert';
+import { showErrorAlert, showWarningAlert, showSuccessAlert } from '@/store/utils/alert';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 const { width } = Dimensions.get('window');
@@ -32,7 +32,7 @@ const EXPENSE_TYPES = [
   { id: 'other', label: 'Other', icon: 'ellipsis-horizontal-outline' as const },
 ];
 
-const IP_ADDRESS = process.env.EXPO_PUBLIC_IP_ADDRESS || 'http://localhost:3000/api';
+const IP_ADDRESS = process.env.EXPO_PUBLIC_IP_ADDRESS;
 
 interface SubmitExpenseResponse {
   success: boolean;
@@ -54,8 +54,8 @@ interface ServerExpense {
   receipt_image?: string;
   status?: 'pending' | 'approved' | 'rejected';
   submission_date?: string;
-  created_at: string;
-  updated_at: string;
+  created_at?: string;
+  updated_at?: string;
   reviewed_at?: string;
   reviewed_by?: string;
   review_notes?: string;
@@ -406,21 +406,32 @@ const Expenses = () => {
                 </View>
               ) : (
               expenseHistory.map((expense) => {
-                const statusStyle = getStatusStyle(expense.status);
+                const statusStyle = getStatusStyle(expense.status || 'pending');
                 return (
                   <View key={expense.id} style={styles.historyCard}>
                     <View style={styles.historyCardHeader}>
                       <View style={styles.historyType}>
                         <Text style={styles.historyTypeText}>{expense.type}</Text>
                         <Text style={styles.historyDate}>
-                          {new Date(expense.created_at).toLocaleDateString('en-US', { 
-                            month: 'short', day: 'numeric' 
-                          })}
+                          {(() => {
+                            const dateStr = expense.submission_date;
+                            if (!dateStr) return 'N/A';
+                            try {
+                              const date = new Date(dateStr);
+                              if (isNaN(date.getTime())) return 'N/A';
+                              return date.toLocaleDateString('en-US', { 
+                                month: 'short', 
+                                day: 'numeric' 
+                              });
+                            } catch {
+                              return 'N/A';
+                            }
+                          })()}
                         </Text>
                       </View>
                       <View style={[styles.statusBadge, { backgroundColor: statusStyle.bg, borderColor: statusStyle.border }]}>
                         <Text style={[styles.statusText, { color: statusStyle.text }]}>
-                          {expense.status}
+                          {expense.status || 'pending'}
                         </Text>
                       </View>
                     </View>

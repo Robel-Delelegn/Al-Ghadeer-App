@@ -12,11 +12,11 @@ import {
   StyleSheet,
   Dimensions,
 } from 'react-native';
-import { showErrorAlert, showSuccessAlert } from '@/utils/alert';
+import { showErrorAlert, showSuccessAlert } from '@/store/utils/alert';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 const { width } = Dimensions.get('window');
-const API_BASE_URL = process.env.EXPO_PUBLIC_IP_ADDRESS || 'http://localhost:3000/api';
+const API_BASE_URL = process.env.EXPO_PUBLIC_IP_ADDRESS;
 
 interface Item {
   id: string;
@@ -107,7 +107,6 @@ const LoadedItems = () => {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-        driver_id: currentDriver.id,
         items: items.map(item => ({
           id: item.id,
           name: item.name,

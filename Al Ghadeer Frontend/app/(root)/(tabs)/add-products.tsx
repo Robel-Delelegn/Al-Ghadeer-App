@@ -14,30 +14,30 @@ import {
   Dimensions,
   Platform,
 } from 'react-native';
-import { showWarningAlert } from '@/utils/alert';
+import { showWarningAlert } from '@/store/utils/alert';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 const { width } = Dimensions.get('window');
-const IP_ADDRESS = process.env.EXPO_PUBLIC_IP_ADDRESS || 'http://localhost:3000/api';
+const IP_ADDRESS = process.env.EXPO_PUBLIC_IP_ADDRESS;
+
 
 interface ServerProduct {
-  customer_site_id?: string;
-  customer_id?: string;
   id: string;
   name: string;
-  description: string;
   price: number;
-  unit?: string;
-  available_stock: string | number;
-  category: string;
   image_url: string;
-  is_active: boolean;
+  description: string;
+  category: string;
+  originalPrice?: number; // Optional, for special offers
+  badge?: string; // Optional, for special offers
 }
 
+// Server response structure - data is an object with category keys
 interface ProductsApiResponse {
   success: boolean;
-  data: ServerProduct[];
-  count: number;
+  data: {
+    [category: string]: ServerProduct[];
+  };
 }
 
 const ProductItem: React.FC<{
@@ -46,9 +46,17 @@ const ProductItem: React.FC<{
   onChangeQuantity: (newQuantity: number) => void;
   initialQuantity?: number;
 }> = ({ product, quantity, onChangeQuantity, initialQuantity = 0 }) => {
-  const isMaxStock = product.available_stock !== "N/A" && quantity >= Number(product.available_stock);
+  // Server doesn't provide available_stock, so we don't enforce max stock limit
   const isMinStock = quantity === 0;
   const isSelected = quantity > 0;
+  const displayPrice = product.originalPrice ? (
+    <View style={styles.priceContainer}>
+      <Text style={styles.productPriceOriginal}>AED {product.originalPrice}</Text>
+      <Text style={styles.productPrice}>AED {product.price}</Text>
+    </View>
+  ) : (
+    <Text style={styles.productPrice}>AED {product.price}</Text>
+  );
   
   return (
     <View style={[styles.productCard, isSelected && styles.productCardSelected]}>
@@ -58,13 +66,16 @@ const ProductItem: React.FC<{
         </View>
 
         <View style={styles.productInfo}>
-          <Text style={styles.productName}>{product.name}</Text>
+          <View style={styles.productNameContainer}>
+            <Text style={styles.productName}>{product.name}</Text>
+            {product.badge && (
+              <View style={styles.badge}>
+                <Text style={styles.badgeText}>{product.badge}</Text>
+              </View>
+            )}
+          </View>
           <View style={styles.productMeta}>
-            <Text style={styles.productPrice}>AED {product.price}</Text>
-            <View style={styles.productDot} />
-            <Text style={styles.productStock}>
-              {product.available_stock === "N/A" ? "In Stock" : `${product.available_stock} avail`}
-            </Text>
+            {displayPrice}
           </View>
           {initialQuantity > 0 && (
             <View style={styles.orderedBadge}>
@@ -89,12 +100,11 @@ const ProductItem: React.FC<{
           </View>
 
           <TouchableOpacity
-            style={[styles.qtyButton, isMaxStock && styles.qtyButtonDisabled]}
+            style={styles.qtyButton}
             onPress={() => onChangeQuantity(quantity + 1)}
-            disabled={isMaxStock}
             activeOpacity={0.7}
           >
-            <Ionicons name="add" size={16} color={isMaxStock ? '#D1D5DB' : '#111827'} />
+            <Ionicons name="add" size={16} color="#111827" />
           </TouchableOpacity>
         </View>
       </View>
@@ -111,45 +121,60 @@ const ProductList: React.FC = () => {
   const [products, setProducts] = useState<ServerProduct[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [refreshTrigger, setRefreshTrigger] = useState(0);
+
+  const fetchProducts = useCallback(async () => {
+    try {
+      setLoading(true);
+      let url = `${IP_ADDRESS}/products`;
+      url += `?driver_id=${user?.id}`;
+      
+      const currentOrder = assignedOrders.find(order => order.id === selectedOrder);
+      const customerSiteId = currentOrder?.customer_site_id;
+      
+      if (customerSiteId) {
+        url += `&customer_site_id=${customerSiteId}&customer_id=${currentOrder.customer_id}`;
+      }
+      
+      const response = await fetch(url);
+      
+      if (!response.ok) {
+        throw new Error(`HTTP error! Status: ${response.status}`);
+      }
+      
+      const apiResponse: ProductsApiResponse = await response.json();
+      
+      if (!apiResponse.success || !apiResponse.data) {
+        throw new Error('Invalid API response format');
+      }
+      
+      // Flatten the category-based object into a single array
+      // Use the server response as-is without normalization
+      const flattenedProducts: ServerProduct[] = [];
+      Object.keys(apiResponse.data).forEach(category => {
+        const categoryProducts = apiResponse.data[category];
+        // Ensure each product has the category from the key if not in the product object
+        categoryProducts.forEach(product => {
+          flattenedProducts.push({
+            ...product,
+            category: product.category || category
+          });
+        });
+      });
+      
+      setProducts(flattenedProducts);
+      setError(null);
+    } catch (err) {
+      console.error('Error fetching products:', err);
+      setError('Failed to load products. Please try again.');
+    } finally {
+      setLoading(false);
+    }
+  }, [user?.id, assignedOrders, selectedOrder]);
 
   useEffect(() => {
-    const fetchProducts = async () => {
-      try {
-        setLoading(true);
-        let url = `${IP_ADDRESS}/products`;
-        url += `?driver_id=${user?.id}`;
-        
-        const currentOrder = assignedOrders.find(order => order.id === selectedOrder);
-        const customerSiteId = currentOrder?.customer_site_id;
-        
-        if (customerSiteId) {
-          url += `&customer_site_id=${customerSiteId}&customer_id=${currentOrder.customer_id}`;
-        }
-        
-        const response = await fetch(url);
-        
-        if (!response.ok) {
-          throw new Error(`HTTP error! Status: ${response.status}`);
-        }
-        
-        const apiResponse: ProductsApiResponse = await response.json();
-        
-        if (!apiResponse.success || !apiResponse.data) {
-          throw new Error('Invalid API response format');
-        }
-        
-        setProducts(apiResponse.data);
-        setError(null);
-      } catch (err) {
-        console.error('Error fetching products:', err);
-        setError('Failed to load products. Please try again.');
-      } finally {
-        setLoading(false);
-      }
-    };
-
     fetchProducts();
-  }, [selectedOrder, assignedOrders]);
+  }, [fetchProducts, refreshTrigger]);
 
   const categories = useMemo(() => {
     const uniqueCategories = [...new Set(products.map(p => p.category))];
@@ -164,33 +189,10 @@ const ProductList: React.FC = () => {
     products.forEach((p) => {
       let initialQty = 0;
       
-      if (currentOrder?.products) {
-        let orderProductQty = currentOrder.products[p.name];
-        
-        if (!orderProductQty) {
-          const productNameLower = p.name.toLowerCase();
-          const orderProductNames = Object.keys(currentOrder.products);
-          const matchingKey = orderProductNames.find(key => 
-            key.toLowerCase() === productNameLower
-          );
-          if (matchingKey) {
-            orderProductQty = currentOrder.products[matchingKey];
-          }
-        }
-        
-        if (!orderProductQty) {
-          const productNameLower = p.name.toLowerCase();
-          const orderProductNames = Object.keys(currentOrder.products);
-          const matchingKey = orderProductNames.find(key => 
-            key.toLowerCase().includes(productNameLower) || 
-            productNameLower.includes(key.toLowerCase())
-          );
-          if (matchingKey) {
-            orderProductQty = currentOrder.products[matchingKey];
-          }
-        }
-        
-        if (orderProductQty && typeof orderProductQty === 'number') {
+      // Exact name matching from assignedOrders
+      if (currentOrder?.products && currentOrder.products[p.name] !== undefined) {
+        const orderProductQty = currentOrder.products[p.name];
+        if (typeof orderProductQty === 'number') {
           initialQty = orderProductQty;
         }
       }
@@ -227,35 +229,12 @@ const ProductList: React.FC = () => {
     }
 
     const cartProducts: Product[] = selected.map(serverProduct => {
-      let productType: "5L" | "10L" | "300ml" | "1L" | "20L" | "dispenser" = "5L";
-      const unit = serverProduct.unit || "";
-      if (unit.includes("10L")) productType = "10L";
-      else if (unit.includes("300ml")) productType = "300ml";
-      else if (unit.includes("1L")) productType = "1L";
-      else if (unit.includes("20L")) productType = "20L";
-      else if (unit.includes("dispenser")) productType = "dispenser";
-
       return {
         id: serverProduct.id,
         name: serverProduct.name,
-        type: productType,
-        description: serverProduct.description,
-        image_url: serverProduct.image_url || 'https://via.placeholder.com/150',
+        description: serverProduct.description || '',
+        image_url: serverProduct.image_url,
         pricing: serverProduct.price,
-        inventory: {
-          current_stock: serverProduct.available_stock === "N/A" ? 999 : Number(serverProduct.available_stock),
-          reserved_stock: 0,
-          available_stock: serverProduct.available_stock === "N/A" ? 999 : Number(serverProduct.available_stock),
-          minimum_stock: 5,
-          maximum_stock: 100,
-          warehouse_location: 'Main Warehouse'
-        },
-        details: {
-          weight: 1.0,
-          dimensions: { length: 10, width: 10, height: 20 },
-          material: 'Plastic',
-          brand: 'Al Ghadeer'
-        }
       };
     });
 
@@ -298,7 +277,7 @@ const ProductList: React.FC = () => {
         <Text style={styles.errorTitle}>{error}</Text>
           <TouchableOpacity 
           style={styles.retryButton}
-          onPress={() => setLoading(true)}
+          onPress={() => setRefreshTrigger(prev => prev + 1)}
           activeOpacity={0.7}
           >
           <Text style={styles.retryButtonText}>Retry</Text>
@@ -602,11 +581,39 @@ const styles = StyleSheet.create({
   productInfo: {
     flex: 1,
   },
+  productNameContainer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginBottom: 4,
+    gap: 8,
+  },
   productName: {
     fontSize: 14,
     fontWeight: '600',
     color: '#111827',
-    marginBottom: 4,
+    flex: 1,
+  },
+  badge: {
+    backgroundColor: '#FEF3C7',
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+    borderRadius: 4,
+  },
+  badgeText: {
+    fontSize: 10,
+    fontWeight: '600',
+    color: '#92400E',
+  },
+  priceContainer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+  },
+  productPriceOriginal: {
+    fontSize: 12,
+    fontWeight: '400',
+    color: '#9CA3AF',
+    textDecorationLine: 'line-through',
   },
   productMeta: {
     flexDirection: 'row',

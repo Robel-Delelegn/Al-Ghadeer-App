@@ -7,7 +7,6 @@ interface User {
   id: string;
   phone: string;
   name: string; 
-  driver_name?: string;
   helper_name?: string;
   vehicle_number?: string;
   vehicle_type?: string;
@@ -32,7 +31,7 @@ interface AuthStore {
   getToken: () => Promise<string | null>;
 }
 
-const API_BASE_URL = process.env.EXPO_PUBLIC_IP_ADDRESS || process.env.EXPO_PUBLIC_API_URL || 'http://localhost:3000/api';
+const API_BASE_URL = process.env.EXPO_PUBLIC_IP_ADDRESS;
 
 export const useAuthStore = create<AuthStore>()(
   persist(
@@ -51,7 +50,7 @@ export const useAuthStore = create<AuthStore>()(
         try {
           console.log('Requesting OTP for phone:', phone);
           // Ensure API_BASE_URL ends with /api, then append /auth/request-otp
-          const baseUrl = API_BASE_URL.endsWith('/api') ? API_BASE_URL : `${API_BASE_URL}/api`;
+          const baseUrl = API_BASE_URL?.endsWith('/api') ? API_BASE_URL : `${API_BASE_URL}/api`;
           const url = `${baseUrl}/auth/request-otp`;
           console.log('API URL:', url);
 
@@ -65,34 +64,15 @@ export const useAuthStore = create<AuthStore>()(
             }),
           });
 
-          console.log('Response status:', response.status);
-          console.log('Response ok:', response.ok);
-          
-          // Check if response has content
-          const contentType = response.headers.get('content-type');
-          console.log('Content-Type:', contentType);
-          
-          let data: any;
-          try {
-            const text = await response.text();
-            console.log('Response text (raw):', text);
-            
-            if (text) {
-              data = JSON.parse(text);
-              console.log('Response data (parsed):', data);
-            } else {
-              console.error('Empty response body');
-              throw new Error('Empty response from server');
-            }
-          } catch (parseError) {
-            console.error('Failed to parse response:', parseError);
-            throw new Error('Invalid response from server');
-          }
-
           if (!response.ok) {
-            console.error('Response not OK:', response.status, data);
-            throw new Error(data?.message || `Server error: ${response.status}`);
+            // maybe try to parse server error message
+            const text = await response.text();
+            throw new Error(text || `HTTP ${response.status}`);
           }
+          
+          const data = await response.json();
+        
+
 
           console.log('Checking response data:', {
             success: data.success,
@@ -146,7 +126,7 @@ export const useAuthStore = create<AuthStore>()(
       verifyOtp: async (phone: string, otp: string, tempToken: string) => {
         set({ isLoading: true });
         try {
-          const baseUrl = API_BASE_URL.endsWith('/api') ? API_BASE_URL : `${API_BASE_URL}/api`;
+          const baseUrl = API_BASE_URL?.endsWith('/api') ? API_BASE_URL : `${API_BASE_URL}/api`;
           const response = await fetch(`${baseUrl}/auth/verify-otp`, {
             method: 'POST',
             headers: {
@@ -154,8 +134,8 @@ export const useAuthStore = create<AuthStore>()(
               'Authorization': `Bearer ${tempToken}`,
             },
             body: JSON.stringify({
-              phone,
-              otp,
+              phone:phone,
+              otp: otp,
             }),
           });
 
@@ -202,7 +182,7 @@ export const useAuthStore = create<AuthStore>()(
       resendOtp: async (phone: string, tempToken: string) => {
         set({ isLoading: true });
         try {
-          const baseUrl = API_BASE_URL.endsWith('/api') ? API_BASE_URL : `${API_BASE_URL}/api`;
+          const baseUrl = API_BASE_URL?.endsWith('/api') ? API_BASE_URL : `${API_BASE_URL}/api`;
           const response = await fetch(`${baseUrl}/auth/resend-otp`, {
             method: 'POST',
             headers: {
@@ -246,7 +226,7 @@ export const useAuthStore = create<AuthStore>()(
           // Call logout endpoint if token exists
           if (token) {
             try {
-              const baseUrl = API_BASE_URL.endsWith('/api') ? API_BASE_URL : `${API_BASE_URL}/api`;
+              const baseUrl = API_BASE_URL?.endsWith('/api') ? API_BASE_URL : `${API_BASE_URL}/api`;
               await fetch(`${baseUrl}/auth/logout`, {
                 method: 'POST',
                 headers: {
@@ -295,7 +275,7 @@ export const useAuthStore = create<AuthStore>()(
           }
 
           // Verify token with backend
-          const baseUrl = API_BASE_URL.endsWith('/api') ? API_BASE_URL : `${API_BASE_URL}/api`;
+          const baseUrl = API_BASE_URL?.endsWith('/api') ? API_BASE_URL : `${API_BASE_URL}/api`;
           const response = await fetch(`${baseUrl}/auth/me`, {
             method: 'GET',
             headers: {

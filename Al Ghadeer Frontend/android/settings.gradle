@@ -31,7 +31,7 @@ extensions.configure(com.facebook.react.ReactSettingsExtension) { ex ->
 }
 expoAutolinking.useExpoModules()
 
-rootProject.name = 'Al Ghadeer Water'
+rootProject.name = 'Al Ghadeer Water Driver'
 
 expoAutolinking.useExpoVersionCatalog()
 

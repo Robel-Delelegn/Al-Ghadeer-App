@@ -18,12 +18,12 @@ import {
   Modal,
   Image,
 } from 'react-native';
-import { showWarningAlert, showErrorAlert, showSuccessAlert } from '@/utils/alert';
+import { showWarningAlert, showErrorAlert, showSuccessAlert } from '@/store/utils/alert';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import SignatureScreen, { SignatureViewRef } from 'react-native-signature-canvas';
 
 const { width, height } = Dimensions.get('window');
-const IP_ADDRESS = process.env.EXPO_PUBLIC_IP_ADDRESS || 'http://localhost:3000/api';
+const IP_ADDRESS = process.env.EXPO_PUBLIC_IP_ADDRESS;
 
 const OrganizationSignature: React.FC = () => {
   const insets = useSafeAreaInsets();
@@ -207,7 +207,7 @@ const OrganizationSignature: React.FC = () => {
 
       showSuccessAlert(
         'Delivery Confirmed',
-        `Credit delivery recorded for ${organizationName}.\n\nCredit Number: ${result.credit_record.credit_number}\nAmount: AED ${result.credit_record.amount.toFixed(2)}\nNew Balance: AED ${result.credit_record.new_balance.toFixed(2)}`,
+        `Credit delivery recorded for ${organizationName}.\n\nCredit Number: ${result?.credit_record?.credit_number}\nAmount: AED ${result?.credit_record?.amount.toFixed(2)}\nNew Balance: AED ${result?.credit_record?.new_balance.toFixed(2)}`,
         [{ text: 'Done', onPress: () => router.push('/(root)/(tabs)/home') }]
       );
 

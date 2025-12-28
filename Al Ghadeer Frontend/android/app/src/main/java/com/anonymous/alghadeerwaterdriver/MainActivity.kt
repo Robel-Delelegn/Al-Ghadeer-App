@@ -1,4 +1,4 @@
-package com.alghadeer.water
+package com.anonymous.alghadeerwaterdriver
 import expo.modules.splashscreen.SplashScreenManager
 
 import android.os.Build
