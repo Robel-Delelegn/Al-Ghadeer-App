@@ -1,4 +1,5 @@
 import { useOrderStore } from '@/store/index';
+import { authenticatedFetch } from '@/store/auth';
 import { Ionicons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
 import * as Location from 'expo-location';

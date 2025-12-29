@@ -246,7 +246,6 @@ const Home = () => {
       <View className="flex-1 bg-white">
         {/* Map fills the whole screen */}
       <MyMap orders={filteredDeliveries} />
-
         {/* Transparent header overlay */}
         <View className="absolute top-0 left-0 right-0 px-6 pt-14 pb-4">
           <View className="flex-row items-center justify-between mb-4">

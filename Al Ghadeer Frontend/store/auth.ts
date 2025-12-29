@@ -266,6 +266,8 @@ export const useAuthStore = create<AuthStore>()(
         set({ isLoading: true });
         try {
           const token = await SecureStore.getItemAsync('auth_token');
+          console.log("Checking Authentication using token:", token);
+          console.log("API Base URL:", API_BASE_URL);
           
           if (!token) {
             set({
