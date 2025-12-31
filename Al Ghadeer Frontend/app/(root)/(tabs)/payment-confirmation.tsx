@@ -50,6 +50,11 @@ const PaymentConfirmation: React.FC = () => {
   
   const orderDetail = assignedOrders.find(item => selectedOrder === item.id) as Order | undefined;
   const checkoutSessionId = params.checkout_session_id as string | undefined;
+  // Get signature data from params if available (for organization orders)
+  const signatureData = params.signature_data as string | undefined;
+  const receiverName = params.receiver_name as string | undefined;
+  const receiverPosition = params.receiver_position as string | undefined;
+  const notes = params.notes as string | undefined;
   
   const { subtotal, vat, totalWithVat, itemCount } = useMemo(() => {
     const sub = cartItems.reduce((sum, item) => {
@@ -100,32 +105,45 @@ const PaymentConfirmation: React.FC = () => {
     setIsProcessing(true);
     
     try {
+      // Determine order_type based on customer type
+      const orderType = orderDetail?.customer_type === 'organization' ? 'site' : 'individual';
+      
       const orderData = {
-        customer_site_id: orderDetail.customer_site_id || '',
-        customer_id:  orderDetail.customer_id || '',
+        customer_site_id: orderDetail.customer_site_id,
+        customer_id: orderDetail.customer_id,
         customer_name: orderDetail.customer_name || 'N/A',
         customer_phone: orderDetail.customer_phone || 'N/A',
         products: cartItems.filter(item => item?.name).map(item => ({
-          id: item.id,
           name: item.name,
           quantity: item.quantity,
           price: item.price,
-          category: item.category || '', // Add category if available in cart item
-          customer_id: orderDetail.customer_id || '',
-          customer_site_id: orderDetail.customer_site_id || '',
+          id: item.id,
+          category: item.category || '',
         })),
         subtotal: parseFloat(subtotal),
         vat: parseFloat(vat),
         total_amount: parseFloat(totalWithVat),
-        payment_method: selectedPaymentMethod.toLowerCase(),
+        payment_method: selectedPaymentMethod === 'credit_card' ? 'credit_card' : selectedPaymentMethod,
+        order_type: orderType,
+        // Include signature data if available (for organization orders)
+        ...(signatureData && { signature_data: signatureData }),
+        ...(receiverName && { receiver_name: receiverName }),
+        ...(receiverPosition && { receiver_position: receiverPosition }),
+        ...(notes && { notes: notes }),
         // Include checkout session ID if this is a credit card payment
         ...(checkoutSessionId && selectedPaymentMethod === 'credit_card' && { checkout_session_id: checkoutSessionId })
       };
 
-      const url = `${IP_ADDRESS}/driver/orders/confirm-payment?driver_id=${user?.id}`;
+      let url = `${IP_ADDRESS}/driver/orders/confirm-payment`;
+      if (user?.id) {
+        url += `?driver_id=${user.id}`;
+      }
       
       const response = await authenticatedFetch(url, {
         method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
         body: JSON.stringify(orderData),
       });
 
@@ -159,7 +177,7 @@ const PaymentConfirmation: React.FC = () => {
     } finally {
       setIsProcessing(false);
     }
-  }, [orderDetail, cartItems, subtotal, vat, totalWithVat, selectedPaymentMethod, router, updateOrderStatus, checkoutSessionId]);
+  }, [orderDetail, cartItems, subtotal, vat, totalWithVat, selectedPaymentMethod, router, updateOrderStatus, checkoutSessionId, signatureData, receiverName, receiverPosition, notes, user?.id]);
 
   const customerName = orderDetail?.customer_name || 'Customer';
   const customerAddress = orderDetail?.customer_address || '—';
@@ -214,33 +232,49 @@ const PaymentConfirmation: React.FC = () => {
               <Text style={styles.emptyItemsText}>No items</Text>
             </View>
           ) : (
-            cartItems.filter(item => item?.name).map((item, index) => (
-              <View key={item.id}>
-                <View style={styles.itemRow}>
-                  <View style={styles.itemIconBox}>
-                    {item.image?.uri ? (
-                      <Image 
-                        source={item.image} 
-                        style={styles.itemImage}
-                        resizeMode="cover"
-                      />
-                    ) : (
-                      <Ionicons name="water" size={14} color="#0EA5E9" />
-                    )}
-                  </View>
-                  <View style={styles.itemInfo}>
-                    <Text style={styles.itemName} numberOfLines={1}>{item.name}</Text>
-                    <Text style={styles.itemMeta}>
-                      {item.quantity} × AED {item.price}
-                    </Text>
-                  </View>
-                  <Text style={styles.itemTotal}>
-                    AED {(item.price * item.quantity).toFixed(2)}
-                  </Text>
-                </View>
-                {index < cartItems.length - 1 && <View style={styles.itemDivider} />}
+            <>
+              {/* Table Header */}
+              <View style={styles.itemsTableHeader}>
+                <Text style={styles.tableHeaderText}>Product</Text>
+                <Text style={[styles.tableHeaderText, styles.tableHeaderQty]}>Qty</Text>
+                <Text style={[styles.tableHeaderText, styles.tableHeaderPrice]}>Price (ex VAT)</Text>
+                <Text style={[styles.tableHeaderText, styles.tableHeaderPrice]}>VAT</Text>
+                <Text style={[styles.tableHeaderText, styles.tableHeaderPrice]}>Total</Text>
               </View>
-            ))
+              {cartItems.filter(item => item?.name).map((item, index) => {
+                const priceExVat = item.price;
+                const vatAmount = priceExVat * 0.05;
+                const priceWithVat = priceExVat + vatAmount;
+                const itemVatTotal = vatAmount * item.quantity;
+                const itemTotal = priceWithVat * item.quantity;
+                
+                return (
+                  <View key={item.id}>
+                    <View style={styles.itemsTableRow}>
+                      <View style={styles.itemProductInfo}>
+                        {item.image?.uri ? (
+                          <Image 
+                            source={item.image} 
+                            style={styles.itemTableImage}
+                            resizeMode="cover"
+                          />
+                        ) : (
+                          <View style={styles.itemTableIconBox}>
+                            <Ionicons name="water" size={12} color="#0EA5E9" />
+                          </View>
+                        )}
+                        <Text style={styles.itemTableName} numberOfLines={2}>{item.name}</Text>
+                      </View>
+                      <Text style={[styles.itemTableValue, styles.tableQty]}>{item.quantity}</Text>
+                      <Text style={[styles.itemTableValue, styles.tablePrice]}>AED {priceExVat.toFixed(2)}</Text>
+                      <Text style={[styles.itemTableValue, styles.tablePrice]}>AED {itemVatTotal.toFixed(2)}</Text>
+                      <Text style={[styles.itemTableValue, styles.tablePrice, styles.itemTableTotal]}>AED {itemTotal.toFixed(2)}</Text>
+                    </View>
+                    {index < cartItems.length - 1 && <View style={styles.itemDivider} />}
+                  </View>
+                );
+              })}
+            </>
           )}
         </View>
 
@@ -310,20 +344,20 @@ const PaymentConfirmation: React.FC = () => {
           )}
         </View>
 
-        {/* Totals */}
+        {/* Totals - Professional Invoice Format */}
         <View style={styles.card}>
           <Text style={styles.cardTitle}>Payment Summary</Text>
+          <View style={styles.totalDivider} />
           <View style={styles.totalRow}>
-            <Text style={styles.totalLabel}>Subtotal</Text>
+            <Text style={styles.totalLabel}>Subtotal (Excluding VAT)</Text>
             <Text style={styles.totalValue}>AED {subtotal}</Text>
           </View>
           <View style={styles.totalRow}>
             <Text style={styles.totalLabel}>VAT (5%)</Text>
             <Text style={styles.totalValue}>AED {vat}</Text>
           </View>
-          <View style={styles.totalDivider} />
           <View style={styles.totalRow}>
-            <Text style={styles.grandTotalLabel}>Total</Text>
+            <Text style={styles.grandTotalLabel}>Total (Including VAT)</Text>
             <Text style={styles.grandTotalValue}>AED {totalWithVat}</Text>
           </View>
         </View>
@@ -523,7 +557,79 @@ const styles = StyleSheet.create({
   itemDivider: {
     height: 1,
     backgroundColor: '#F3F4F6',
-    marginLeft: 44,
+    marginVertical: 8,
+  },
+  itemsTableHeader: {
+    flexDirection: 'row',
+    paddingVertical: 10,
+    paddingHorizontal: 4,
+    borderBottomWidth: 1,
+    borderBottomColor: '#E5E7EB',
+    marginBottom: 8,
+  },
+  tableHeaderText: {
+    fontSize: 10,
+    fontWeight: '600',
+    color: '#6B7280',
+    textTransform: 'uppercase',
+    letterSpacing: 0.5,
+  },
+  tableHeaderQty: {
+    width: 35,
+    textAlign: 'center',
+  },
+  tableHeaderPrice: {
+    width: 70,
+    textAlign: 'right',
+  },
+  itemsTableRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingVertical: 10,
+    paddingHorizontal: 4,
+  },
+  itemProductInfo: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginRight: 8,
+  },
+  itemTableImage: {
+    width: 28,
+    height: 28,
+    borderRadius: 6,
+    marginRight: 8,
+  },
+  itemTableIconBox: {
+    width: 28,
+    height: 28,
+    borderRadius: 6,
+    backgroundColor: '#E0F2FE',
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginRight: 8,
+  },
+  itemTableName: {
+    flex: 1,
+    fontSize: 12,
+    fontWeight: '500',
+    color: '#111827',
+  },
+  itemTableValue: {
+    fontSize: 12,
+    color: '#4B5563',
+  },
+  tableQty: {
+    width: 35,
+    textAlign: 'center',
+  },
+  tablePrice: {
+    width: 70,
+    textAlign: 'right',
+  },
+  itemTableTotal: {
+    fontWeight: '600',
+    color: '#111827',
   },
   customerRow: {
     flexDirection: 'row',

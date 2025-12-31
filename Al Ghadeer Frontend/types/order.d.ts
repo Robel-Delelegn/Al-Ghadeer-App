@@ -77,6 +77,9 @@ export interface Product {
   // Pricing
   pricing: number;
   
+  // Loaded quantity - quantity loaded on the vehicle for this product
+  loaded_quantity?: number;
+  
   // Inventory
   inventory?: {
     current_stock: number;

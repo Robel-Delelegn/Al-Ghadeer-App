@@ -168,8 +168,8 @@ const Checkout: React.FC = () => {
                     <Text style={styles.itemQuantity}>Qty: {item.quantity}</Text>
                   </View>
                   <View style={styles.itemPricing}>
-                    <Text style={styles.itemPrice}>AED {(item.price * item.quantity).toFixed(2)}</Text>
-                    <Text style={styles.itemUnitPrice}>@ {item.price}</Text>
+                    <Text style={styles.itemPrice}>AED {((item.price * 1.05) * item.quantity).toFixed(2)}</Text>
+                    <Text style={styles.itemUnitPrice}>@ {(item.price * 1.05).toFixed(2)}</Text>
                   </View>
                 </View>
                 {index < cartItems.length - 1 && <View style={styles.itemDivider} />}

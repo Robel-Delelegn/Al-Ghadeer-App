@@ -108,6 +108,7 @@ interface OrderStore {
   removeFromCart: (productId: string) => void;
   updateCartItemQuantity: (productId: string, quantity: number) => void;
   clearCart: () => void;
+  getAvailableStock: (productId: string) => number; // Get available stock for a product (loaded_quantity - cart quantity)
   
   // Payment actions
   setPaymentMethod: (method: 'cash' | 'wallet' | 'credit_card') => void;
@@ -217,12 +218,39 @@ export const useOrderStore = create<OrderStore>()(persist(
       set((state) => {
         if (!product?.id || !product?.name) return state;
 
+        // Check available stock
+        const availableStock = product.loaded_quantity !== undefined 
+          ? (product.loaded_quantity - (state.cartItems.find(item => item.id === product.id)?.quantity || 0))
+          : Infinity;
+        
+        // Limit quantity to available stock
+        const maxQuantity = Math.max(0, availableStock);
+        if (maxQuantity === 0 && quantity > 0) {
+          // No stock available, don't add
+          return state;
+        }
+        
+        const actualQuantity = Math.min(quantity, maxQuantity);
+
         const existingItem = state.cartItems.find(item => item.id === product.id);
         if (existingItem) {
+          const newQuantity = existingItem.quantity + actualQuantity;
+          // Check if new total exceeds available stock
+          const finalQuantity = product.loaded_quantity !== undefined
+            ? Math.min(newQuantity, product.loaded_quantity)
+            : newQuantity;
+          
+          if (finalQuantity <= 0) {
+            // Remove from cart if quantity becomes 0
+            return {
+              cartItems: state.cartItems.filter(item => item.id !== product.id)
+            };
+          }
+          
           return {
             cartItems: state.cartItems.map(item =>
               item.id === product.id
-                ? { ...item, quantity: item.quantity + quantity }
+                ? { ...item, quantity: finalQuantity }
                 : item
             )
           };
@@ -234,7 +262,7 @@ export const useOrderStore = create<OrderStore>()(persist(
             name: product.name,
             image: { uri: product.image_url || 'https://via.placeholder.com/150' },
             price: typeof product.pricing === 'number' ? product.pricing : 0,
-            quantity: quantity,
+            quantity: actualQuantity,
             currency: 'AED',
             category: product.category, // Include category from product
           }]
@@ -255,6 +283,21 @@ export const useOrderStore = create<OrderStore>()(persist(
             cartItems: state.cartItems.filter(item => item.id !== productId)
           };
         }
+        
+        // Check available stock
+        const product = state.products.find(p => p.id === productId);
+        if (product && product.loaded_quantity !== undefined) {
+          // Limit quantity to loaded_quantity
+          const maxQuantity = product.loaded_quantity;
+          const limitedQuantity = Math.min(quantity, maxQuantity);
+          
+          return {
+            cartItems: state.cartItems.map(item =>
+              item.id === productId ? { ...item, quantity: limitedQuantity } : item
+            )
+          };
+        }
+        
         return {
           cartItems: state.cartItems.map(item =>
             item.id === productId ? { ...item, quantity } : item
@@ -265,6 +308,22 @@ export const useOrderStore = create<OrderStore>()(persist(
     
     clearCart: () => {
       set({ cartItems: [] });
+    },
+    
+    getAvailableStock: (productId: string) => {
+      const state = get();
+      // Find the product to get its loaded_quantity
+      const product = state.products.find(p => p.id === productId);
+      if (!product || typeof product.loaded_quantity !== 'number') {
+        return Infinity; // No limit if product not found or no loaded_quantity
+      }
+      
+      // Get current cart quantity for this product
+      const cartItem = state.cartItems.find(item => item.id === productId);
+      const cartQuantity = cartItem?.quantity || 0;
+      
+      // Available stock = loaded_quantity - cart quantity
+      return Math.max(0, product.loaded_quantity - cartQuantity);
     },
     
     // Payment management actions

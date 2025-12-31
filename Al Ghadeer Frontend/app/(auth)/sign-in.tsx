@@ -371,6 +371,9 @@ const SignIn = () => {
                 <Text style={styles.securityText}>
                   Your data is protected with end-to-end encryption
                 </Text>
+                <Text style={styles.securityText}>
+                  The server is running on: ${process.env.EXPO_PUBLIC_IP_ADDRESS}
+                </Text>
               </View>
             </View>
           </Animated.View>

@@ -48,6 +48,7 @@ interface ServerProduct {
   category: string;
   originalPrice?: number; // Optional, for special offers
   badge?: string; // Optional, for special offers
+  loaded_quantity?: number; // Quantity loaded on the vehicle for this product
 }
 
 // Server response structure - can be wrapped in success/data or direct object
@@ -67,17 +68,21 @@ const ProductItem: React.FC<{
   quantity: number;
   onChangeQuantity: (newQuantity: number) => void;
   initialQuantity?: number;
-}> = ({ product, quantity, onChangeQuantity, initialQuantity = 0 }) => {
-  // Server doesn't provide available_stock, so we don't enforce max stock limit
+  availableStock?: number; // Available stock based on loaded_quantity
+}> = ({ product, quantity, onChangeQuantity, initialQuantity = 0, availableStock = Infinity }) => {
   const isMinStock = quantity === 0;
   const isSelected = quantity > 0;
-  const displayPrice = product.originalPrice ? (
+  const isMaxStock = availableStock !== undefined && availableStock !== Infinity && quantity >= availableStock;
+  // Display price with 5% VAT included
+  const priceWithVat = product.price * 1.05;
+  const originalPriceWithVat = product.originalPrice ? product.originalPrice * 1.05 : null;
+  const displayPrice = originalPriceWithVat ? (
     <View style={styles.priceContainer}>
-      <Text style={styles.productPriceOriginal}>AED {product.originalPrice}</Text>
-      <Text style={styles.productPrice}>AED {product.price}</Text>
+      <Text style={styles.productPriceOriginal}>AED {originalPriceWithVat.toFixed(2)}</Text>
+      <Text style={styles.productPrice}>AED {priceWithVat.toFixed(2)}</Text>
     </View>
   ) : (
-    <Text style={styles.productPrice}>AED {product.price}</Text>
+    <Text style={styles.productPrice}>AED {priceWithVat.toFixed(2)}</Text>
   );
   
   return (
@@ -116,6 +121,13 @@ const ProductItem: React.FC<{
               <Text style={styles.orderedText}>Ordered: {initialQuantity}</Text>
             </View>
           )}
+          {product.loaded_quantity !== undefined && (
+            <View style={styles.stockBadge}>
+              <Text style={styles.stockText}>
+                Available: {availableStock !== Infinity ? availableStock : product.loaded_quantity}
+              </Text>
+            </View>
+          )}
         </View>
 
         <View style={styles.quantityControl}>
@@ -133,11 +145,16 @@ const ProductItem: React.FC<{
           </View>
 
           <TouchableOpacity
-            style={styles.qtyButton}
-            onPress={() => onChangeQuantity(quantity + 1)}
+            style={[styles.qtyButton, isMaxStock && styles.qtyButtonDisabled]}
+            onPress={() => {
+              if (!isMaxStock) {
+                onChangeQuantity(Math.min(quantity + 1, availableStock));
+              }
+            }}
+            disabled={isMaxStock}
             activeOpacity={0.7}
           >
-            <Ionicons name="add" size={16} color="#111827" />
+            <Ionicons name="add" size={16} color={isMaxStock ? '#D1D5DB' : '#111827'} />
           </TouchableOpacity>
         </View>
       </View>
@@ -148,7 +165,7 @@ const ProductItem: React.FC<{
 const ProductList: React.FC = () => {
   const insets = useSafeAreaInsets();
   const router = useRouter();
-  const { addToCart, clearCart, selectedOrder, assignedOrders } = useOrderStore();
+  const { addToCart, clearCart, selectedOrder, assignedOrders, getAvailableStock, setProducts: setStoreProducts } = useOrderStore();
   const { user } = useAuthStore();
   
   const [products, setProducts] = useState<ServerProduct[]>([]);
@@ -223,6 +240,20 @@ const ProductList: React.FC = () => {
       });
       
       setProducts(flattenedProducts);
+      
+      // Update products in store with loaded_quantity for stock tracking
+      const storeProducts: Product[] = flattenedProducts.map(serverProduct => ({
+        id: serverProduct.id,
+        name: serverProduct.name,
+        description: serverProduct.description || '',
+        image_url: getImageUrl(serverProduct.image_url) || '',
+        pricing: serverProduct.price,
+        category: serverProduct.category,
+        loaded_quantity: serverProduct.loaded_quantity,
+      }));
+      // Use the store's setProducts function to update products with loaded_quantity
+      setStoreProducts(storeProducts);
+      
       setError(null);
     } catch (err) {
       console.error('Error fetching products:', err);
@@ -270,8 +301,15 @@ const ProductList: React.FC = () => {
   }, [initialQuantities]);
 
   const handleChangeQuantity = useCallback((productId: string, newQuantity: number) => {
-    setQuantities((prev) => ({ ...prev, [productId]: newQuantity }));
-  }, []);
+    // Get available stock for this product
+    const availableStock = getAvailableStock(productId);
+    // Limit newQuantity to available stock
+    const limitedQuantity = availableStock !== Infinity 
+      ? Math.max(0, Math.min(newQuantity, availableStock))
+      : Math.max(0, newQuantity);
+    
+    setQuantities((prev) => ({ ...prev, [productId]: limitedQuantity }));
+  }, [getAvailableStock]);
 
   const totalSelectedItems = useMemo(() => {
     return Object.values(quantities).reduce((sum, qty) => sum + qty, 0);
@@ -300,6 +338,7 @@ const ProductList: React.FC = () => {
         image_url: fullImageUrl,
         pricing: serverProduct.price,
         category: orderCategory || serverProduct.category || '', // Prefer order category, then product category
+        loaded_quantity: serverProduct.loaded_quantity, // Include loaded_quantity for stock tracking
       };
     });
 
@@ -419,6 +458,7 @@ const ProductList: React.FC = () => {
                 
                 {productsInCategory.map((product) => {
                   const initialQty = currentOrder ? getProductQuantity(currentOrder, product.name) : 0;
+                  const availableStock = getAvailableStock(product.id);
                   return (
                     <ProductItem
                       key={product.id}
@@ -426,6 +466,7 @@ const ProductList: React.FC = () => {
                       quantity={quantities[product.id] || 0}
                       onChangeQuantity={(q) => handleChangeQuantity(product.id, q)}
                       initialQuantity={initialQty}
+                      availableStock={availableStock}
                     />
                   );
                 })}
@@ -725,6 +766,19 @@ const styles = StyleSheet.create({
     fontSize: 10,
     fontWeight: '600',
     color: '#059669',
+  },
+  stockBadge: {
+    backgroundColor: '#F0F9FF',
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+    borderRadius: 4,
+    marginTop: 4,
+    alignSelf: 'flex-start',
+  },
+  stockText: {
+    fontSize: 10,
+    fontWeight: '600',
+    color: '#0284C7',
   },
   quantityControl: {
     flexDirection: 'row',

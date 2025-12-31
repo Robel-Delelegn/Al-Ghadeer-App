@@ -61,13 +61,19 @@ const PaymentReceipt: React.FC = () => {
         console.error('Invalid cart item in HTML generation:', item);
         return '';
       }
-      const itemTotal = (item.price * item.quantity).toFixed(2);
+      // Calculate price breakdown
+      const priceExVat = item.price;
+      const vatAmount = priceExVat * 0.05;
+      const itemVatTotal = (vatAmount * item.quantity).toFixed(2);
+      const itemTotal = ((priceExVat + vatAmount) * item.quantity).toFixed(2);
+      
       return `
         <tr style="border-bottom: 1px solid #e5e7eb;">
-          <td style="padding: 8px; text-align: left; font-size: 12px;">${item.name || 'Unknown Product'}</td>
-          <td style="padding: 8px; text-align: center; font-size: 12px;">${item.quantity || 0}</td>
-          <td style="padding: 8px; text-align: right; font-size: 12px;">${item.price || 0}</td>
-          <td style="padding: 8px; text-align: right; font-size: 12px; font-weight: bold;">${itemTotal}</td>
+          <td style="padding: 6px; text-align: left; font-size: 11px;">${item.name || 'Unknown Product'}</td>
+          <td style="padding: 6px; text-align: center; font-size: 11px;">${item.quantity || 0}</td>
+          <td style="padding: 6px; text-align: right; font-size: 11px;">${priceExVat.toFixed(2)}</td>
+          <td style="padding: 6px; text-align: right; font-size: 11px;">${itemVatTotal}</td>
+          <td style="padding: 6px; text-align: right; font-size: 11px; font-weight: bold;">${itemTotal}</td>
         </tr>
       `;
     }).filter(Boolean).join('');
@@ -184,8 +190,7 @@ const PaymentReceipt: React.FC = () => {
         <body>
           <div class="receipt-container">
             <div class="company-header">
-              <div class="company-name">Al Ghadeer Water Drinking</div>
-              <div class="company-name">Factory</div>
+              <div class="company-name">Al Ghadeer DRINKING WATER FACTORY L.L.C</div>
               <div class="company-location">Al Ain, UAE</div>
           </div>
 
@@ -239,8 +244,9 @@ const PaymentReceipt: React.FC = () => {
               <tr>
                   <th style="text-align: left;">Product</th>
                   <th style="text-align: center;">Qty</th>
-                <th style="text-align: right;">Unit Price</th>
-                  <th style="text-align: right;">Price</th>
+                  <th style="text-align: right;">Price (ex VAT)</th>
+                  <th style="text-align: right;">VAT</th>
+                  <th style="text-align: right;">Total</th>
               </tr>
             </thead>
             <tbody>
@@ -250,15 +256,15 @@ const PaymentReceipt: React.FC = () => {
 
           <div class="total-section">
             <div class="total-row">
-                <span>Total Amount:</span>
+                <span>Subtotal (Excluding VAT):</span>
                 <span>${subtotal}</span>
             </div>
             <div class="total-row">
-                <span>Vat (5%):</span>
+                <span>VAT (5%):</span>
                 <span>${vat}</span>
             </div>
             <div class="total-row final-total">
-                <span>Net Total (Incl. Vat):</span>
+                <span>Total (Including VAT):</span>
                 <span>${totalWithVat}</span>
             </div>
           </div>
@@ -456,10 +462,10 @@ const PaymentReceipt: React.FC = () => {
               {/* Company Header */}
           <View style={{ alignItems: 'center', marginBottom: 16, borderBottomWidth: 1, borderBottomColor: '#E9ECEF', paddingBottom: 12 }}>
             <Text style={{ color: '#212529', fontSize: 16, fontWeight: '700', marginBottom: 2 }}>
-              Al Ghadeer Water Drinking
+              AL GHADEER DRINKING WATER
             </Text>
             <Text style={{ color: '#212529', fontSize: 16, fontWeight: '700', marginBottom: 2 }}>
-              Factory
+             FACTORY L.L.C
             </Text>
             <Text style={{ color: '#6C757D', fontSize: 12, marginBottom: 8 }}>
               Al Ain, UAE
@@ -522,57 +528,63 @@ const PaymentReceipt: React.FC = () => {
               flexDirection: 'row', 
               borderBottomWidth: 1, 
               borderBottomColor: '#E9ECEF', 
-              paddingBottom: 4, 
+              paddingBottom: 6, 
               marginBottom: 8 
             }}>
-              <Text style={{ flex: 1, color: '#6C757D', fontSize: 11, fontWeight: '600' }}>Product</Text>
-              <Text style={{ width: 40, color: '#6C757D', fontSize: 11, fontWeight: '600', textAlign: 'center' }}>Qty</Text>
-              <Text style={{ width: 60, color: '#6C757D', fontSize: 11, fontWeight: '600', textAlign: 'right' }}>Unit Price</Text>
-              <Text style={{ width: 60, color: '#6C757D', fontSize: 11, fontWeight: '600', textAlign: 'right' }}>Price</Text>
-                  </View>
+              <Text style={{ flex: 1, color: '#6C757D', fontSize: 10, fontWeight: '600', textTransform: 'uppercase' }}>Product</Text>
+              <Text style={{ width: 35, color: '#6C757D', fontSize: 10, fontWeight: '600', textAlign: 'center', textTransform: 'uppercase' }}>Qty</Text>
+              <Text style={{ width: 65, color: '#6C757D', fontSize: 10, fontWeight: '600', textAlign: 'right', textTransform: 'uppercase' }}>Price (ex VAT)</Text>
+              <Text style={{ width: 60, color: '#6C757D', fontSize: 10, fontWeight: '600', textAlign: 'right', textTransform: 'uppercase' }}>VAT</Text>
+              <Text style={{ width: 65, color: '#6C757D', fontSize: 10, fontWeight: '600', textAlign: 'right', textTransform: 'uppercase' }}>Total</Text>
+            </View>
     
-                  {cartItems.map((item, index) => {
+            {cartItems.map((item, index) => {
               if (!item || !item.name) return null;
-                    const itemTotal = (item.price * item.quantity).toFixed(2);
-                    return (
+              const priceExVat = item.price;
+              const vatAmount = priceExVat * 0.05;
+              const itemVatTotal = vatAmount * item.quantity;
+              const itemTotal = (priceExVat + vatAmount) * item.quantity;
+              
+              return (
                 <View key={item.id} style={{ 
                   flexDirection: 'row', 
-                  marginBottom: 4,
+                  marginBottom: 6,
                   borderBottomWidth: index !== cartItems.length - 1 ? 1 : 0,
                   borderBottomColor: '#F1F3F4',
-                  paddingBottom: index !== cartItems.length - 1 ? 4 : 0
+                  paddingBottom: index !== cartItems.length - 1 ? 6 : 0
                 }}>
                   <Text style={{ flex: 1, color: '#212529', fontSize: 11 }}>{item.name}</Text>
-                  <Text style={{ width: 40, color: '#212529', fontSize: 11, textAlign: 'center' }}>{item.quantity}</Text>
-                  <Text style={{ width: 60, color: '#212529', fontSize: 11, textAlign: 'right' }}>{item.price}</Text>
-                  <Text style={{ width: 60, color: '#212529', fontSize: 11, fontWeight: '600', textAlign: 'right' }}>{itemTotal}</Text>
-                      </View>
-                    );
-                  })}
-              </View>
+                  <Text style={{ width: 35, color: '#212529', fontSize: 11, textAlign: 'center' }}>{item.quantity}</Text>
+                  <Text style={{ width: 65, color: '#212529', fontSize: 11, textAlign: 'right' }}>AED {priceExVat.toFixed(2)}</Text>
+                  <Text style={{ width: 60, color: '#212529', fontSize: 11, textAlign: 'right' }}>AED {itemVatTotal.toFixed(2)}</Text>
+                  <Text style={{ width: 65, color: '#212529', fontSize: 11, fontWeight: '600', textAlign: 'right' }}>AED {itemTotal.toFixed(2)}</Text>
+                </View>
+              );
+            })}
+          </View>
     
-          {/* Totals */}
+          {/* Totals - Professional Invoice Format */}
           <View style={{ borderTopWidth: 1, borderTopColor: '#E9ECEF', paddingTop: 12 }}>
             <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginBottom: 4 }}>
-              <Text style={{ color: '#6C757D', fontSize: 11 }}>Total Amount:</Text>
-              <Text style={{ color: '#212529', fontSize: 11 }}>{subtotal}</Text>
-                  </View>
-            <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginBottom: 4 }}>
-              <Text style={{ color: '#6C757D', fontSize: 11 }}>Vat (5%):</Text>
-              <Text style={{ color: '#212529', fontSize: 11 }}>{vat}</Text>
-                  </View>
+              <Text style={{ color: '#6C757D', fontSize: 11 }}>Subtotal (Excluding VAT):</Text>
+              <Text style={{ color: '#212529', fontSize: 11 }}>AED {subtotal}</Text>
+            </View>
+            <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginBottom: 8 }}>
+              <Text style={{ color: '#6C757D', fontSize: 11 }}>VAT (5%):</Text>
+              <Text style={{ color: '#212529', fontSize: 11 }}>AED {vat}</Text>
+            </View>
             <View style={{ 
               flexDirection: 'row', 
               justifyContent: 'space-between', 
-              borderTopWidth: 1, 
-              borderTopColor: '#E9ECEF', 
-              paddingTop: 8, 
-              marginTop: 8 
+              borderTopWidth: 1,
+              borderTopColor: '#E9ECEF',
+              paddingTop: 8,
+              marginTop: 4
             }}>
-              <Text style={{ color: '#212529', fontSize: 12, fontWeight: '700' }}>Net Total (Incl. Vat):</Text>
-              <Text style={{ color: '#212529', fontSize: 12, fontWeight: '700' }}>{totalWithVat}</Text>
-                    </View>
-                  </View>
+              <Text style={{ color: '#212529', fontSize: 13, fontWeight: '700' }}>Total (Including VAT):</Text>
+              <Text style={{ color: '#212529', fontSize: 13, fontWeight: '700' }}>AED {totalWithVat}</Text>
+            </View>
+          </View>
 
           {/* Contact Info */}
           <View style={{ 

@@ -44,6 +44,7 @@ const OrganizationSignature: React.FC = () => {
     assignedOrders, 
     cartItems,
     currentDriver,
+    selectedPaymentMethod,
     updateOrderStatus
   } = useOrderStore();
   const { user } = useAuthStore();
@@ -158,34 +159,51 @@ const OrganizationSignature: React.FC = () => {
     setIsProcessing(true);
 
     try {
+      // Calculate subtotal, VAT, and total
+      const sub = cartItems.reduce((sum, item) => {
+        if (!item || typeof item.price !== 'number' || typeof item.quantity !== 'number') {
+          return sum;
+        }
+        return sum + item.price * item.quantity;
+      }, 0);
+      const vatAmount = sub * 0.05;
+      const total = sub + vatAmount;
+
       const requestData = {
-        order_id: orderDetail.id,
-        order_number: orderDetail.order_number,
-        customer_id: orderDetail.customer_id,
-        customer_site_id: orderDetail.customer_site_id,
-        customer_name: orderDetail.customer_name,
-        customer_type: orderDetail.customer_type || 'organization',
-        organization_name: organizationName,
-        wallet_balance: walletBalance,
-        amount: parseFloat(totalWithVat),
-        items: cartItems.map(item => ({
-          id: item.id,
+        customer_site_id: orderDetail.customer_site_id || '',
+        customer_id: orderDetail.customer_id || '',
+        customer_name: orderDetail.customer_name || 'N/A',
+        customer_phone: orderDetail.customer_phone || 'N/A',
+        products: cartItems.filter(item => item?.name).map(item => ({
           name: item.name,
           quantity: item.quantity,
           price: item.price,
-          total: item.price * item.quantity,
-          category: item.category
+          id: item.id,
+          category: item.category || '',
         })),
+        subtotal: sub,
+        vat: vatAmount,
+        total_amount: total,
+        payment_method: selectedPaymentMethod || 'cash',
+        order_type: 'site',
         signature_data: signatureData,
         receiver_name: receiverName.trim(),
-        receiver_position: receiverPosition.trim(),
-        notes: notes.trim()
+        receiver_position: receiverPosition.trim() || undefined,
+        notes: notes.trim() || undefined,
       };
 
+      let url = `${IP_ADDRESS}/driver/orders/confirm-payment`;
+      if (user?.id) {
+        url += `?driver_id=${user.id}`;
+      }
+      
       const response = await authenticatedFetch(
-        `${IP_ADDRESS}/driver/orders/organization-credit-delivery?driver_id=${user?.id}`,
+        url,
         {
           method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+          },
           body: JSON.stringify(requestData),
         }
       );
@@ -193,7 +211,7 @@ const OrganizationSignature: React.FC = () => {
       const result = await response.json();
 
       if (!response.ok || !result.success) {
-        throw new Error(result.message || 'Failed to confirm delivery');
+        throw new Error(result.message || 'Failed to confirm payment');
       }
 
       // Mark order as delivered and remove from assigned orders
@@ -202,9 +220,9 @@ const OrganizationSignature: React.FC = () => {
       }
 
       showSuccessAlert(
-        'Delivery Confirmed',
-        `Credit delivery recorded for ${organizationName}.\n\nCredit Number: ${result?.credit_record?.credit_number}\nAmount: AED ${result?.credit_record?.amount.toFixed(2)}\nNew Balance: AED ${result?.credit_record?.new_balance.toFixed(2)}`,
-        [{ text: 'Done', onPress: () => router.push('/(root)/(tabs)/home') }]
+        'Payment Successful',
+        result.message || `Order ${result.order?.order_number || orderDetail?.order_number} confirmed.`,
+        [{ text: 'View Receipt', onPress: () => router.push('/(root)/(tabs)/payment-receipt') }]
       );
 
     } catch (error) {
@@ -215,7 +233,7 @@ const OrganizationSignature: React.FC = () => {
     } finally {
       setIsProcessing(false);
     }
-  }, [receiverName, receiverPosition, notes, hasSignature, signatureData, orderDetail, cartItems, totalWithVat, currentDriver, organizationName, router, updateOrderStatus]);
+  }, [receiverName, receiverPosition, notes, hasSignature, signatureData, orderDetail, cartItems, totalWithVat, currentDriver, organizationName, router, updateOrderStatus, selectedPaymentMethod]);
 
   const signatureStyle = `.m-signature-pad {
     box-shadow: none;
