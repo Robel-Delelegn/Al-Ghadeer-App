@@ -52,7 +52,7 @@ export const useAuthStore = create<AuthStore>()(
           // Ensure API_BASE_URL ends with /api, then append /auth/request-otp
           const baseUrl = API_BASE_URL?.endsWith('/api') ? API_BASE_URL : `${API_BASE_URL}/api`;
           const url = `${baseUrl}/auth/request-otp`;
-          console.log('API URL:', url);
+          console.log(`🌐 API Request: POST ${url}`);
 
           const response = await fetch(url, {
             method: 'POST',
@@ -127,7 +127,9 @@ export const useAuthStore = create<AuthStore>()(
         set({ isLoading: true });
         try {
           const baseUrl = API_BASE_URL?.endsWith('/api') ? API_BASE_URL : `${API_BASE_URL}/api`;
-          const response = await fetch(`${baseUrl}/auth/verify-otp`, {
+          const url = `${baseUrl}/auth/verify-otp`;
+          console.log(`🌐 API Request: POST ${url}`);
+          const response = await fetch(url, {
             method: 'POST',
             headers: {
               'Content-Type': 'application/json',
@@ -183,7 +185,9 @@ export const useAuthStore = create<AuthStore>()(
         set({ isLoading: true });
         try {
           const baseUrl = API_BASE_URL?.endsWith('/api') ? API_BASE_URL : `${API_BASE_URL}/api`;
-          const response = await fetch(`${baseUrl}/auth/resend-otp`, {
+          const url = `${baseUrl}/auth/resend-otp`;
+          console.log(`🌐 API Request: POST ${url}`);
+          const response = await fetch(url, {
             method: 'POST',
             headers: {
               'Content-Type': 'application/json',
@@ -227,7 +231,9 @@ export const useAuthStore = create<AuthStore>()(
           if (token) {
             try {
               const baseUrl = API_BASE_URL?.endsWith('/api') ? API_BASE_URL : `${API_BASE_URL}/api`;
-              await fetch(`${baseUrl}/auth/logout`, {
+              const url = `${baseUrl}/auth/logout`;
+              console.log(`🌐 API Request: POST ${url}`);
+              await fetch(url, {
                 method: 'POST',
                 headers: {
                   'Authorization': `Bearer ${token}`,
@@ -280,7 +286,9 @@ export const useAuthStore = create<AuthStore>()(
 
           // Verify token with backend API
           const baseUrl = API_BASE_URL?.endsWith('/api') ? API_BASE_URL : `${API_BASE_URL}/api`;
-          const response = await fetch(`${baseUrl}/auth/me`, {
+          const url = `${baseUrl}/auth/me`;
+          console.log(`🌐 API Request: GET ${url}`);
+          const response = await fetch(url, {
             method: 'GET',
             headers: {
               'Authorization': `Bearer ${token}`,
@@ -393,6 +401,9 @@ export const authenticatedFetch = async (
   url: string,
   options: RequestInit = {}
 ): Promise<Response> => {
+  // Console log the API URL before making the request
+  console.log(`🌐 API Request: ${options.method || 'GET'} ${url}`);
+  
   const token = await getAuthToken();
   
   // Merge headers properly - user headers take precedence

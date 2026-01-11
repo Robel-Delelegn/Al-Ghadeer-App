@@ -59,6 +59,7 @@ const FailedDeliveries = () => {
         customer_id: order.customer_id,
         reason: selectedReason,
         additional_notes: additionalNotes,
+        reasons: order.reasons || [],
         submitted_at: new Date().toISOString()
       };
 
@@ -117,7 +118,7 @@ const FailedDeliveries = () => {
           borderRadius: 16,
           padding: 24,
           alignItems: 'center',
-          shadowColor: '#000',
+          shadowColor: '#1E40AF',
           shadowOffset: { width: 0, height: 2 },
           shadowOpacity: 0.1,
           shadowRadius: 4,
@@ -191,7 +192,7 @@ const FailedDeliveries = () => {
           marginBottom: 16,
           borderWidth: 1,
           borderColor: '#E9ECEF',
-          shadowColor: '#000',
+          shadowColor: '#1E40AF',
           shadowOffset: { width: 0, height: 2 },
           shadowOpacity: 0.05,
           shadowRadius: 8,
@@ -253,7 +254,7 @@ const FailedDeliveries = () => {
           marginBottom: 16,
           borderWidth: 1,
           borderColor: '#E9ECEF',
-          shadowColor: '#000',
+          shadowColor: '#1E40AF',
           shadowOffset: { width: 0, height: 2 },
           shadowOpacity: 0.05,
           shadowRadius: 8,
@@ -309,7 +310,7 @@ const FailedDeliveries = () => {
           marginBottom: 16,
           borderWidth: 1,
           borderColor: '#E9ECEF',
-          shadowColor: '#000',
+          shadowColor: '#1E40AF',
           shadowOffset: { width: 0, height: 2 },
           shadowOpacity: 0.05,
           shadowRadius: 8,
@@ -364,7 +365,7 @@ const FailedDeliveries = () => {
           borderRadius: 16,
           padding: 16,
           marginTop: 8,
-          shadowColor: '#000',
+          shadowColor: '#1E40AF',
           shadowOffset: { width: 0, height: 2 },
           shadowOpacity: 0.04,
           shadowRadius: 8,
@@ -453,7 +454,7 @@ const FailedDeliveries = () => {
             maxHeight: '70%' 
           }}>
             <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 16 }}>
-              <Text style={{ fontSize: 18, fontWeight: '600', color: '#111827' }}>
+              <Text style={{ fontSize: 18, fontWeight: '600', color: '#1E40AF' }}>
                 Select Failure Reason
               </Text>
               <TouchableOpacity onPress={() => setShowReasonModal(false)}>
@@ -479,7 +480,7 @@ const FailedDeliveries = () => {
                 >
                   <Text style={{ 
                     fontSize: 15, 
-                    color: selectedReason === reason ? '#DC3545' : '#111827',
+                    color: selectedReason === reason ? '#DC3545' : '#1E40AF',
                     fontWeight: selectedReason === reason ? '600' : '400'
                   }}>
                     {reason}

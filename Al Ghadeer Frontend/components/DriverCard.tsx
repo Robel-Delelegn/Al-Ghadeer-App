@@ -20,7 +20,7 @@ const DriverCard = ({item, selected, setSelected}: DriverCardProps) => {
                 selected ? "bg-blue-600" : "bg-white"
             } flex flex-row items-center justify-between py-5 px-3 rounded-2xl`}
             style={{
-                shadowColor: '#0F172A',
+                shadowColor: '#1E40AF',
                 shadowOpacity: 0.08,
                 shadowRadius: 14,
                 shadowOffset: { width: 0, height: 8 },

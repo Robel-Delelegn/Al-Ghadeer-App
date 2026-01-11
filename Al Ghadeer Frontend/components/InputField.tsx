@@ -36,7 +36,7 @@ const InputField = ({
             style={{
               paddingHorizontal: 14,
               paddingVertical: 10,
-              shadowColor: '#0F172A',
+              shadowColor: '#1E40AF',
               shadowOpacity: focused ? 0.12 : 0.06,
               shadowRadius: focused ? 16 : 12,
               shadowOffset: { width: 0, height: 8 },

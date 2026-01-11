@@ -3,6 +3,7 @@ export interface Order {
   // Basic Order Info
   id: string;
   order_number: string;
+  invoice_number?: string;
   status: 'pending' | 'assigned' | 'in_progress' | 'delivered' | 'failed' | 'cancelled';
   // Customer Information (Flat structure - new API format)
   customer_id?: string;
@@ -28,7 +29,7 @@ export interface Order {
   }> | Record<string, number>;
   total_amount?: number;
   wallet_balance?: number;
-  payment_method?: 'cash' | 'wallet' | 'credit_card';
+  payment_method?: 'cash' | 'wallet' | 'credit_card' | 'invoice' | 'credit_sale' | 'credit_invoice';
   payment_status?: 'pending' | 'paid' | 'failed' | 'due';
   zone?: string;
   // Availability times
@@ -36,6 +37,18 @@ export interface Order {
   end_time?: string;
   // Signature requirement
   requires_signature?: boolean;
+  // Rent items - items that are borrowed or deposited (not editable by driver)
+  rent_items?: Array<{
+    id: string;
+    name: string;
+    category: 'borrow' | 'deposit';
+    price: number;
+    quantity: number;
+    image_url: string;
+    in_truck?: boolean; // Whether the item is currently in the truck
+  }>;
+  // Reasons for the order
+  reasons?: string[];
 }
 
 // Driver Structure

@@ -137,7 +137,7 @@ const ProductItem: React.FC<{
             disabled={isMinStock}
             activeOpacity={0.7}
           >
-            <Ionicons name="remove" size={16} color={isMinStock ? '#D1D5DB' : '#111827'} />
+            <Ionicons name="remove" size={16} color={isMinStock ? '#D1D5DB' : '#1E40AF'} />
           </TouchableOpacity>
 
           <View style={styles.qtyDisplay}>
@@ -154,7 +154,7 @@ const ProductItem: React.FC<{
             disabled={isMaxStock}
             activeOpacity={0.7}
           >
-            <Ionicons name="add" size={16} color={isMaxStock ? '#D1D5DB' : '#111827'} />
+            <Ionicons name="add" size={16} color={isMaxStock ? '#D1D5DB' : '#1E40AF'} />
           </TouchableOpacity>
         </View>
       </View>
@@ -165,7 +165,7 @@ const ProductItem: React.FC<{
 const ProductList: React.FC = () => {
   const insets = useSafeAreaInsets();
   const router = useRouter();
-  const { addToCart, clearCart, selectedOrder, assignedOrders, getAvailableStock, setProducts: setStoreProducts } = useOrderStore();
+  const { addToCart, clearCart, selectedOrder, assignedOrders, getAvailableStock, setProducts: setStoreProducts, setAssignedOrders } = useOrderStore();
   const { user } = useAuthStore();
   
   const [products, setProducts] = useState<ServerProduct[]>([]);
@@ -282,12 +282,34 @@ const ProductList: React.FC = () => {
 
   const currentOrder = assignedOrders.find(order => order.id === selectedOrder);
 
+  // Initialize rent items state from order
+  const [rentItemsInTruck, setRentItemsInTruck] = useState<Record<string, boolean>>(() => {
+    const initial: Record<string, boolean> = {};
+    if (currentOrder?.rent_items) {
+      currentOrder.rent_items.forEach(item => {
+        initial[item.id] = item.in_truck ?? false;
+      });
+    }
+    return initial;
+  });
+
+  useEffect(() => {
+    const initial: Record<string, boolean> = {};
+    if (currentOrder?.rent_items) {
+      currentOrder.rent_items.forEach(item => {
+        initial[item.id] = item.in_truck ?? false;
+      });
+    }
+    setRentItemsInTruck(initial);
+  }, [currentOrder]);
+
   const initialQuantities = useMemo(() => {
     const record: Record<string, number> = {};
     
     products.forEach((p) => {
       // Use utility function to get quantity (works with both array and Record formats)
-      const initialQty = currentOrder ? getProductQuantity(currentOrder, p.name) : 0;
+      // Match by both name AND category to avoid mixing retail-items and refill items
+      const initialQty = currentOrder ? getProductQuantity(currentOrder, p.name, p.category) : 0;
       record[p.id] = initialQty;
     });
     
@@ -315,15 +337,45 @@ const ProductList: React.FC = () => {
     return Object.values(quantities).reduce((sum, qty) => sum + qty, 0);
   }, [quantities]);
 
+  // Check if any rent items are selected (in truck)
+  const hasRentItemsSelected = useMemo(() => {
+    if (!currentOrder?.rent_items) return false;
+    return currentOrder.rent_items.some(item => rentItemsInTruck[item.id] === true);
+  }, [currentOrder?.rent_items, rentItemsInTruck]);
+
+  // Button should be enabled if products are selected OR rent items are selected
+  const canCheckout = totalSelectedItems > 0 || hasRentItemsSelected;
+
   const totalAmount = useMemo(() => {
     return products.reduce((sum, p) => sum + (p.price * (quantities[p.id] || 0)), 0);
   }, [products, quantities]);
 
   const handleCheckout = useCallback(() => {
     const selected = products.filter((p) => (quantities[p.id] || 0) > 0);
-    if (selected.length === 0) {
-      showWarningAlert('No items selected', 'Please select at least one product to continue.');
+    const hasRentItems = currentOrder?.rent_items?.some(item => rentItemsInTruck[item.id] === true);
+    
+    if (selected.length === 0 && !hasRentItems) {
+      showWarningAlert('No items selected', 'Please select at least one product or rent item to continue.');
       return;
+    }
+
+    // Update rent items in_truck status in the order
+    if (currentOrder && currentOrder.rent_items) {
+      const updatedRentItems = currentOrder.rent_items.map(item => ({
+        ...item,
+        in_truck: rentItemsInTruck[item.id] ?? false
+      }));
+      
+      const updatedOrder = {
+        ...currentOrder,
+        rent_items: updatedRentItems
+      };
+      
+      // Update the order in assignedOrders
+      const updatedAssignedOrders = assignedOrders.map(order =>
+        order.id === currentOrder.id ? updatedOrder : order
+      );
+      setAssignedOrders(updatedAssignedOrders);
     }
 
     const cartProducts: Product[] = selected.map(serverProduct => {
@@ -353,19 +405,20 @@ const ProductList: React.FC = () => {
       }
     });
     
-    if (itemsAdded === 0) {
-      showWarningAlert('No Items Selected', 'Please select at least one product to continue.');
+    // Allow checkout even if no products are selected, as long as rent items are selected
+    if (itemsAdded === 0 && !hasRentItems) {
+      showWarningAlert('No Items Selected', 'Please select at least one product or rent item to continue.');
       return;
     }
     
     router.push('/(root)/(tabs)/checkout');
-  }, [products, quantities, addToCart, clearCart, router, currentOrder, selectedOrder, assignedOrders]);
+  }, [products, quantities, addToCart, clearCart, router, currentOrder, selectedOrder, assignedOrders, rentItemsInTruck, setAssignedOrders]);
 
   if (loading) {
     return (
       <View style={[styles.container, styles.centerContent, { paddingTop: insets.top }]}>
         <View style={styles.loadingBox}>
-          <ActivityIndicator size="large" color="#111827" />
+          <ActivityIndicator size="large" color="#1E40AF" />
         </View>
         <Text style={styles.loadingText}>Loading products...</Text>
       </View>
@@ -399,7 +452,7 @@ const ProductList: React.FC = () => {
           onPress={() => router.back()}
           activeOpacity={0.7}
         >
-          <Ionicons name="chevron-back" size={20} color="#0F172A" />
+          <Ionicons name="chevron-back" size={20} color="#1E40AF" />
           </TouchableOpacity>
         <View style={styles.headerCenter}>
           <Text style={styles.headerTitle}>Add Products</Text>
@@ -452,12 +505,19 @@ const ProductList: React.FC = () => {
           return (
             <View key={category} style={styles.categorySection}>
               <View style={styles.categoryHeader}>
-                <Text style={styles.categoryTitle}>{category}</Text>
-                <Text style={styles.categoryCount}>{productsInCategory.length}</Text>
+                <View style={styles.categoryTitleContainer}>
+                  <View style={styles.categoryBadge}>
+                    <Text style={styles.categoryTitle}>{category}</Text>
+                  </View>
+                </View>
+                <View style={styles.categoryCountBadge}>
+                  <Text style={styles.categoryCount}>{productsInCategory.length}</Text>
+                </View>
                 </View>
                 
                 {productsInCategory.map((product) => {
-                  const initialQty = currentOrder ? getProductQuantity(currentOrder, product.name) : 0;
+                  // Match by both name AND category to avoid mixing retail-items and refill items
+                  const initialQty = currentOrder ? getProductQuantity(currentOrder, product.name, product.category) : 0;
                   const availableStock = getAvailableStock(product.id);
                   return (
                     <ProductItem
@@ -474,6 +534,58 @@ const ProductList: React.FC = () => {
           );
         })}
 
+        {/* Rent Items Section */}
+        {currentOrder?.rent_items && currentOrder.rent_items.length > 0 && (
+          <View style={styles.categorySection}>
+            <View style={styles.categoryHeader}>
+              <Text style={styles.categoryTitle}>Extra Instructions</Text>
+              <Text style={styles.categoryCount}>{currentOrder.rent_items.length}</Text>
+            </View>
+            
+            {currentOrder.rent_items.map((item) => {
+              const isInTruck = rentItemsInTruck[item.id] ?? false;
+              return (
+                <View key={item.id} style={styles.rentItemCard}>
+                  <View style={styles.rentItemMain}>
+                    {item.image_url ? (
+                      <Image 
+                        source={{ uri: getImageUrl(item.image_url) || '' }} 
+                        style={styles.rentItemImage}
+                        resizeMode="cover"
+                      />
+                    ) : (
+                      <View style={[styles.rentItemIconBox, item.category === 'borrow' ? styles.rentItemIconBorrow : styles.rentItemIconDeposit]}>
+                        <Ionicons 
+                          name={item.category === 'borrow' ? 'arrow-down-circle' : 'arrow-up-circle'} 
+                          size={24} 
+                          color={item.category === 'borrow' ? '#10B981' : '#3B82F6'} 
+                        />
+                      </View>
+                    )}
+                    <View style={styles.rentItemInfo}>
+                      <Text style={styles.rentItemName}>{item.name}</Text>
+                      <Text style={styles.rentItemDetails}>
+                        {item.category === 'borrow' ? 'Borrow' : 'Deposit'} • Qty: {item.quantity} • AED {item.price.toFixed(2)} each
+                      </Text>
+                    </View>
+                  </View>
+                  <TouchableOpacity
+                    style={[styles.rentItemToggle, isInTruck ? styles.rentItemToggleOn : styles.rentItemToggleOff]}
+                    onPress={() => setRentItemsInTruck(prev => ({ ...prev, [item.id]: !isInTruck }))}
+                    activeOpacity={0.7}
+                  >
+                    {isInTruck ? (
+                      <Ionicons name="checkmark-circle" size={28} color="#10B981" />
+                    ) : (
+                      <Ionicons name="ellipse-outline" size={28} color="#9CA3AF" />
+                    )}
+                  </TouchableOpacity>
+                </View>
+              );
+            })}
+          </View>
+        )}
+
         {/* Action Section */}
         <View style={styles.actionSection}>
           <View style={styles.actionSummary}>
@@ -484,18 +596,18 @@ const ProductList: React.FC = () => {
         <TouchableOpacity
             style={[
               styles.checkoutButton,
-              totalSelectedItems === 0 && styles.checkoutButtonDisabled
+              !canCheckout && styles.checkoutButtonDisabled
             ]}
           onPress={handleCheckout}
-          disabled={totalSelectedItems === 0}
+          disabled={!canCheckout}
             activeOpacity={0.8}
           >
             <Text style={styles.checkoutButtonText}>Checkout</Text>
             <View style={[
               styles.checkoutArrow,
-              totalSelectedItems === 0 && styles.checkoutArrowDisabled
+              !canCheckout && styles.checkoutArrowDisabled
             ]}>
-              <Ionicons name="arrow-forward" size={16} color={totalSelectedItems === 0 ? '#9CA3AF' : '#111827'} />
+              <Ionicons name="arrow-forward" size={16} color={!canCheckout ? '#9CA3AF' : '#1E40AF'} />
             </View>
         </TouchableOpacity>
         </View>
@@ -538,7 +650,7 @@ const styles = StyleSheet.create({
   headerTitle: {
     fontSize: 17,
     fontWeight: '600',
-    color: '#111827',
+    color: '#1E40AF',
     letterSpacing: -0.4,
   },
   headerSubtitle: {
@@ -551,7 +663,7 @@ const styles = StyleSheet.create({
     minWidth: 36,
     height: 36,
     borderRadius: 10,
-    backgroundColor: '#111827',
+    backgroundColor: '#2563EB',
     justifyContent: 'center',
     alignItems: 'center',
     paddingHorizontal: 10,
@@ -583,7 +695,7 @@ const styles = StyleSheet.create({
   summaryValue: {
     fontSize: 15,
     fontWeight: '600',
-    color: '#111827',
+    color: '#1E40AF',
   },
   summaryValueHighlight: {
     fontSize: 15,
@@ -634,19 +746,33 @@ const styles = StyleSheet.create({
     justifyContent: 'space-between',
     marginBottom: 12,
   },
+  categoryTitleContainer: {
+    flex: 1,
+  },
+  categoryBadge: {
+    backgroundColor: '#2563EB',
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    borderRadius: 8,
+    alignSelf: 'flex-start',
+  },
   categoryTitle: {
-    fontSize: 15,
-    fontWeight: '600',
-    color: '#111827',
+    fontSize: 13,
+    fontWeight: '700',
+    color: '#FFFFFF',
+    textTransform: 'uppercase',
+    letterSpacing: 0.5,
+  },
+  categoryCountBadge: {
+    backgroundColor: '#F3F4F6',
+    paddingHorizontal: 10,
+    paddingVertical: 4,
+    borderRadius: 8,
   },
   categoryCount: {
     fontSize: 12,
-    fontWeight: '500',
-    color: '#9CA3AF',
-    backgroundColor: '#F3F4F6',
-    paddingHorizontal: 8,
-    paddingVertical: 2,
-    borderRadius: 6,
+    fontWeight: '600',
+    color: '#6B7280',
   },
   productCard: {
     backgroundColor: '#FFFFFF',
@@ -668,7 +794,7 @@ const styles = StyleSheet.create({
     }),
   },
   productCardSelected: {
-    borderColor: '#111827',
+    borderColor: '#2563EB',
     backgroundColor: '#FAFAFA',
   },
   productMain: {
@@ -686,9 +812,9 @@ const styles = StyleSheet.create({
     overflow: 'hidden',
   },
   productIconBoxSelected: {
-    backgroundColor: '#111827',
+    backgroundColor: '#2563EB',
     borderWidth: 2,
-    borderColor: '#111827',
+    borderColor: '#2563EB',
   },
   productImage: {
     width: '100%',
@@ -706,7 +832,7 @@ const styles = StyleSheet.create({
   productName: {
     fontSize: 14,
     fontWeight: '600',
-    color: '#111827',
+    color: '#1E40AF',
     flex: 1,
   },
   badge: {
@@ -806,7 +932,7 @@ const styles = StyleSheet.create({
   qtyText: {
     fontSize: 14,
     fontWeight: '700',
-    color: '#111827',
+    color: '#1E40AF',
   },
   actionSection: {
     flexDirection: 'row',
@@ -842,14 +968,14 @@ const styles = StyleSheet.create({
   actionTotal: {
     fontSize: 20,
     fontWeight: '700',
-    color: '#111827',
+    color: '#1E40AF',
     letterSpacing: -0.5,
   },
   checkoutButton: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
-    backgroundColor: '#111827',
+    backgroundColor: '#2563EB',
     height: 52,
     paddingHorizontal: 24,
     borderRadius: 14,
@@ -872,6 +998,79 @@ const styles = StyleSheet.create({
     alignItems: 'center',
   },
   checkoutArrowDisabled: {
+    backgroundColor: '#F3F4F6',
+  },
+  rentItemCard: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    backgroundColor: '#FFFFFF',
+    borderRadius: 12,
+    padding: 12,
+    marginBottom: 8,
+    borderWidth: 1,
+    borderColor: '#E5E7EB',
+  },
+  rentItemMain: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    flex: 1,
+  },
+  rentItemImage: {
+    width: 48,
+    height: 48,
+    borderRadius: 8,
+    marginRight: 12,
+  },
+  rentItemIconBox: {
+    width: 48,
+    height: 48,
+    borderRadius: 8,
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginRight: 12,
+  },
+  rentItemIconBorrow: {
+    backgroundColor: '#ECFDF5',
+  },
+  rentItemIconDeposit: {
+    backgroundColor: '#EFF6FF',
+  },
+  rentItemInfo: {
+    flex: 1,
+  },
+  rentItemName: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: '#1E40AF',
+    marginBottom: 2,
+  },
+  rentItemDetails: {
+    fontSize: 12,
+    color: '#6B7280',
+  },
+  rentItemToggle: {
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    justifyContent: 'center',
+    alignItems: 'center',
+    ...Platform.select({
+      ios: {
+        shadowColor: '#000',
+        shadowOffset: { width: 0, height: 2 },
+        shadowOpacity: 0.1,
+        shadowRadius: 4,
+      },
+      android: {
+        elevation: 2,
+      },
+    }),
+  },
+  rentItemToggleOn: {
+    backgroundColor: '#ECFDF5',
+  },
+  rentItemToggleOff: {
     backgroundColor: '#F3F4F6',
   },
   loadingBox: {
@@ -911,14 +1110,14 @@ const styles = StyleSheet.create({
   errorTitle: {
     fontSize: 15,
     fontWeight: '500',
-    color: '#111827',
+    color: '#1E40AF',
     textAlign: 'center',
     marginBottom: 16,
   },
   retryButton: {
     paddingHorizontal: 24,
     paddingVertical: 12,
-    backgroundColor: '#111827',
+    backgroundColor: '#2563EB',
     borderRadius: 10,
   },
   retryButtonText: {

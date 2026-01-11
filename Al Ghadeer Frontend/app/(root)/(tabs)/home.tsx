@@ -264,7 +264,7 @@ const Home = () => {
                 ) : null}
               </View>
             </View>
-            <View className="bg-white/80 rounded-full px-3 py-1" style={{ shadowColor: '#0F172A', shadowOpacity: 0.06, shadowRadius: 10, shadowOffset: { width: 0, height: 6 }, elevation: 3 }}>
+            <View className="bg-white/80 rounded-full px-3 py-1" style={{ shadowColor: '#1E40AF', shadowOpacity: 0.06, shadowRadius: 10, shadowOffset: { width: 0, height: 6 }, elevation: 3 }}>
               <Text className="text-gray-700 text-xs font-JakartaSemiBold">
                 {formatDate(today)}
               </Text>
@@ -278,7 +278,7 @@ const Home = () => {
             <View
               className="flex-1 flex-row items-center rounded-full px-4 py-[1px] bg-white border border-gray-200"
               style={{
-                shadowColor: '#0F172A',
+                shadowColor: '#1E40AF',
                 shadowOpacity: 0.06,
                 shadowRadius: 12,
                 shadowOffset: { width: 0, height: 8 },
@@ -366,8 +366,8 @@ const Home = () => {
               <RefreshControl
                 refreshing={refreshing}
                 onRefresh={onRefresh}
-                tintColor="#0F172A"
-                colors={["#0F172A"]}
+                tintColor="#1E40AF"
+                colors={["#1E40AF"]}
               />
             }
             ListEmptyComponent={

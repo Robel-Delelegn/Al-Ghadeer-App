@@ -26,13 +26,12 @@ interface ApiResponse {
   data: Order[];
 }
 
-type StatusFilter = 'all' | 'delivered' | 'failed' | 'cancelled';
+type StatusFilter = 'all' | 'delivered' | 'failed';
 
 const statusConfig: Record<StatusFilter, { label: string; color: string; bgColor: string; icon: keyof typeof Ionicons.glyphMap }> = {
-  all: { label: 'All', color: '#0F172A', bgColor: '#F8FAFC', icon: 'apps' },
+  all: { label: 'All', color: '#1E40AF', bgColor: '#F8FAFC', icon: 'apps' },
   delivered: { label: 'Delivered', color: '#059669', bgColor: '#ECFDF5', icon: 'checkmark-circle' },
   failed: { label: 'Failed', color: '#DC2626', bgColor: '#FEF2F2', icon: 'close-circle' },
-  cancelled: { label: 'Cancelled', color: '#6B7280', bgColor: '#F9FAFB', icon: 'ban' },
 };
 
 const DeliveryHistory = () => {
@@ -143,7 +142,7 @@ const DeliveryHistory = () => {
     const customerName = item.customer_name || 'Unknown';
     const customerAddress = item.customer_address || '';
     const totalAmount = item.total_amount || 0;
-    const config = statusConfig[item.status as StatusFilter] || statusConfig.cancelled;
+    const config = statusConfig[item.status as StatusFilter] ;
     
     const totalItems = getTotalItemsCount(item);
 
@@ -220,7 +219,7 @@ const DeliveryHistory = () => {
           onPress={() => router.back()}
           activeOpacity={0.7}
         >
-          <Ionicons name="chevron-back" size={20} color="#0F172A" />
+          <Ionicons name="chevron-back" size={20} color="#1E40AF" />
         </TouchableOpacity>
         <View style={styles.headerTitleContainer}>
           <Text style={styles.headerTitle}>History</Text>
@@ -302,7 +301,7 @@ const DeliveryHistory = () => {
       {loading ? (
         <View style={styles.loadingContainer}>
           <View style={styles.loadingIndicator}>
-            <ActivityIndicator size="large" color="#0F172A" />
+            <ActivityIndicator size="large" color="#1E40AF" />
           </View>
           <Text style={styles.loadingText}>Loading history...</Text>
         </View>
@@ -317,8 +316,8 @@ const DeliveryHistory = () => {
             <RefreshControl
               refreshing={refreshing}
               onRefresh={onRefresh}
-              tintColor="#0F172A"
-              colors={["#0F172A"]}
+              tintColor="#1E40AF"
+              colors={["#1E40AF"]}
             />
           }
           ListEmptyComponent={
@@ -366,7 +365,7 @@ const styles = StyleSheet.create({
   headerTitle: {
     fontSize: 17,
     fontWeight: '600',
-    color: '#111827',
+    color: '#1E40AF',
     letterSpacing: -0.4,
   },
   headerRight: {
@@ -393,7 +392,7 @@ const styles = StyleSheet.create({
   statNumber: {
     fontSize: 28,
     fontWeight: '700',
-    color: '#111827',
+    color: '#1E40AF',
     letterSpacing: -1,
   },
   statLabel: {
@@ -426,7 +425,7 @@ const styles = StyleSheet.create({
   searchInput: {
     flex: 1,
     fontSize: 15,
-    color: '#111827',
+    color: '#1E40AF',
     fontWeight: '400',
   },
   clearButton: {
@@ -452,7 +451,7 @@ const styles = StyleSheet.create({
     backgroundColor: '#F3F4F6',
   },
   filterPillActive: {
-    backgroundColor: '#111827',
+    backgroundColor: '#2563EB',
   },
   filterPillText: {
     fontSize: 13,
@@ -474,7 +473,7 @@ const styles = StyleSheet.create({
     overflow: 'hidden',
     ...Platform.select({
       ios: {
-        shadowColor: '#000',
+        shadowColor: '#1E40AF',
         shadowOffset: { width: 0, height: 2 },
         shadowOpacity: 0.04,
         shadowRadius: 8,
@@ -505,7 +504,7 @@ const styles = StyleSheet.create({
   orderId: {
     fontSize: 15,
     fontWeight: '700',
-    color: '#111827',
+    color: '#1E40AF',
     letterSpacing: -0.3,
   },
   dateBadge: {
@@ -563,7 +562,7 @@ const styles = StyleSheet.create({
   customerName: {
     fontSize: 15,
     fontWeight: '600',
-    color: '#111827',
+    color: '#1E40AF',
     marginBottom: 2,
   },
   customerAddress: {
@@ -595,7 +594,7 @@ const styles = StyleSheet.create({
   metricValue: {
     fontSize: 14,
     fontWeight: '600',
-    color: '#111827',
+    color: '#1E40AF',
   },
   metricValueHighlight: {
     fontSize: 14,
@@ -628,7 +627,7 @@ const styles = StyleSheet.create({
     marginBottom: 16,
     ...Platform.select({
       ios: {
-        shadowColor: '#000',
+        shadowColor: '#1E40AF',
         shadowOffset: { width: 0, height: 4 },
         shadowOpacity: 0.08,
         shadowRadius: 12,
@@ -657,7 +656,7 @@ const styles = StyleSheet.create({
     marginBottom: 20,
     ...Platform.select({
       ios: {
-        shadowColor: '#000',
+        shadowColor: '#1E40AF',
         shadowOffset: { width: 0, height: 4 },
         shadowOpacity: 0.06,
         shadowRadius: 12,
@@ -670,7 +669,7 @@ const styles = StyleSheet.create({
   emptyTitle: {
     fontSize: 17,
     fontWeight: '600',
-    color: '#111827',
+    color: '#1E40AF',
     marginBottom: 6,
   },
   emptySubtitle: {

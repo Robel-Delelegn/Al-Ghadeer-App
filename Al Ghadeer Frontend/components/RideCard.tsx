@@ -17,7 +17,7 @@ const RideCard = ({
 }: {
   ride: Ride;
 }) => (
-  <View className="flex-1 bg-white rounded-2xl mb-3 border border-gray-100" style={{ shadowColor: '#0F172A', shadowOpacity: 0.06, shadowRadius: 14, shadowOffset: { width: 0, height: 8 }, elevation: 4 }}>
+  <View className="flex-1 bg-white rounded-2xl mb-3 border border-gray-100" style={{ shadowColor: '#1E40AF', shadowOpacity: 0.06, shadowRadius: 14, shadowOffset: { width: 0, height: 8 }, elevation: 4 }}>
     <View className="flex flex-col items-center justify-center p-4">
       <View className="flex flex-row items-center justify-center">
         <Image

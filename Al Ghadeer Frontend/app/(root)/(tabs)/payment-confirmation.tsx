@@ -27,11 +27,13 @@ interface ApiResponse {
   order: {
     id: number;
     order_number: string;
+    invoice_number?: string;
     created_at: string;
     total_amount: number;
     payment_method: string;
     status: string;
   };
+  invoice_number?: string;
 }
 
 const PaymentConfirmation: React.FC = () => {
@@ -56,7 +58,8 @@ const PaymentConfirmation: React.FC = () => {
   const receiverPosition = params.receiver_position as string | undefined;
   const notes = params.notes as string | undefined;
   
-  const { subtotal, vat, totalWithVat, itemCount } = useMemo(() => {
+  const { subtotal, vat, totalWithVat, itemCount, rentItemsTotal, hasRentItemsSelected, isRentItemsOnly } = useMemo(() => {
+    // Calculate regular products subtotal (with VAT)
     const sub = cartItems.reduce((sum, item) => {
       if (!item || typeof item.price !== 'number' || typeof item.quantity !== 'number') {
         return sum;
@@ -64,21 +67,43 @@ const PaymentConfirmation: React.FC = () => {
       return sum + item.price * item.quantity;
     }, 0);
     const vatAmount = sub * 0.05;
-    const total = sub + vatAmount;
+    
+    // Calculate rent items total (no VAT) - only for items with in_truck === true
+    const rentTotal = orderDetail?.rent_items?.reduce((sum, item) => {
+      if (item.in_truck) {
+        return sum + ((item.price || 0) * (item.quantity || 1));
+      }
+      return sum;
+    }, 0) || 0;
+    
+    // Check if any rent items are selected
+    const hasRentItems = orderDetail?.rent_items?.some(item => item.in_truck === true) || false;
+    
+    // Check if this is rent-items-only (no cart items but rent items selected)
+    const isRentOnly = cartItems.length === 0 && hasRentItems;
+    
+    // Total = products (with VAT) + rent items (no VAT)
+    const total = sub + vatAmount + rentTotal;
     const count = cartItems.reduce((sum, item) => sum + (item?.quantity || 0), 0);
     
     return {
       subtotal: sub.toFixed(2),
       vat: vatAmount.toFixed(2),
       totalWithVat: total.toFixed(2),
-      itemCount: count
+      itemCount: count,
+      rentItemsTotal: rentTotal.toFixed(2),
+      hasRentItemsSelected: hasRentItems,
+      isRentItemsOnly: isRentOnly
     };
-  }, [cartItems]);
+  }, [cartItems, orderDetail]);
 
   const paymentIcon = useMemo(() => {
     switch (selectedPaymentMethod) {
       case 'wallet': return 'wallet';
       case 'credit_card': return 'card';
+      case 'invoice': return 'receipt';
+      case 'credit_sale': return 'receipt';
+      case 'credit_invoice': return 'document-text';
       default: return 'cash';
     }
   }, [selectedPaymentMethod]);
@@ -87,6 +112,9 @@ const PaymentConfirmation: React.FC = () => {
     switch (selectedPaymentMethod) {
       case 'wallet': return 'Wallet';
       case 'credit_card': return 'Card';
+      case 'invoice': return 'Invoice';
+      case 'credit_sale': return 'Credit Sale';
+      case 'credit_invoice': return 'Credit Invoice';
       default: return 'Cash';
     }
   }, [selectedPaymentMethod]);
@@ -97,8 +125,9 @@ const PaymentConfirmation: React.FC = () => {
       return;
     }
     
-    if (cartItems.length === 0) {
-      showErrorAlert('Error', 'No items in cart.');
+    // Allow confirmation if either cart has items OR rent items are selected
+    if (cartItems.length === 0 && !hasRentItemsSelected) {
+      showErrorAlert('Error', 'No items selected.');
       return;
     }
     
@@ -123,8 +152,10 @@ const PaymentConfirmation: React.FC = () => {
         subtotal: parseFloat(subtotal),
         vat: parseFloat(vat),
         total_amount: parseFloat(totalWithVat),
+        rent_items: (orderDetail?.rent_items || []).filter(item => item.in_truck === true),
         payment_method: selectedPaymentMethod === 'credit_card' ? 'credit_card' : selectedPaymentMethod,
         order_type: orderType,
+        reasons: orderDetail?.reasons || [],
         // Include signature data if available (for organization orders)
         ...(signatureData && { signature_data: signatureData }),
         ...(receiverName && { receiver_name: receiverName }),
@@ -159,15 +190,37 @@ const PaymentConfirmation: React.FC = () => {
       }
 
       // Mark order as delivered and remove from assigned orders
+      // Also update the order with invoice_number if provided
       if (orderDetail) {
+        const invoiceNumber = result.invoice_number || result.order.invoice_number;
+        
+        // First mark as delivered (this moves it to completedOrders)
         updateOrderStatus(orderDetail.id, 'delivered');
+        
+        // Then update the order in completedOrders with invoice_number
+        if (invoiceNumber) {
+          const store = useOrderStore.getState();
+          const updatedCompletedOrders = store.completedOrders.map(o => 
+            o.id === orderDetail.id ? { ...o, invoice_number: invoiceNumber } : o
+          );
+          useOrderStore.setState({ completedOrders: updatedCompletedOrders });
+        }
       }
 
-      showSuccessAlert(
-        'Payment Successful', 
-        result.message || `Order ${result.order.order_number} confirmed.`,
-        [{ text: 'View Receipt', onPress: () => router.push('/(root)/(tabs)/payment-receipt') }]
-      );
+      // If rent-items-only, show success without receipt option
+      if (isRentItemsOnly) {
+        showSuccessAlert(
+          'Delivery Confirmed', 
+          result.message || `Order ${result.order.order_number} confirmed successfully.`,
+          [{ text: 'OK', onPress: () => router.push('/(root)/(tabs)/home') }]
+        );
+      } else {
+        showSuccessAlert(
+          'Payment Successful', 
+          result.message || `Order ${result.order.order_number} confirmed.`,
+          [{ text: 'View Receipt', onPress: () => router.push('/(root)/(tabs)/payment-receipt') }]
+        );
+      }
       
     } catch (error) {
       showErrorAlert(
@@ -177,7 +230,7 @@ const PaymentConfirmation: React.FC = () => {
     } finally {
       setIsProcessing(false);
     }
-  }, [orderDetail, cartItems, subtotal, vat, totalWithVat, selectedPaymentMethod, router, updateOrderStatus, checkoutSessionId, signatureData, receiverName, receiverPosition, notes, user?.id]);
+  }, [orderDetail, cartItems, subtotal, vat, totalWithVat, selectedPaymentMethod, router, updateOrderStatus, checkoutSessionId, signatureData, receiverName, receiverPosition, notes, user?.id, hasRentItemsSelected, isRentItemsOnly]);
 
   const customerName = orderDetail?.customer_name || 'Customer';
   const customerAddress = orderDetail?.customer_address || '—';
@@ -197,7 +250,7 @@ const PaymentConfirmation: React.FC = () => {
           onPress={() => router.back()}
           activeOpacity={0.7}
         >
-          <Ionicons name="chevron-back" size={20} color="#0F172A" />
+          <Ionicons name="chevron-back" size={20} color="#1E40AF" />
         </TouchableOpacity>
         <Text style={styles.headerTitle}>Confirm Payment</Text>
         <View style={styles.headerRight} />
@@ -278,6 +331,37 @@ const PaymentConfirmation: React.FC = () => {
           )}
         </View>
 
+        {/* Rent Items */}
+        {orderDetail?.rent_items && orderDetail.rent_items.length > 0 && (
+          <View style={styles.card}>
+            <View style={styles.itemsTableHeader}>
+              <Text style={styles.tableHeaderText}>Rent Items</Text>
+              <Text style={[styles.tableHeaderText, styles.tableHeaderPrice]}>Price</Text>
+            </View>
+            {orderDetail.rent_items.map((item, index) => (
+              <View key={item.id}>
+                <View style={styles.itemsTableRow}>
+                  <View style={styles.itemProductInfo}>
+                    <View style={[styles.itemTableIconBox, item.category === 'borrow' ? styles.rentItemIconBorrow : styles.rentItemIconDeposit]}>
+                      <Ionicons 
+                        name={item.category === 'borrow' ? 'arrow-down-circle' : 'arrow-up-circle'} 
+                        size={14} 
+                        color={item.category === 'borrow' ? '#10B981' : '#3B82F6'} 
+                      />
+                    </View>
+                    <View style={styles.itemInfo}>
+                      <Text style={styles.itemName}>{item.name}</Text>
+                      <Text style={styles.itemMeta}>{item.category === 'borrow' ? 'Borrow' : 'Deposit'} • Qty: {item.quantity}</Text>
+                    </View>
+                  </View>
+                  <Text style={[styles.itemTableValue, styles.tablePrice, styles.itemTableTotal]}>AED {(item.price * item.quantity).toFixed(2)}</Text>
+                </View>
+                {index < (orderDetail.rent_items?.length || 0) - 1 && <View style={styles.itemDivider} />}
+              </View>
+            ))}
+          </View>
+        )}
+
         {/* Customer */}
         <View style={styles.card}>
           <Text style={styles.cardTitle}>Customer</Text>
@@ -316,7 +400,7 @@ const PaymentConfirmation: React.FC = () => {
               <Ionicons 
                 name={paymentIcon} 
                 size={20} 
-                color={selectedPaymentMethod === 'wallet' && walletBalance < 0 ? '#F97316' : '#111827'} 
+                color={selectedPaymentMethod === 'wallet' && walletBalance < 0 ? '#F97316' : '#1E40AF'} 
               />
             </View>
             <View style={styles.paymentInfo}>
@@ -356,6 +440,12 @@ const PaymentConfirmation: React.FC = () => {
             <Text style={styles.totalLabel}>VAT (5%)</Text>
             <Text style={styles.totalValue}>AED {vat}</Text>
           </View>
+          {parseFloat(rentItemsTotal) > 0 && (
+            <View style={styles.totalRow}>
+              <Text style={styles.totalLabel}>Rent Items</Text>
+              <Text style={styles.totalValue}>AED {rentItemsTotal}</Text>
+            </View>
+          )}
           <View style={styles.totalRow}>
             <Text style={styles.grandTotalLabel}>Total (Including VAT)</Text>
             <Text style={styles.grandTotalValue}>AED {totalWithVat}</Text>
@@ -429,7 +519,7 @@ const styles = StyleSheet.create({
   headerTitle: {
     fontSize: 17,
     fontWeight: '600',
-    color: '#111827',
+    color: '#1E40AF',
     letterSpacing: -0.4,
   },
   headerRight: {
@@ -458,7 +548,7 @@ const styles = StyleSheet.create({
   heroTitle: {
     fontSize: 22,
     fontWeight: '700',
-    color: '#111827',
+    color: '#1E40AF',
     letterSpacing: -0.5,
     marginBottom: 6,
   },
@@ -473,7 +563,7 @@ const styles = StyleSheet.create({
     marginBottom: 12,
     ...Platform.select({
       ios: {
-        shadowColor: '#000',
+        shadowColor: '#1E40AF',
         shadowOffset: { width: 0, height: 2 },
         shadowOpacity: 0.04,
         shadowRadius: 8,
@@ -542,7 +632,7 @@ const styles = StyleSheet.create({
   itemName: {
     fontSize: 14,
     fontWeight: '500',
-    color: '#111827',
+    color: '#1E40AF',
     marginBottom: 2,
   },
   itemMeta: {
@@ -552,7 +642,7 @@ const styles = StyleSheet.create({
   itemTotal: {
     fontSize: 14,
     fontWeight: '600',
-    color: '#111827',
+    color: '#1E40AF',
   },
   itemDivider: {
     height: 1,
@@ -613,7 +703,7 @@ const styles = StyleSheet.create({
     flex: 1,
     fontSize: 12,
     fontWeight: '500',
-    color: '#111827',
+    color: '#1E40AF',
   },
   itemTableValue: {
     fontSize: 12,
@@ -629,7 +719,13 @@ const styles = StyleSheet.create({
   },
   itemTableTotal: {
     fontWeight: '600',
-    color: '#111827',
+    color: '#1E40AF',
+  },
+  rentItemIconBorrow: {
+    backgroundColor: '#ECFDF5',
+  },
+  rentItemIconDeposit: {
+    backgroundColor: '#EFF6FF',
   },
   customerRow: {
     flexDirection: 'row',
@@ -656,7 +752,7 @@ const styles = StyleSheet.create({
   customerName: {
     fontSize: 15,
     fontWeight: '600',
-    color: '#111827',
+    color: '#1E40AF',
   },
   customerPhone: {
     fontSize: 13,
@@ -699,7 +795,7 @@ const styles = StyleSheet.create({
   paymentLabel: {
     fontSize: 15,
     fontWeight: '600',
-    color: '#111827',
+    color: '#1E40AF',
   },
   paymentSublabel: {
     fontSize: 12,
@@ -758,7 +854,7 @@ const styles = StyleSheet.create({
   totalValue: {
     fontSize: 14,
     fontWeight: '500',
-    color: '#111827',
+    color: '#1E40AF',
   },
   totalDivider: {
     height: 1,
@@ -768,7 +864,7 @@ const styles = StyleSheet.create({
   grandTotalLabel: {
     fontSize: 15,
     fontWeight: '600',
-    color: '#111827',
+    color: '#1E40AF',
   },
   grandTotalValue: {
     fontSize: 20,
@@ -785,7 +881,7 @@ const styles = StyleSheet.create({
     gap: 12,
     ...Platform.select({
       ios: {
-        shadowColor: '#000',
+        shadowColor: '#1E40AF',
         shadowOffset: { width: 0, height: 2 },
         shadowOpacity: 0.04,
         shadowRadius: 8,

@@ -186,6 +186,7 @@ const OrganizationSignature: React.FC = () => {
         total_amount: total,
         payment_method: selectedPaymentMethod || 'cash',
         order_type: 'site',
+        reasons: orderDetail?.reasons || [],
         signature_data: signatureData,
         receiver_name: receiverName.trim(),
         receiver_position: receiverPosition.trim() || undefined,
@@ -219,10 +220,14 @@ const OrganizationSignature: React.FC = () => {
         updateOrderStatus(orderDetail.id, 'delivered');
       }
 
+      // Determine document type based on payment method
+      const isDeliveryNote = selectedPaymentMethod === 'credit_invoice';
+      const documentType = isDeliveryNote ? 'Delivery Note' : 'Invoice';
+      
       showSuccessAlert(
         'Payment Successful',
         result.message || `Order ${result.order?.order_number || orderDetail?.order_number} confirmed.`,
-        [{ text: 'View Receipt', onPress: () => router.push('/(root)/(tabs)/payment-receipt') }]
+        [{ text: `View ${documentType}`, onPress: () => router.push('/(root)/(tabs)/payment-receipt') }]
       );
 
     } catch (error) {

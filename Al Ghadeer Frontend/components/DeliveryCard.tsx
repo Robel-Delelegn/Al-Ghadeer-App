@@ -112,26 +112,71 @@ const DeliveryCard = ({ item, onPress }: { item: Order; onPress?: () => void }) 
   
   const currentlyAvailable = isCurrentlyAvailable();
   
-  // Calculate total items dynamically from products object
-  const calculateTotalItems = (): number => {
-    if (item.products && typeof item.products === 'object') {
-      // Sum all quantities from the products object
-      return Object.values(item.products).reduce((total, quantity) => {
-        return total + (typeof quantity === 'number' ? quantity : 0);
-      }, 0);
+  // Calculate distinct product count and total price dynamically from products object
+  const calculateTotals = (): { totalItems: number; totalPrice: number } => {
+    let distinctProductCount = 0;
+    let totalPrice = 0;
+
+    if (item.products) {
+      if (Array.isArray(item.products)) {
+        // Array format: [{ id, name, quantity, price, ... }, ...]
+        // Count distinct products (each product in array is a distinct product)
+        distinctProductCount = item.products.filter((product) => 
+          product && typeof product === 'object' && (product.quantity || 0) > 0
+        ).length;
+        
+        // Calculate total price (if price info is available in the product object)
+        item.products.forEach((product) => {
+          if (product && typeof product === 'object') {
+            const qty = typeof product.quantity === 'number' ? product.quantity : 0;
+            // Try to get price from product object (may not exist in Order type)
+            const productAny = product as any;
+            const price = typeof productAny.price === 'number' ? productAny.price : 
+                         (typeof productAny.pricing === 'number' ? productAny.pricing : 0);
+            totalPrice += qty * price;
+          }
+        });
+      } else if (typeof item.products === 'object') {
+        // Dictionary/Record format
+        const productsRecord = item.products as Record<string, number | { quantity?: number; price?: number }>;
+        // Count distinct products (each key is a distinct product)
+        const productKeys = Object.keys(productsRecord);
+        distinctProductCount = productKeys.filter((key) => {
+          const value = productsRecord[key];
+          if (typeof value === 'number') {
+            return value > 0;
+          } else if (value && typeof value === 'object') {
+            return (value.quantity || 0) > 0;
+          }
+          return false;
+        }).length;
+        
+        // Calculate total price
+        Object.values(productsRecord).forEach((value) => {
+          if (typeof value === 'number') {
+            // Legacy format: { "product_name": quantity } - can't calculate price without price info
+          } else if (value && typeof value === 'object') {
+            // New format: { "product_name": { quantity: X, price: Y } }
+            const qty = typeof value.quantity === 'number' ? value.quantity : 0;
+            const price = typeof value.price === 'number' ? value.price : 0;
+            totalPrice += qty * price;
+          }
+        });
+      }
     }
-    // Fallback to legacy flat structure
-    return (
-      (item.five_litre_bottles || 0) + 
-      (item.ten_litre_bottles || 0) + 
-      (item.three_hundred_ml_bottles || 0) + 
-      (item.one_litre_bottles || 0) + 
-      (item.twenty_litre_bottles || 0) + 
-      (item.water_dispenser || 0)
-    );
+
+    // Fallback: if no products found, return 0
+    if (distinctProductCount === 0 && totalPrice === 0 && !item.products) {
+      distinctProductCount = 0;
+    }
+
+    return { totalItems: distinctProductCount, totalPrice };
   };
   
-  const totalItems = calculateTotalItems();
+  const { totalItems, totalPrice: calculatedPrice } = calculateTotals();
+  
+  // Use calculated price if available, otherwise fall back to item.total_amount
+  const displayPrice = calculatedPrice > 0 ? calculatedPrice : totalAmount;
 
   return (
     <TouchableOpacity
@@ -139,7 +184,7 @@ const DeliveryCard = ({ item, onPress }: { item: Order; onPress?: () => void }) 
       activeOpacity={0.9}
       className="mb-4 rounded-2xl bg-white px-5 py-4 flex flex-col gap-2"
       style={{
-        shadowColor: '#0F172A',
+        shadowColor: '#1E40AF',
         shadowOpacity: 0.08,
         shadowRadius: 16,
         shadowOffset: { width: 0, height: 10 },
@@ -195,7 +240,7 @@ const DeliveryCard = ({ item, onPress }: { item: Order; onPress?: () => void }) 
       
       {/* Footer Row */}
       <View className="flex-row items-center justify-between mt-1">
-        <Text className="text-gray-800 text-sm font-JakartaSemiBold">AED {totalAmount.toFixed(2)}</Text>
+        <Text className="text-gray-800 text-sm font-JakartaSemiBold">AED {displayPrice.toFixed(2)}</Text>
         {customerType === 'organization' ? (
           <View className="flex-row items-center gap-1">
             <Text className="text-gray-500 text-xs">Wallet:</Text>

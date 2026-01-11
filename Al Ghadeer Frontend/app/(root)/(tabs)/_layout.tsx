@@ -12,13 +12,25 @@ const TabIcon = ({
   focused: boolean;
 }) => (
   <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center' }}>
-    <View className={`rounded-2xl w-12 h-12 items-center justify-center ${focused ? 'bg-[#0286FF]' : 'bg-[#0F172A]'} `}
-      style={{ shadowColor: '#0F172A', shadowOpacity: focused ? 0.2 : 0.1, shadowRadius: 10, shadowOffset: { width: 0, height: 6 }, elevation: 4 }}>
+    <View 
+      className={`rounded-2xl w-12 h-12 items-center justify-center ${focused ? 'bg-[#0286FF]' : 'bg-[#0F172A]'}`}
+      style={{ 
+        shadowColor: focused ? '#0286FF' : '#0F172A', 
+        shadowOpacity: focused ? 0.25 : 0.12, 
+        shadowRadius: focused ? 12 : 8, 
+        shadowOffset: { width: 0, height: focused ? 4 : 2 }, 
+        elevation: focused ? 6 : 3,
+        transform: [{ scale: focused ? 1.05 : 1 }],
+      }}
+    >
       <Image
         source={source}
         tintColor="white"
         resizeMode="contain"
         className="w-6 h-6"
+        style={{
+          opacity: focused ? 1 : 0.7,
+        }}
       />
     </View>
   </View>
@@ -34,23 +46,35 @@ export default function Layout() {
         tabBarInactiveTintColor: 'white',
         tabBarShowLabel: false,
         tabBarBackground: () => (
-          <BlurView tint="light" intensity={30} style={{ flex: 1 }} />
+          <BlurView tint="light" intensity={80} style={{ flex: 1 }} />
         ),
         tabBarStyle: {
-          backgroundColor: 'rgba(255,255,255,0.6)',
-          borderRadius: 26,
-          paddingBottom: 2,
-          paddingTop: 8,
-          paddingHorizontal: 0,
+          backgroundColor: 'rgba(255, 255, 255, 0.95)',
+          borderRadius: 28,
+          paddingBottom: 8,
+          paddingTop: 12,
+          paddingHorizontal: 8,
           overflow: 'hidden',
           marginHorizontal: 20,
-          height: 60,
+          marginBottom: Math.max(insets.bottom, 12) + 8, // Float above bottom with extra spacing
+          height: 72,
           justifyContent: 'space-between',
           alignItems: 'center',
           flexDirection: 'row',
           position: 'absolute',
-          bottom: insets.bottom ,
+          bottom: 0,
           borderTopWidth: 0,
+          borderWidth: 1,
+          borderColor: 'rgba(226, 232, 240, 0.8)',
+          // Professional shadow
+          shadowColor: '#000',
+          shadowOffset: {
+            width: 0,
+            height: -4,
+          },
+          shadowOpacity: 0.12,
+          shadowRadius: 20,
+          elevation: 16,
         },
         tabBarItemStyle: {
           flex: 1,

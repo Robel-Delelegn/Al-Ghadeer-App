@@ -133,7 +133,7 @@ const styles = StyleSheet.create({
     paddingTop: 24,
     paddingBottom: 32,
     paddingHorizontal: 24,
-    shadowColor: '#000',
+    shadowColor: '#1E40AF',
     shadowOffset: { width: 0, height: 8 },
     shadowOpacity: 0.15,
     shadowRadius: 24,
@@ -168,7 +168,7 @@ const styles = StyleSheet.create({
   driverName: {
     fontSize: 24,
     fontWeight: '700',
-    color: '#0F172A',
+    color: '#1E40AF',
     fontFamily: 'JakartaSemiBold',
     letterSpacing: -0.5,
   },
@@ -206,7 +206,7 @@ const styles = StyleSheet.create({
   infoValue: {
     fontSize: 16,
     fontWeight: '600',
-    color: '#0F172A',
+    color: '#1E40AF',
     fontFamily: 'JakartaSemiBold',
   },
   helperSection: {

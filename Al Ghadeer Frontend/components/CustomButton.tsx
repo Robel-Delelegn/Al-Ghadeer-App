@@ -56,7 +56,7 @@ const CustomButton = ({
       activeOpacity={0.9}
       className={`w-full rounded-2xl px-5 py-3 flex flex-row justify-center items-center ${getBgVariantStyle(bgVariant)} ${className}`}
       style={{
-        shadowColor: '#0F172A',
+        shadowColor: '#1E40AF',
         shadowOpacity: 0.12,
         shadowRadius: 18,
         shadowOffset: { width: 0, height: 10 },

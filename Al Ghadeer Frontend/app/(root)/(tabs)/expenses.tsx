@@ -106,11 +106,34 @@ const Expenses = () => {
       const response = await authenticatedFetch(url);
       if (!response.ok) throw new Error(`HTTP error! Status: ${response.status}`);
 
-      const data: ServerExpense[] = await response.json();
-      setExpenseHistory(data);
+      const data = await response.json();
+      
+      // Handle different response formats
+      let expenses: ServerExpense[] = [];
+      
+      if (Array.isArray(data)) {
+        // Direct array response
+        expenses = data.filter((item: unknown): item is ServerExpense => 
+          item !== null && item !== undefined && typeof item === 'object' && 'id' in item
+        );
+      } else if (data && typeof data === 'object') {
+        // Wrapped response format
+        if (Array.isArray(data.data)) {
+          expenses = data.data.filter((item: unknown): item is ServerExpense => 
+            item !== null && item !== undefined && typeof item === 'object' && 'id' in item
+          );
+        } else if (Array.isArray(data.expenses)) {
+          expenses = data.expenses.filter((item: unknown): item is ServerExpense => 
+            item !== null && item !== undefined && typeof item === 'object' && 'id' in item
+          );
+        }
+      }
+      
+      setExpenseHistory(expenses);
     } catch (error) {
       console.error('Error fetching expense history:', error);
       showErrorAlert('Error', 'Failed to load expense history.');
+      setExpenseHistory([]); // Set empty array on error
     } finally {
       setLoadingHistory(false);
     }
@@ -234,7 +257,7 @@ const Expenses = () => {
           <Text style={styles.headerSubtitle}>Submit reimbursement requests</Text>
           </View>
         <TouchableOpacity style={styles.historyButton} onPress={() => setShowHistory(true)}>
-          <Ionicons name="time-outline" size={20} color="#0F172A" />
+          <Ionicons name="time-outline" size={20} color="#1E40AF" />
           </TouchableOpacity>
       </View>
 
@@ -394,7 +417,7 @@ const Expenses = () => {
           <ScrollView style={styles.historyList} showsVerticalScrollIndicator={false}>
               {loadingHistory ? (
               <View style={styles.emptyState}>
-                <ActivityIndicator size="large" color="#0F172A" />
+                <ActivityIndicator size="large" color="#1E40AF" />
                 </View>
               ) : expenseHistory.length === 0 ? (
               <View style={styles.emptyState}>
@@ -405,10 +428,13 @@ const Expenses = () => {
                 <Text style={styles.emptySubtitle}>Your submitted expenses will appear here</Text>
                 </View>
               ) : (
-              expenseHistory.map((expense) => {
-                const statusStyle = getStatusStyle(expense.status || 'pending');
-                return (
-                  <View key={expense.id} style={styles.historyCard}>
+              expenseHistory
+                .filter((expense) => expense !== null && expense !== undefined)
+                .map((expense) => {
+                  if (!expense || !expense.id) return null;
+                  const statusStyle = getStatusStyle(expense.status || 'pending');
+                  return (
+                    <View key={expense.id} style={styles.historyCard}>
                     <View style={styles.historyCardHeader}>
                       <View style={styles.historyType}>
                         <Text style={styles.historyTypeText}>{expense.type}</Text>
@@ -435,15 +461,18 @@ const Expenses = () => {
                         </Text>
                       </View>
                     </View>
-                    <Text style={styles.historyAmount}>AED {expense.amount.toFixed(2)}</Text>
+                    <Text style={styles.historyAmount}>
+                      AED {expense.amount ? expense.amount.toFixed(2) : '0.00'}
+                    </Text>
                     {expense.description && (
                       <Text style={styles.historyDescription} numberOfLines={2}>
                           {expense.description}
                       </Text>
                     )}
                   </View>
-                );
-              })
+                  );
+                })
+                .filter(Boolean)
               )}
             <View style={{ height: 40 }} />
             </ScrollView>
@@ -469,7 +498,7 @@ const styles = StyleSheet.create({
   headerTitle: {
     fontSize: 28,
     fontWeight: '700',
-    color: '#0F172A',
+    color: '#1E40AF',
     letterSpacing: -0.5,
   },
   headerSubtitle: {
@@ -566,7 +595,7 @@ const styles = StyleSheet.create({
     flex: 1,
     fontSize: 32,
     fontWeight: '700',
-    color: '#0F172A',
+    color: '#1E40AF',
     letterSpacing: -1,
   },
   uploadButton: {
@@ -611,7 +640,7 @@ const styles = StyleSheet.create({
     borderRadius: 16,
     padding: 16,
     fontSize: 16,
-    color: '#0F172A',
+    color: '#1E40AF',
     minHeight: 88,
   },
   actionSection: {
@@ -619,7 +648,7 @@ const styles = StyleSheet.create({
     borderRadius: 16,
     padding: 16,
     marginTop: 16,
-    shadowColor: '#000',
+    shadowColor: '#1E40AF',
     shadowOffset: { width: 0, height: 2 },
     shadowOpacity: 0.04,
     shadowRadius: 8,
@@ -629,7 +658,7 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
-    backgroundColor: '#0F172A',
+    backgroundColor: '#2563EB',
     height: 56,
     borderRadius: 16,
     gap: 10,
@@ -657,7 +686,7 @@ const styles = StyleSheet.create({
   modalTitle: {
     fontSize: 28,
     fontWeight: '700',
-    color: '#0F172A',
+    color: '#1E40AF',
     letterSpacing: -0.5,
   },
   modalSubtitle: {
@@ -689,7 +718,7 @@ const styles = StyleSheet.create({
   },
   tabActive: {
     backgroundColor: '#FFFFFF',
-    shadowColor: '#000',
+    shadowColor: '#1E40AF',
     shadowOffset: { width: 0, height: 1 },
     shadowOpacity: 0.05,
     shadowRadius: 2,
@@ -701,7 +730,7 @@ const styles = StyleSheet.create({
     color: '#64748B',
   },
   tabTextActive: {
-    color: '#0F172A',
+    color: '#1E40AF',
   },
   historyList: {
     flex: 1,
@@ -725,7 +754,7 @@ const styles = StyleSheet.create({
   historyTypeText: {
     fontSize: 16,
     fontWeight: '600',
-    color: '#0F172A',
+    color: '#1E40AF',
   },
   historyDate: {
     fontSize: 13,
@@ -746,7 +775,7 @@ const styles = StyleSheet.create({
   historyAmount: {
     fontSize: 24,
     fontWeight: '700',
-    color: '#0F172A',
+    color: '#1E40AF',
     letterSpacing: -0.5,
   },
   historyDescription: {
@@ -772,7 +801,7 @@ const styles = StyleSheet.create({
   emptyTitle: {
     fontSize: 18,
     fontWeight: '600',
-    color: '#0F172A',
+    color: '#1E40AF',
     marginBottom: 4,
   },
   emptySubtitle: {

@@ -81,7 +81,7 @@ interface OrderStore {
   cartItems: CartItem[];
   
   // Payment management
-  selectedPaymentMethod: 'cash' | 'wallet' | 'credit_card';
+  selectedPaymentMethod: 'cash' | 'wallet' | 'credit_card' | 'invoice' | 'credit_sale' | 'credit_invoice';
   
   // Order actions
   selectOrder: (id: string) => void;
@@ -111,7 +111,7 @@ interface OrderStore {
   getAvailableStock: (productId: string) => number; // Get available stock for a product (loaded_quantity - cart quantity)
   
   // Payment actions
-  setPaymentMethod: (method: 'cash' | 'wallet' | 'credit_card') => void;
+  setPaymentMethod: (method: 'cash' | 'wallet' | 'credit_card' | 'invoice' | 'credit_sale' | 'credit_invoice') => void;
   
   // Utility actions
   getOrderHistory: () => Order[];
@@ -133,7 +133,7 @@ export const useOrderStore = create<OrderStore>()(persist(
     cartItems: [],
     
     // Payment management state
-    selectedPaymentMethod: 'cash' as 'cash' | 'wallet' | 'credit_card',
+    selectedPaymentMethod: 'cash' as 'cash' | 'wallet' | 'credit_card' | 'invoice' | 'credit_sale' | 'credit_invoice',
 
     
     // Order management actions
@@ -327,7 +327,7 @@ export const useOrderStore = create<OrderStore>()(persist(
     },
     
     // Payment management actions
-    setPaymentMethod: (method: 'cash' | 'wallet' | 'credit_card') => {
+    setPaymentMethod: (method: 'cash' | 'wallet' | 'credit_card' | 'invoice' | 'credit_sale' | 'credit_invoice') => {
       set({ selectedPaymentMethod: method });
     },
     

@@ -1,4 +1,5 @@
 import { useOrderStore } from '@/store/index';
+import { Order } from '@/types/order';
 import { authenticatedFetch } from '@/store/auth';
 import { Ionicons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
@@ -51,21 +52,41 @@ const PAYMENT_METHODS = [
   { id: 'cash', label: 'Cash', icon: 'cash-outline' as const },
   { id: 'wallet', label: 'Wallet', icon: 'wallet-outline' as const },
   { id: 'credit_card', label: 'Card', icon: 'card-outline' as const },
+  { id: 'credit_sale', label: 'Credit Sale', icon: 'receipt-outline' as const },
+  { id: 'credit_invoice', label: 'Credit Invoice', icon: 'document-text-outline' as const },
 ];
+
+interface DirectSaleApiResponse {
+  success: boolean;
+  message: string;
+  order: {
+    id: string;
+    order_number: string;
+    invoice_number?: string;
+    created_at: string;
+    total_amount: number;
+    payment_method: string;
+    status: string;
+  };
+  invoice_number?: string;
+}
 
 const DirectSales: React.FC = () => {
   const insets = useSafeAreaInsets();
   const router = useRouter();
-  const { currentDriver } = useOrderStore();
+  const { currentDriver, selectOrder, setPaymentMethod, clearCart } = useOrderStore();
   const [products, setProducts] = useState<ServerProduct[]>([]);
   const [loading, setLoading] = useState(true);
   const [quantities, setQuantities] = useState<Record<string, number>>({});
   const [customerName, setCustomerName] = useState('');
   const [customerPhone, setCustomerPhone] = useState('');
-  const [paymentMethod, setPaymentMethod] = useState<'cash' | 'wallet' | 'credit_card'>('cash');
+  const [paymentMethod, setPaymentMethod] = useState<'cash' | 'wallet' | 'credit_card' | 'credit_sale' | 'credit_invoice'>('cash');
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [location, setLocation] = useState<{ latitude: number; longitude: number; address: string } | null>(null);
   const [locationLoading, setLocationLoading] = useState(false);
+  const [isCheckingCustomer, setIsCheckingCustomer] = useState(false);
+  const [isExistingCustomer, setIsExistingCustomer] = useState(false);
+  const [customerChecked, setCustomerChecked] = useState(false);
 
   const fetchProducts = useCallback(async () => {
     try {
@@ -135,6 +156,48 @@ const DirectSales: React.FC = () => {
   useEffect(() => {
     fetchProducts();
   }, [fetchProducts]);
+
+  const checkCustomer = useCallback(async () => {
+    if (!customerPhone || customerPhone.trim().length === 0) {
+      showWarningAlert('Phone Required', 'Please enter a phone number first.');
+      return;
+    }
+
+    setIsCheckingCustomer(true);
+    setIsExistingCustomer(false);
+    setCustomerChecked(false);
+
+    try {
+      const url = `${IP_ADDRESS}/customers/check?phone=${encodeURIComponent(customerPhone.trim())}`;
+      const response = await authenticatedFetch(url);
+
+      if (!response.ok) {
+        throw new Error(`HTTP error! Status: ${response.status}`);
+      }
+
+      const result = await response.json();
+
+      if (result.success && result.is_customer === true && result.customer) {
+        // Customer exists - update name field
+        setCustomerName(result.customer.customer_name || '');
+        setIsExistingCustomer(true);
+        setCustomerChecked(true);
+        console.log('Customer found:', result.customer);
+      } else {
+        // Customer is new
+        setIsExistingCustomer(false);
+        setCustomerChecked(true);
+        console.log('Customer is new');
+      }
+    } catch (error) {
+      console.error('Error checking customer:', error);
+      showErrorAlert('Error', 'Failed to check customer. Please try again.');
+      setIsExistingCustomer(false);
+      setCustomerChecked(false);
+    } finally {
+      setIsCheckingCustomer(false);
+    }
+  }, [customerPhone]);
 
   useEffect(() => {
     const getLocation = async () => {
@@ -230,12 +293,80 @@ const DirectSales: React.FC = () => {
         body: JSON.stringify(saleData),
       });
 
-      const result = await response.json();
+      const result: DirectSaleApiResponse = await response.json();
       if (!response.ok || !result.success) throw new Error(result.message || 'Failed to submit');
 
-      showSuccessAlert('Success', `Sale of AED ${totalAmount.toFixed(2)} confirmed.`, [
-        { text: 'Done', onPress: () => { setQuantities({}); setCustomerName(''); setCustomerPhone(''); router.back(); }}
-      ]);
+      // Prepare cart items from selected products for receipt display
+      clearCart();
+      const cartItemsFromSale = selectedProducts.map(product => ({
+        id: product.id,
+        name: product.name,
+        image: { uri: product.image_url || 'https://via.placeholder.com/150' },
+        price: product.price,
+        quantity: quantities[product.id],
+        currency: 'AED' as const,
+        category: product.category || '',
+      }));
+
+      // Create order object for receipt page
+      const invoiceNumber = result.invoice_number || result.order.invoice_number;
+      const newOrder: Order = {
+        id: result.order.id || `direct_sale_${Date.now()}`,
+        order_number: result.order.order_number,
+        invoice_number: invoiceNumber,
+        status: 'delivered',
+        customer_name: customerName.trim(),
+        customer_phone: customerPhone.trim(),
+        customer_address: location.address,
+        total_amount: totalAmount,
+        payment_method: paymentMethod,
+        products: selectedProducts.map(product => ({
+          id: product.id,
+          name: product.name,
+          quantity: quantities[product.id],
+          price: product.price,
+        })),
+      };
+
+      // Add order to completedOrders and set cart items in one update
+      const store = useOrderStore.getState();
+      useOrderStore.setState({ 
+        completedOrders: [...store.completedOrders, newOrder],
+        cartItems: cartItemsFromSale
+      });
+
+      // Set selected order and payment method for receipt page
+      selectOrder(newOrder.id);
+      setPaymentMethod(paymentMethod);
+
+      // Determine document type based on payment method
+      const isDeliveryNote = paymentMethod === 'credit_invoice';
+      const documentType = isDeliveryNote ? 'Delivery Note' : 'Invoice';
+
+      // Show success alert with option to view invoice/receipt
+      showSuccessAlert(
+        'Sale Confirmed', 
+        result.message || `Sale of AED ${totalAmount.toFixed(2)} confirmed successfully.`,
+        [
+          { 
+            text: 'Done', 
+            style: 'cancel',
+            onPress: () => { 
+              setQuantities({}); 
+              setCustomerName(''); 
+              setCustomerPhone(''); 
+              clearCart();
+              router.back(); 
+            }
+          },
+          { 
+            text: `View ${documentType}`, 
+            onPress: () => {
+              router.push('/(root)/(tabs)/payment-receipt');
+            }
+          }
+        ]
+      );
     } catch (error) {
       showErrorAlert('Error', error instanceof Error ? error.message : 'Failed to confirm sale.');
     } finally {
@@ -248,7 +379,7 @@ const DirectSales: React.FC = () => {
       {/* Header */}
       <View style={styles.header}>
         <TouchableOpacity style={styles.backButton} onPress={() => router.back()}>
-          <Ionicons name="arrow-back" size={22} color="#0F172A" />
+          <Ionicons name="arrow-back" size={22} color="#1E40AF" />
           </TouchableOpacity>
         <View style={styles.headerCenter}>
           <Text style={styles.headerTitle}>New Sale</Text>
@@ -292,44 +423,154 @@ const DirectSales: React.FC = () => {
               <View style={styles.inputWrapper}>
                 <Ionicons name="call-outline" size={18} color="#94A3B8" style={styles.inputIcon} />
               <TextInput
-                  style={styles.input}
+                  style={[styles.input, styles.phoneInput]}
                   placeholder="Phone"
                   placeholderTextColor="#CBD5E1"
                 value={customerPhone}
-                onChangeText={setCustomerPhone}
+                onChangeText={(text) => {
+                  setCustomerPhone(text);
+                  setIsExistingCustomer(false); // Reset when phone changes
+                  setCustomerChecked(false); // Reset check status when phone changes
+                }}
                 keyboardType="phone-pad"
               />
+              <TouchableOpacity
+                style={styles.checkButton}
+                onPress={checkCustomer}
+                disabled={isCheckingCustomer || !customerPhone.trim()}
+                activeOpacity={0.7}
+              >
+                {isCheckingCustomer ? (
+                  <ActivityIndicator size="small" color="#1E40AF" />
+                ) : (
+                  <Ionicons name="search" size={16} color="#1E40AF" />
+                )}
+              </TouchableOpacity>
             </View>
+            {customerChecked && (
+              <View style={[styles.customerNote, isExistingCustomer ? styles.customerNoteExisting : styles.customerNoteNew]}>
+                <Ionicons 
+                  name={isExistingCustomer ? "checkmark-circle" : "person-add"} 
+                  size={14} 
+                  color={isExistingCustomer ? "#10B981" : "#3B82F6"} 
+                />
+                <Text style={[styles.customerNoteText, isExistingCustomer ? styles.customerNoteTextExisting : styles.customerNoteTextNew]}>
+                  {isExistingCustomer ? "Existing customer" : "Customer is new"}
+                </Text>
+              </View>
+            )}
                   </View>
                   </View>
 
           {/* Payment Method */}
           <View style={styles.section}>
             <Text style={styles.sectionTitle}>Payment</Text>
+            <View style={styles.paymentContainer}>
+              {/* Top Row: Cash, Wallet, Card */}
             <View style={styles.paymentRow}>
-              {PAYMENT_METHODS.map((method) => (
-                <TouchableOpacity 
-                  key={method.id}
-                  style={[
-                    styles.paymentOption,
-                    paymentMethod === method.id && styles.paymentOptionActive
-                  ]}
-                  onPress={() => setPaymentMethod(method.id as typeof paymentMethod)}
-                  activeOpacity={0.7}
-                >
-                  <Ionicons 
-                    name={method.icon} 
-                    size={20} 
-                    color={paymentMethod === method.id ? '#0F172A' : '#94A3B8'} 
-                  />
-                  <Text style={[
-                    styles.paymentLabel,
-                    paymentMethod === method.id && styles.paymentLabelActive
-                  ]}>
-                    {method.label}
-                  </Text>
-                </TouchableOpacity>
-              ))}
+                {PAYMENT_METHODS.filter(m => ['cash', 'wallet', 'credit_card'].includes(m.id)).map((method) => {
+                  const isDisabled = ['wallet', 'credit_card'].includes(method.id);
+                  return (
+                    <TouchableOpacity 
+                      key={method.id}
+                      style={[
+                        styles.paymentOption,
+                        styles.paymentOptionTop,
+                        paymentMethod === method.id && styles.paymentOptionActive,
+                        isDisabled && styles.paymentOptionDisabled
+                      ]}
+                      onPress={() => !isDisabled && setPaymentMethod(method.id as typeof paymentMethod)}
+                      disabled={isDisabled}
+                      activeOpacity={isDisabled ? 1 : 0.7}
+                    >
+                        <View style={[
+                          styles.paymentIconBox,
+                          paymentMethod === method.id && styles.paymentIconBoxActive,
+                          isDisabled && styles.paymentIconBoxDisabled
+                        ]}>
+                      <Ionicons 
+                        name={method.icon} 
+                            size={22} 
+                            color={
+                              isDisabled ? '#CBD5E1' :
+                              paymentMethod === method.id ? '#FFFFFF' : '#94A3B8'
+                            } 
+                      />
+                        </View>
+                      <Text style={[
+                        styles.paymentLabel,
+                        paymentMethod === method.id && styles.paymentLabelActive,
+                        isDisabled && styles.paymentLabelDisabled
+                      ]}>
+                        {method.label}
+                      </Text>
+                        {paymentMethod === method.id && !isDisabled && (
+                          <View style={styles.paymentCheck}>
+                            <Ionicons name="checkmark-circle" size={18} color="#10B981" />
+                          </View>
+                        )}
+                        {isDisabled && (
+                          <View style={styles.paymentDisabledBadge}>
+                            <Text style={styles.paymentDisabledText}>Not Available</Text>
+                          </View>
+                        )}
+                    </TouchableOpacity>
+                  );
+                })}
+              </View>
+              
+              {/* Bottom Row: Credit Sale, Credit Invoice */}
+              <View style={[styles.paymentRow, styles.paymentRowBottom]}>
+                {PAYMENT_METHODS.filter(m => ['credit_sale', 'credit_invoice'].includes(m.id)).map((method) => {
+                  const isDisabled = false;
+                  return (
+                    <TouchableOpacity 
+                      key={method.id}
+                      style={[
+                        styles.paymentOption,
+                        styles.paymentOptionBottom,
+                        paymentMethod === method.id && styles.paymentOptionActive,
+                        isDisabled && styles.paymentOptionDisabled
+                      ]}
+                      onPress={() => !isDisabled && setPaymentMethod(method.id as typeof paymentMethod)}
+                      disabled={isDisabled}
+                      activeOpacity={isDisabled ? 1 : 0.7}
+                    >
+                      <View style={[
+                        styles.paymentIconBox,
+                        paymentMethod === method.id && styles.paymentIconBoxActive,
+                        isDisabled && styles.paymentIconBoxDisabled
+                      ]}>
+                        <Ionicons 
+                          name={method.icon} 
+                          size={22} 
+                          color={
+                            isDisabled ? '#CBD5E1' :
+                            paymentMethod === method.id ? '#FFFFFF' : '#94A3B8'
+                          } 
+                        />
+                      </View>
+                      <Text style={[
+                        styles.paymentLabel,
+                        paymentMethod === method.id && styles.paymentLabelActive,
+                        isDisabled && styles.paymentLabelDisabled
+                      ]}>
+                        {method.label}
+                      </Text>
+                      {paymentMethod === method.id && !isDisabled && (
+                        <View style={styles.paymentCheck}>
+                          <Ionicons name="checkmark-circle" size={18} color="#10B981" />
+                        </View>
+                      )}
+                      {isDisabled && (
+                        <View style={styles.paymentDisabledBadge}>
+                          <Text style={styles.paymentDisabledText}>Not Available</Text>
+                        </View>
+                      )}
+                    </TouchableOpacity>
+                  );
+                })}
+              </View>
           </View>
         </View>
 
@@ -338,7 +579,7 @@ const DirectSales: React.FC = () => {
             <Text style={styles.sectionTitle}>Products</Text>
           {loading ? (
               <View style={styles.loadingContainer}>
-                <ActivityIndicator size="large" color="#0F172A" />
+                <ActivityIndicator size="large" color="#1E40AF" />
             </View>
           ) : products.length === 0 ? (
               <View style={styles.emptyContainer}>
@@ -347,7 +588,7 @@ const DirectSales: React.FC = () => {
             </View>
           ) : (
               <View style={styles.productGrid}>
-              {products.map((product) => {
+              {products.map((product, index) => {
                 const quantity = quantities[product.id] || 0;
                   const isSelected = quantity > 0;
 
@@ -361,7 +602,7 @@ const DirectSales: React.FC = () => {
                 );
 
                 return (
-                    <View key={product.id} style={[styles.productCard, isSelected && styles.productCardSelected]}>
+                    <View key={`${product.id}-${index}`} style={[styles.productCard, isSelected && styles.productCardSelected]}>
                       <View style={styles.productInfo}>
                         <View style={styles.productNameContainer}>
                           <Text style={styles.productName} numberOfLines={1}>{product.name}</Text>
@@ -380,7 +621,7 @@ const DirectSales: React.FC = () => {
                           onPress={() => handleChangeQuantity(product.id, -1)}
                           disabled={quantity === 0}
                         >
-                          <Ionicons name="remove" size={18} color={quantity === 0 ? '#CBD5E1' : '#0F172A'} />
+                          <Ionicons name="remove" size={18} color={quantity === 0 ? '#CBD5E1' : '#1E40AF'} />
                         </TouchableOpacity>
 
                         <Text style={styles.quantityText}>{quantity}</Text>
@@ -389,7 +630,7 @@ const DirectSales: React.FC = () => {
                           style={styles.quantityButton}
                           onPress={() => handleChangeQuantity(product.id, 1)}
                         >
-                          <Ionicons name="add" size={18} color="#0F172A" />
+                          <Ionicons name="add" size={18} color="#1E40AF" />
                         </TouchableOpacity>
                     </View>
                   </View>
@@ -430,7 +671,7 @@ const DirectSales: React.FC = () => {
             <>
                   <Text style={styles.confirmText}>Confirm Sale</Text>
                   <View style={styles.confirmArrow}>
-                    <Ionicons name="arrow-forward" size={18} color="#0F172A" />
+                    <Ionicons name="arrow-forward" size={18} color="#1E40AF" />
                   </View>
             </>
           )}
@@ -474,7 +715,7 @@ const styles = StyleSheet.create({
   headerTitle: {
     fontSize: 18,
     fontWeight: '700',
-    color: '#0F172A',
+    color: '#1E40AF',
     letterSpacing: -0.3,
   },
   locationBadge: {
@@ -495,7 +736,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
   },
   cartBadge: {
-    backgroundColor: '#0F172A',
+    backgroundColor: '#2563EB',
     borderRadius: 10,
     minWidth: 20,
     height: 20,
@@ -543,36 +784,157 @@ const styles = StyleSheet.create({
   input: {
     flex: 1,
     fontSize: 16,
-    color: '#0F172A',
+    color: '#1E40AF',
     fontWeight: '500',
+  },
+  phoneInput: {
+    paddingRight: 8,
+  },
+  checkButton: {
+    width: 32,
+    height: 32,
+    borderRadius: 8,
+    backgroundColor: '#E2E8F0',
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginLeft: 8,
+  },
+  customerNote: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginTop: 6,
+    marginLeft: 50,
+    gap: 6,
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    borderRadius: 8,
+  },
+  customerNoteExisting: {
+    backgroundColor: '#F0FDF4',
+  },
+  customerNoteNew: {
+    backgroundColor: '#EFF6FF',
+  },
+  customerNoteText: {
+    fontSize: 12,
+    fontWeight: '500',
+  },
+  customerNoteTextExisting: {
+    color: '#10B981',
+  },
+  customerNoteTextNew: {
+    color: '#3B82F6',
+  },
+  paymentContainer: {
+    gap: 12,
   },
   paymentRow: {
     flexDirection: 'row',
     gap: 12,
   },
+  paymentRowBottom: {
+    justifyContent: 'center',
+  },
   paymentOption: {
     flex: 1,
-    flexDirection: 'row',
     alignItems: 'center',
-    justifyContent: 'center',
     backgroundColor: '#F8FAFC',
-    borderRadius: 14,
-    height: 52,
-    gap: 8,
+    borderRadius: 16,
+    padding: 16,
     borderWidth: 2,
     borderColor: 'transparent',
+    position: 'relative',
+    minHeight: 100,
+    justifyContent: 'center',
+  },
+  paymentOptionTop: {
+    flex: 1,
+  },
+  paymentOptionBottom: {
+    flex: 0,
+    minWidth: '48%',
+    maxWidth: '48%',
   },
   paymentOptionActive: {
-    backgroundColor: '#F0FDF4',
+    backgroundColor: '#FFFFFF',
     borderColor: '#10B981',
+    ...Platform.select({
+      ios: {
+        shadowColor: '#10B981',
+        shadowOffset: { width: 0, height: 2 },
+        shadowOpacity: 0.1,
+        shadowRadius: 4,
+      },
+      android: {
+        elevation: 3,
+      },
+    }),
+  },
+  paymentIconBox: {
+    width: 48,
+    height: 48,
+    borderRadius: 12,
+    backgroundColor: '#FFFFFF',
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginBottom: 10,
+    ...Platform.select({
+      ios: {
+        shadowColor: '#1E40AF',
+        shadowOffset: { width: 0, height: 1 },
+        shadowOpacity: 0.05,
+        shadowRadius: 2,
+      },
+      android: {
+        elevation: 1,
+      },
+    }),
+  },
+  paymentIconBoxActive: {
+    backgroundColor: '#10B981',
   },
   paymentLabel: {
     fontSize: 14,
     fontWeight: '600',
     color: '#94A3B8',
+    textAlign: 'center',
   },
   paymentLabelActive: {
-    color: '#0F172A',
+    color: '#1E40AF',
+  },
+  paymentCheck: {
+    position: 'absolute',
+    top: 10,
+    right: 10,
+    backgroundColor: '#FFFFFF',
+    borderRadius: 12,
+    padding: 2,
+  },
+  paymentOptionDisabled: {
+    backgroundColor: '#F8FAFC',
+    opacity: 0.6,
+  },
+  paymentIconBoxDisabled: {
+    backgroundColor: '#F1F5F9',
+  },
+  paymentLabelDisabled: {
+    color: '#CBD5E1',
+  },
+  paymentDisabledBadge: {
+    position: 'absolute',
+    bottom: 8,
+    left: 8,
+    right: 8,
+    backgroundColor: '#FEF2F2',
+    borderRadius: 6,
+    paddingVertical: 4,
+    paddingHorizontal: 6,
+  },
+  paymentDisabledText: {
+    fontSize: 10,
+    fontWeight: '600',
+    color: '#DC2626',
+    textAlign: 'center',
   },
   loadingContainer: {
     height: 200,
@@ -620,7 +982,7 @@ const styles = StyleSheet.create({
   productName: {
     fontSize: 15,
     fontWeight: '600',
-    color: '#0F172A',
+    color: '#1E40AF',
     flex: 1,
   },
   badge: {
@@ -672,7 +1034,7 @@ const styles = StyleSheet.create({
   quantityText: {
     fontSize: 16,
     fontWeight: '700',
-    color: '#0F172A',
+    color: '#1E40AF',
     minWidth: 32,
     textAlign: 'center',
   },
@@ -703,7 +1065,7 @@ const styles = StyleSheet.create({
   },
   summaryValue: {
     fontSize: 14,
-    color: '#0F172A',
+    color: '#1E40AF',
     fontWeight: '600',
   },
   totalRow: {
@@ -717,12 +1079,12 @@ const styles = StyleSheet.create({
   },
   totalLabel: {
     fontSize: 16,
-    color: '#0F172A',
+    color: '#1E40AF',
     fontWeight: '600',
   },
   totalValue: {
     fontSize: 24,
-    color: '#0F172A',
+    color: '#1E40AF',
     fontWeight: '700',
     letterSpacing: -0.5,
   },
@@ -730,7 +1092,7 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
-    backgroundColor: '#0F172A',
+    backgroundColor: '#2563EB',
     height: 56,
     borderRadius: 16,
     gap: 12,

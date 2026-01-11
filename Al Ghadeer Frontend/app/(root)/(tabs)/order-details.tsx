@@ -1,7 +1,9 @@
 import { useLocationStore, useOrderStore } from '@/store/index';
+import { authenticatedFetch } from '@/store/auth';
 import { getTotalItemsCount, normalizeOrderProducts } from '@/utils/orderUtils';
 import { Ionicons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
+import * as Location from 'expo-location';
 import React, { useCallback, useState, useEffect } from 'react';
 import {
   ActivityIndicator,
@@ -14,8 +16,11 @@ import {
   Dimensions,
   Platform,
 } from 'react-native';
-import { showErrorAlert } from '@/store/utils/alert';
+import { showErrorAlert, showSuccessAlert, showWarningAlert } from '@/store/utils/alert';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+
+const IP_ADDRESS = process.env.EXPO_PUBLIC_IP_ADDRESS;
+const GOOGLE_API_KEY = process.env.EXPO_PUBLIC_GOOGLE_API_KEY;
 
 const { width } = Dimensions.get('window');
 
@@ -27,6 +32,7 @@ const OrderDetails = () => {
   const [isLoading, setIsLoading] = useState(false);
   const [distanceInfo, setDistanceInfo] = useState<{distance: string, duration: string} | null>(null);
   const [isCalculatingDistance, setIsCalculatingDistance] = useState(false);
+  const [isUpdatingLocation, setIsUpdatingLocation] = useState(false);
 
   const order = assignedOrders.find((o) => o.id === selectedOrder);
 
@@ -117,6 +123,136 @@ const OrderDetails = () => {
     router.push('/(root)/(tabs)/failed-deliveries' as any);
   };
 
+  const parseAddressComponents = (geocodeResult: any) => {
+    const addressComponents = geocodeResult.address_components || [];
+    let streetName = '';
+    let buildingNo = '';
+    let flatNo = '';
+    let fullAddress = geocodeResult.formatted_address || '';
+
+    // Find route (street name)
+    const route = addressComponents.find((comp: any) => 
+      comp.types && comp.types.includes('route')
+    );
+    if (route) {
+      streetName = route.long_name || route.short_name || '';
+    }
+
+    // Find street number (building number)
+    const streetNumber = addressComponents.find((comp: any) => 
+      comp.types && comp.types.includes('street_number')
+    );
+    if (streetNumber) {
+      buildingNo = streetNumber.long_name || streetNumber.short_name || '';
+    }
+
+    // Find subpremise (flat/apartment number)
+    const subpremise = addressComponents.find((comp: any) => 
+      comp.types && comp.types.includes('subpremise')
+    );
+    if (subpremise) {
+      flatNo = subpremise.long_name || subpremise.short_name || '';
+    }
+
+    return { streetName, buildingNo, flatNo, fullAddress };
+  };
+
+  const handleUpdateCustomerLocation = useCallback(async () => {
+    if (!order) {
+      showErrorAlert('Error', 'Order information not found.');
+      return;
+    }
+
+    if (!order.customer_site_id || !order.customer_id) {
+      showErrorAlert('Error', 'Customer information is incomplete.');
+      return;
+    }
+
+    setIsUpdatingLocation(true);
+    try {
+      // Request location permission
+      const { status } = await Location.requestForegroundPermissionsAsync();
+      if (status !== 'granted') {
+        showWarningAlert('Permission Denied', 'Location permission is required to update customer location.');
+        return;
+      }
+
+      // Get current location
+      const locationData = await Location.getCurrentPositionAsync({
+        accuracy: Location.Accuracy.High,
+      });
+
+      const latitude = locationData.coords.latitude;
+      const longitude = locationData.coords.longitude;
+
+      // Reverse geocode using Google Maps Geocoding API
+      if (!GOOGLE_API_KEY) {
+        showErrorAlert('Error', 'Google Maps API key not configured.');
+        return;
+      }
+
+      const geocodeUrl = `https://maps.googleapis.com/maps/api/geocode/json?latlng=${latitude},${longitude}&key=${GOOGLE_API_KEY}`;
+      const geocodeResponse = await fetch(geocodeUrl);
+      const geocodeData = await geocodeResponse.json();
+
+      if (geocodeData.status !== 'OK' || !geocodeData.results || geocodeData.results.length === 0) {
+        showErrorAlert('Error', 'Failed to get address information.');
+        return;
+      }
+
+      const result = geocodeData.results[0];
+      const { streetName, buildingNo, flatNo, fullAddress } = parseAddressComponents(result);
+
+      // Prepare the request data
+      const locationUpdateData = {
+        customer_site_id: order.customer_site_id,
+        customer_id: order.customer_id,
+        address: fullAddress,
+        street_name: streetName,
+        building_no: buildingNo,
+        flat_no: flatNo,
+        longitude: longitude,
+        latitude: latitude,
+        delivery_instructions: order.delivery_instructions || '',
+      };
+
+      // Make the API call
+      const url = `${IP_ADDRESS}/driver/customer-location/update`;
+      const response = await authenticatedFetch(url, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(locationUpdateData),
+      });
+
+      if (!response.ok) {
+        const errorData = await response.json();
+        throw new Error(errorData.message || `HTTP error! Status: ${response.status}`);
+      }
+
+      const resultData = await response.json();
+      
+      if (resultData.success) {
+        showSuccessAlert(
+          'Location Updated',
+          'Customer location has been updated successfully.',
+          [{ text: 'OK' }]
+        );
+      } else {
+        throw new Error(resultData.message || 'Failed to update location');
+      }
+    } catch (error) {
+      console.error('Error updating customer location:', error);
+      showErrorAlert(
+        'Update Failed',
+        error instanceof Error ? error.message : 'Failed to update customer location. Please try again.'
+      );
+    } finally {
+      setIsUpdatingLocation(false);
+    }
+  }, [order]);
+
   if (!order) {
     return (
       <View style={[styles.container, styles.centerContent, { paddingTop: insets.top }]}>
@@ -159,7 +295,7 @@ const OrderDetails = () => {
           onPress={() => router.back()}
           activeOpacity={0.7}
         >
-          <Ionicons name="chevron-back" size={20} color="#0F172A" />
+          <Ionicons name="chevron-back" size={20} color="#1E40AF" />
         </TouchableOpacity>
         <View style={styles.headerCenter}>
           <Text style={styles.headerTitle}>{order.order_number}</Text>
@@ -222,7 +358,7 @@ const OrderDetails = () => {
             <Text style={styles.sectionLabel}>ROUTE</Text>
             {isCalculatingDistance ? (
               <View style={styles.routeLoading}>
-                <ActivityIndicator size="small" color="#111827" />
+                <ActivityIndicator size="small" color="#1E40AF" />
                 <Text style={styles.routeLoadingText}>Calculating...</Text>
               </View>
             ) : distanceInfo && (
@@ -230,7 +366,7 @@ const OrderDetails = () => {
                 <View style={styles.routeMetrics}>
                   <View style={styles.routeMetric}>
                     <View style={styles.routeMetricIcon}>
-                      <Ionicons name="navigate" size={18} color="#111827" />
+                      <Ionicons name="navigate" size={18} color="#1E40AF" />
                     </View>
                     <Text style={styles.routeMetricValue}>{distanceInfo.distance}</Text>
                     <Text style={styles.routeMetricLabel}>Distance</Text>
@@ -238,7 +374,7 @@ const OrderDetails = () => {
                   <View style={styles.routeMetricDivider} />
                   <View style={styles.routeMetric}>
                     <View style={styles.routeMetricIcon}>
-                      <Ionicons name="time" size={18} color="#111827" />
+                      <Ionicons name="time" size={18} color="#1E40AF" />
                     </View>
                     <Text style={styles.routeMetricValue}>{distanceInfo.duration}</Text>
                     <Text style={styles.routeMetricLabel}>Est. Time</Text>
@@ -276,7 +412,10 @@ const OrderDetails = () => {
           <View style={styles.detailRow}>
             <Text style={styles.detailLabel}>Payment</Text>
             <Text style={styles.detailValue}>
-                {(order.payment_method || 'Cash').charAt(0).toUpperCase() + (order.payment_method || 'cash').slice(1)}
+                {order.payment_method === 'credit_card' ? 'Card' :
+                 order.payment_method === 'credit_sale' ? 'Credit Sale' :
+                 order.payment_method === 'credit_invoice' ? 'Credit Invoice' :
+                 (order.payment_method || 'Cash').charAt(0).toUpperCase() + (order.payment_method || 'cash').slice(1)}
               </Text>
             </View>
           <View style={styles.detailRowDivider} />
@@ -320,6 +459,42 @@ const OrderDetails = () => {
           </View>
         )}
 
+        {/* Rent Items Card */}
+        {order.rent_items && order.rent_items.length > 0 && (
+          <View style={styles.card}>
+            <Text style={styles.sectionLabel}>RENT ITEMS</Text>
+            {order.rent_items.map((item, index) => (
+              <View key={item.id}>
+                <View style={styles.productRow}>
+                  <View style={[styles.productIcon, item.category === 'borrow' ? styles.rentIconBorrow : styles.rentIconDeposit]}>
+                    <Ionicons 
+                      name={item.category === 'borrow' ? 'arrow-down-circle' : 'arrow-up-circle'} 
+                      size={14} 
+                      color={item.category === 'borrow' ? '#10B981' : '#3B82F6'} 
+                    />
+                  </View>
+                  <View style={styles.rentItemInfo}>
+                    <Text style={styles.productName}>{item.name}</Text>
+                    <Text style={styles.rentItemCategory}>
+                      {item.category === 'borrow' ? 'Borrow' : 'Deposit'} • Qty: {item.quantity} • AED {(item.price * item.quantity).toFixed(2)}
+                    </Text>
+                  </View>
+                  <View style={[styles.rentItemStatus, item.in_truck ? styles.rentItemStatusOn : styles.rentItemStatusOff]}>
+                    {item.in_truck ? (
+                      <Ionicons name="checkmark-circle" size={28} color="#10B981" />
+                    ) : (
+                      <Ionicons name="ellipse-outline" size={28} color="#9CA3AF" />
+                    )}
+                  </View>
+                </View>
+                {index < (order.rent_items?.length || 0) - 1 && (
+                  <View style={styles.productDivider} />
+                )}
+              </View>
+            ))}
+          </View>
+        )}
+
         {/* Instructions */}
         {deliveryInstructions && (
           <View style={[styles.card, styles.instructionsCard]}>
@@ -349,6 +524,31 @@ const OrderDetails = () => {
           </View>
         )}
 
+        {/* Update Location Button */}
+        <TouchableOpacity 
+          style={styles.updateLocationButton}
+          onPress={handleUpdateCustomerLocation}
+          disabled={isUpdatingLocation}
+          activeOpacity={0.8}
+        >
+          {isUpdatingLocation ? (
+            <>
+              <ActivityIndicator size="small" color="#3B82F6" />
+              <Text style={styles.updateLocationButtonText}>Updating Location...</Text>
+            </>
+          ) : (
+            <>
+              <View style={styles.updateLocationIconBox}>
+                <Ionicons name="location" size={18} color="#3B82F6" />
+              </View>
+              <Text style={styles.updateLocationButtonText}>Update Customer Location</Text>
+              <View style={styles.updateLocationArrow}>
+                <Ionicons name="arrow-forward" size={16} color="#3B82F6" />
+              </View>
+            </>
+          )}
+        </TouchableOpacity>
+
         {/* Action Buttons */}
         <View style={styles.actionButtons}>
         <TouchableOpacity 
@@ -367,7 +567,7 @@ const OrderDetails = () => {
         >
           <Text style={styles.proceedButtonText}>Start Delivery</Text>
           <View style={styles.proceedArrow}>
-              <Ionicons name="arrow-forward" size={16} color="#111827" />
+              <Ionicons name="arrow-forward" size={16} color="#1E40AF" />
           </View>
         </TouchableOpacity>
       </View>
@@ -413,7 +613,7 @@ const styles = StyleSheet.create({
   headerTitle: {
     fontSize: 17,
     fontWeight: '600',
-    color: '#111827',
+    color: '#1E40AF',
     letterSpacing: -0.4,
   },
   statusPill: {
@@ -450,7 +650,7 @@ const styles = StyleSheet.create({
     marginBottom: 12,
     ...Platform.select({
       ios: {
-        shadowColor: '#000',
+        shadowColor: '#1E40AF',
         shadowOffset: { width: 0, height: 2 },
         shadowOpacity: 0.04,
         shadowRadius: 8,
@@ -484,7 +684,7 @@ const styles = StyleSheet.create({
   customerName: {
     fontSize: 16,
     fontWeight: '600',
-    color: '#111827',
+    color: '#1E40AF',
     letterSpacing: -0.3,
   },
   customerLabel: {
@@ -563,7 +763,7 @@ const styles = StyleSheet.create({
   routeMetricValue: {
     fontSize: 18,
     fontWeight: '700',
-    color: '#111827',
+    color: '#1E40AF',
     letterSpacing: -0.5,
   },
   routeMetricLabel: {
@@ -582,7 +782,7 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
-    backgroundColor: '#111827',
+    backgroundColor: '#2563EB',
     paddingVertical: 12,
     borderRadius: 12,
     gap: 8,
@@ -609,7 +809,7 @@ const styles = StyleSheet.create({
   detailValue: {
     fontSize: 14,
     fontWeight: '500',
-    color: '#111827',
+    color: '#1E40AF',
   },
   detailValueHighlight: {
     fontSize: 16,
@@ -634,7 +834,7 @@ const styles = StyleSheet.create({
     flex: 1,
     fontSize: 14,
     fontWeight: '500',
-    color: '#111827',
+    color: '#1E40AF',
   },
   productQtyBadge: {
     backgroundColor: '#F3F4F6',
@@ -646,6 +846,45 @@ const styles = StyleSheet.create({
     fontSize: 13,
     fontWeight: '600',
     color: '#4B5563',
+  },
+  rentItemInfo: {
+    flex: 1,
+    marginLeft: 12,
+  },
+  rentItemCategory: {
+    fontSize: 11,
+    color: '#6B7280',
+    marginTop: 2,
+  },
+  rentIconBorrow: {
+    backgroundColor: '#ECFDF5',
+  },
+  rentIconDeposit: {
+    backgroundColor: '#EFF6FF',
+  },
+  rentItemStatus: {
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    justifyContent: 'center',
+    alignItems: 'center',
+    ...Platform.select({
+      ios: {
+        shadowColor: '#1E40AF',
+        shadowOffset: { width: 0, height: 2 },
+        shadowOpacity: 0.1,
+        shadowRadius: 4,
+      },
+      android: {
+        elevation: 2,
+      },
+    }),
+  },
+  rentItemStatusOn: {
+    backgroundColor: '#ECFDF5',
+  },
+  rentItemStatusOff: {
+    backgroundColor: '#F3F4F6',
   },
   productDivider: {
     height: 1,
@@ -689,7 +928,65 @@ const styles = StyleSheet.create({
   availabilityText: {
     fontSize: 14,
     fontWeight: '500',
-    color: '#111827',
+    color: '#1E40AF',
+  },
+  updateLocationButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#EFF6FF',
+    borderWidth: 2,
+    borderColor: '#DBEAFE',
+    height: 56,
+    borderRadius: 16,
+    paddingHorizontal: 20,
+    marginBottom: 12,
+    gap: 12,
+    ...Platform.select({
+      ios: {
+        shadowColor: '#3B82F6',
+        shadowOffset: { width: 0, height: 2 },
+        shadowOpacity: 0.1,
+        shadowRadius: 8,
+      },
+      android: {
+        elevation: 2,
+      },
+    }),
+  },
+  updateLocationIconBox: {
+    width: 36,
+    height: 36,
+    borderRadius: 10,
+    backgroundColor: '#FFFFFF',
+    justifyContent: 'center',
+    alignItems: 'center',
+    ...Platform.select({
+      ios: {
+        shadowColor: '#1E40AF',
+        shadowOffset: { width: 0, height: 1 },
+        shadowOpacity: 0.1,
+        shadowRadius: 2,
+      },
+      android: {
+        elevation: 1,
+      },
+    }),
+  },
+  updateLocationButtonText: {
+    flex: 1,
+    fontSize: 15,
+    fontWeight: '600',
+    color: '#3B82F6',
+    textAlign: 'center',
+  },
+  updateLocationArrow: {
+    width: 28,
+    height: 28,
+    borderRadius: 8,
+    backgroundColor: '#FFFFFF',
+    justifyContent: 'center',
+    alignItems: 'center',
   },
   actionButtons: {
     flexDirection: 'row',
@@ -718,7 +1015,7 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
-    backgroundColor: '#111827',
+    backgroundColor: '#2563EB',
     height: 52,
     borderRadius: 14,
     gap: 10,
@@ -746,7 +1043,7 @@ const styles = StyleSheet.create({
     marginBottom: 20,
     ...Platform.select({
       ios: {
-        shadowColor: '#000',
+        shadowColor: '#1E40AF',
         shadowOffset: { width: 0, height: 4 },
         shadowOpacity: 0.06,
         shadowRadius: 12,
@@ -759,7 +1056,7 @@ const styles = StyleSheet.create({
   emptyTitle: {
     fontSize: 17,
     fontWeight: '600',
-    color: '#111827',
+    color: '#1E40AF',
     marginBottom: 6,
   },
   emptySubtitle: {

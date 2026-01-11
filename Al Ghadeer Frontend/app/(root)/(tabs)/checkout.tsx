@@ -2,7 +2,7 @@ import { useOrderStore } from '@/store/index';
 import { Order } from '@/types/order';
 import { Ionicons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
-import React, { useCallback, useMemo } from 'react';
+import React, { useCallback, useMemo, useEffect } from 'react';
 import { 
   ActivityIndicator, 
   ScrollView, 
@@ -19,7 +19,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 const { width } = Dimensions.get('window');
 
-type PaymentMethod = 'cash' | 'wallet' | 'credit_card';
+type PaymentMethod = 'cash' | 'wallet' | 'credit_card' | 'invoice' | 'credit_sale' | 'credit_invoice';
 
 interface PaymentOption {
   id: PaymentMethod;
@@ -32,6 +32,8 @@ const paymentOptions: PaymentOption[] = [
   { id: 'cash', label: 'Cash', icon: 'cash-outline', description: 'Pay with cash on delivery' },
   { id: 'wallet', label: 'Wallet', icon: 'wallet-outline', description: 'Use customer wallet balance' },
   { id: 'credit_card', label: 'Card', icon: 'card-outline', description: 'Pay with credit/debit card' },
+  { id: 'credit_sale', label: 'Credit Sale', icon: 'receipt-outline', description: 'Payment due with invoice at end of month' },
+  { id: 'credit_invoice', label: 'Credit Invoice', icon: 'document-text-outline', description: 'Delivery note with payment due at end of month' },
 ];
 
 const Checkout: React.FC = () => {
@@ -47,7 +49,19 @@ const Checkout: React.FC = () => {
   
   const orderDetail = assignedOrders.find(item => selectedOrder === item.id) as Order | undefined;
   
-  const { subtotal, vat, totalWithVat, itemCount } = useMemo(() => {
+  // Initialize payment method based on requires_signature
+  useEffect(() => {
+    if (orderDetail) {
+      if (orderDetail.requires_signature === true) {
+        setPaymentMethod('credit_sale');
+      } else {
+        setPaymentMethod('cash');
+      }
+    }
+  }, [orderDetail, setPaymentMethod]);
+  
+  const { subtotal, vat, totalWithVat, itemCount, rentItemsTotal, hasRentItemsSelected } = useMemo(() => {
+    // Calculate regular products subtotal (with VAT)
     const sub = cartItems.reduce((sum, item) => {
       if (!item || typeof item.price !== 'number' || typeof item.quantity !== 'number') {
         return sum;
@@ -55,20 +69,36 @@ const Checkout: React.FC = () => {
       return sum + item.price * item.quantity;
     }, 0);
     const vatAmount = sub * 0.05;
-    const total = sub + vatAmount;
+    
+    // Calculate rent items total (no VAT) - only for items with in_truck === true
+    const rentTotal = orderDetail?.rent_items?.reduce((sum, item) => {
+      if (item.in_truck) {
+        return sum + ((item.price || 0) * (item.quantity || 1));
+      }
+      return sum;
+    }, 0) || 0;
+    
+    // Check if any rent items are selected
+    const hasRentItems = orderDetail?.rent_items?.some(item => item.in_truck === true) || false;
+    
+    // Total = products (with VAT) + rent items (no VAT)
+    const total = sub + vatAmount + rentTotal;
     const count = cartItems.reduce((sum, item) => sum + (item?.quantity || 0), 0);
     
     return {
       subtotal: sub.toFixed(2),
       vat: vatAmount.toFixed(2),
       totalWithVat: total.toFixed(2),
-      itemCount: count
+      itemCount: count,
+      rentItemsTotal: rentTotal.toFixed(2),
+      hasRentItemsSelected: hasRentItems
     };
-  }, [cartItems]);
+  }, [cartItems, orderDetail]);
 
   const handleContinueToPayment = useCallback(() => {
-    if (cartItems.length === 0) {
-      showWarningAlert('Empty Cart', 'Please add items to your cart.');
+    // Allow proceeding if either cart has items OR rent items are selected
+    if (cartItems.length === 0 && !hasRentItemsSelected) {
+      showWarningAlert('Empty Cart', 'Please add items to your cart or select rent items.');
       return;
     }
     
@@ -86,15 +116,27 @@ const Checkout: React.FC = () => {
       return;
     }
 
-    // Handle orders that require signature - redirect to signature page
+    // Handle Credit Sale - redirect to signature page (generates invoice)
+    if (selectedPaymentMethod === 'credit_sale') {
+      router.push('/(root)/(tabs)/organization-signature');
+      return;
+    }
+
+    // Handle Credit Invoice - redirect to signature page (generates delivery note)
+    if (selectedPaymentMethod === 'credit_invoice') {
+      router.push('/(root)/(tabs)/organization-signature');
+      return;
+    }
+
+    // Handle orders that require signature - redirect to signature page (legacy support)
     if (needsSignature) {
       router.push('/(root)/(tabs)/organization-signature');
       return;
     }
 
-    // Default: go to payment confirmation
+    // Default: go to payment confirmation (for cash, wallet)
     router.push('/(root)/(tabs)/payment-confirmation');
-  }, [cartItems, selectedPaymentMethod, orderDetail, router]);
+  }, [cartItems, selectedPaymentMethod, orderDetail, router, hasRentItemsSelected]);
 
   const customerName = orderDetail?.customer_name || 'Customer';
   const customerAddress =  orderDetail?.customer_address || '—';
@@ -114,7 +156,7 @@ const Checkout: React.FC = () => {
           onPress={() => router.back()}
           activeOpacity={0.7}
         >
-          <Ionicons name="chevron-back" size={20} color="#0F172A" />
+          <Ionicons name="chevron-back" size={20} color="#1E40AF" />
         </TouchableOpacity>
         <View style={styles.headerCenter}>
           <Text style={styles.headerTitle}>Checkout</Text>
@@ -178,6 +220,36 @@ const Checkout: React.FC = () => {
           )}
         </View>
 
+        {/* Rent Items */}
+        {orderDetail?.rent_items && orderDetail.rent_items.length > 0 && (
+          <View style={styles.card}>
+            <Text style={styles.cardTitle}>Rent Items</Text>
+            <View style={styles.itemsList}>
+              {orderDetail.rent_items.filter(item => item.in_truck).map((item, index) => (
+                <View key={item.id}>
+                  <View style={styles.itemRow}>
+                    <View style={styles.itemInfo}>
+                      <View style={[styles.itemIconBox, item.category === 'borrow' ? styles.rentItemIconBorrow : styles.rentItemIconDeposit]}>
+                        <Ionicons 
+                          name={item.category === 'borrow' ? 'arrow-down-circle' : 'arrow-up-circle'} 
+                          size={16} 
+                          color={item.category === 'borrow' ? '#10B981' : '#3B82F6'} 
+                        />
+                      </View>
+                      <View style={styles.itemDetails}>
+                        <Text style={styles.itemName} numberOfLines={1}>{item.name}</Text>
+                        <Text style={styles.itemCategory}>{item.category === 'borrow' ? 'Borrow' : 'Deposit'} • Qty: {item.quantity}</Text>
+                      </View>
+                    </View>
+                    <Text style={styles.itemPrice}>AED {(item.price * item.quantity).toFixed(2)}</Text>
+                  </View>
+                  {index < (orderDetail.rent_items?.filter(item => item.in_truck).length || 0) - 1 && <View style={styles.itemDivider} />}
+                </View>
+              ))}
+            </View>
+          </View>
+        )}
+
         {/* Delivery To */}
         <View style={styles.card}>
           <Text style={styles.cardTitle}>Deliver To</Text>
@@ -211,64 +283,112 @@ const Checkout: React.FC = () => {
               </View>
             )}
           </View>
-          <View style={styles.paymentGrid}>
-            {paymentOptions.map((option) => {
-              const isSelected = selectedPaymentMethod === option.id;
-              const isWallet = option.id === 'wallet';
-              const canUseWallet = isWallet && (walletBalance > 0 || isOrganization);
-              const insufficientBalance = isWallet && !isOrganization && walletBalance < parseFloat(totalWithVat);
-              
-              return (
-                <TouchableOpacity
-                  key={option.id}
-                  style={[
-                    styles.paymentOption,
-                    isSelected && styles.paymentOptionSelected,
-                    isWallet && !canUseWallet && !isOrganization && styles.paymentOptionDisabled
-                  ]}
-                  onPress={() => {
-                    if (isWallet && !canUseWallet && !isOrganization) return;
-                    setPaymentMethod(option.id);
-                  }}
-                  activeOpacity={0.7}
-                  disabled={isWallet && !canUseWallet && !isOrganization}
-                >
-                  <View style={[
-                    styles.paymentIconBox,
-                    isSelected && styles.paymentIconBoxSelected,
-                    isWallet && walletBalance < 0 && styles.paymentIconBoxNegative
-                  ]}>
-                    <Ionicons 
-                      name={option.icon} 
-                      size={20} 
-                      color={isSelected ? '#FFFFFF' : (isWallet && walletBalance < 0 ? '#F97316' : '#6B7280')} 
-                    />
-                  </View>
-                  <View style={styles.paymentLabelContainer}>
-                    <Text style={[
-                      styles.paymentLabel,
-                      isSelected && styles.paymentLabelSelected
+          <View style={styles.paymentContainer}>
+            {/* Top Row: Cash, Wallet, Card */}
+            <View style={styles.paymentRow}>
+              {paymentOptions.filter(opt => ['cash', 'wallet', 'credit_card'].includes(opt.id)).map((option) => {
+                const isSelected = selectedPaymentMethod === option.id;
+                const isWallet = option.id === 'wallet';
+                const canUseWallet = isWallet && (walletBalance > 0 || isOrganization);
+                const insufficientBalance = isWallet && !isOrganization && walletBalance < parseFloat(totalWithVat);
+                
+                return (
+                  <TouchableOpacity
+                    key={option.id}
+                    style={[
+                      styles.paymentOption,
+                      styles.paymentOptionTop,
+                      isSelected && styles.paymentOptionSelected,
+                      isWallet && !canUseWallet && !isOrganization && styles.paymentOptionDisabled
+                    ]}
+                    onPress={() => {
+                      if (isWallet && !canUseWallet && !isOrganization) return;
+                      setPaymentMethod(option.id);
+                    }}
+                    activeOpacity={0.7}
+                    disabled={isWallet && !canUseWallet && !isOrganization}
+                  >
+                    <View style={[
+                      styles.paymentIconBox,
+                      isSelected && styles.paymentIconBoxSelected,
+                      isWallet && walletBalance < 0 && styles.paymentIconBoxNegative
                     ]}>
-                      {option.label}
-                    </Text>
-                    {isWallet && (
-                      <Text style={[
-                        styles.walletBalance,
-                        walletBalance >= 0 ? styles.walletBalancePositive : styles.walletBalanceNegative,
-                        insufficientBalance && !isOrganization && styles.walletBalanceInsufficient
-                      ]}>
-                        AED {walletBalance.toFixed(2)}
-                      </Text>
-                    )}
-                  </View>
-                  {isSelected && (
-                    <View style={styles.paymentCheck}>
-                      <Ionicons name="checkmark" size={10} color="#059669" />
+                      <Ionicons 
+                        name={option.icon} 
+                        size={22} 
+                        color={isSelected ? '#FFFFFF' : (isWallet && walletBalance < 0 ? '#F97316' : '#6B7280')} 
+                      />
                     </View>
-                  )}
-                </TouchableOpacity>
-              );
-            })}
+                    <View style={styles.paymentLabelContainer}>
+                      <Text style={[
+                        styles.paymentLabel,
+                        isSelected && styles.paymentLabelSelected
+                      ]}>
+                        {option.label}
+                      </Text>
+                      {isWallet && (
+                        <Text style={[
+                          styles.walletBalance,
+                          walletBalance >= 0 ? styles.walletBalancePositive : styles.walletBalanceNegative,
+                          insufficientBalance && !isOrganization && styles.walletBalanceInsufficient
+                        ]}>
+                          AED {walletBalance.toFixed(2)}
+                        </Text>
+                      )}
+                    </View>
+                    {isSelected && (
+                      <View style={styles.paymentCheck}>
+                        <Ionicons name="checkmark-circle" size={18} color="#059669" />
+                      </View>
+                    )}
+                  </TouchableOpacity>
+                );
+              })}
+            </View>
+            
+            {/* Bottom Row: Credit Sale, Credit Invoice */}
+            <View style={[styles.paymentRow, styles.paymentRowBottom]}>
+              {paymentOptions.filter(opt => ['credit_sale', 'credit_invoice'].includes(opt.id)).map((option) => {
+                const isSelected = selectedPaymentMethod === option.id;
+                
+                return (
+                  <TouchableOpacity
+                    key={option.id}
+                    style={[
+                      styles.paymentOption,
+                      styles.paymentOptionBottom,
+                      isSelected && styles.paymentOptionSelected
+                    ]}
+                    onPress={() => setPaymentMethod(option.id)}
+                    activeOpacity={0.7}
+                  >
+                    <View style={[
+                      styles.paymentIconBox,
+                      isSelected && styles.paymentIconBoxSelected
+                    ]}>
+                      <Ionicons 
+                        name={option.icon} 
+                        size={22} 
+                        color={isSelected ? '#FFFFFF' : '#6B7280'} 
+                      />
+                    </View>
+                    <View style={styles.paymentLabelContainer}>
+                      <Text style={[
+                        styles.paymentLabel,
+                        isSelected && styles.paymentLabelSelected
+                      ]}>
+                        {option.label}
+                      </Text>
+                    </View>
+                    {isSelected && (
+                      <View style={styles.paymentCheck}>
+                        <Ionicons name="checkmark-circle" size={18} color="#059669" />
+                      </View>
+                    )}
+                  </TouchableOpacity>
+                );
+              })}
+            </View>
           </View>
           {isOrganization && walletBalance < 0 && (
             <View style={styles.creditNote}>
@@ -289,6 +409,12 @@ const Checkout: React.FC = () => {
             <Text style={styles.summaryLabel}>VAT (5%)</Text>
             <Text style={styles.summaryValue}>AED {vat}</Text>
           </View>
+          {parseFloat(rentItemsTotal) > 0 && (
+            <View style={styles.summaryRow}>
+              <Text style={styles.summaryLabel}>Rent Items</Text>
+              <Text style={styles.summaryValue}>AED {rentItemsTotal}</Text>
+            </View>
+          )}
           <View style={styles.summaryDivider} />
           <View style={styles.summaryRow}>
             <Text style={styles.totalLabel}>Total</Text>
@@ -306,21 +432,21 @@ const Checkout: React.FC = () => {
           <TouchableOpacity
             style={[
               styles.continueButton,
-              (cartItems.length === 0 || !selectedPaymentMethod) && styles.continueButtonDisabled
+              ((cartItems.length === 0 && !hasRentItemsSelected) || !selectedPaymentMethod) && styles.continueButtonDisabled
             ]}
             onPress={handleContinueToPayment}
-            disabled={cartItems.length === 0 || !selectedPaymentMethod}
+            disabled={(cartItems.length === 0 && !hasRentItemsSelected) || !selectedPaymentMethod}
             activeOpacity={0.8}
           >
             <Text style={styles.continueButtonText}>Continue</Text>
             <View style={[
               styles.continueArrow,
-              (cartItems.length === 0 || !selectedPaymentMethod) && styles.continueArrowDisabled
+              ((cartItems.length === 0 && !hasRentItemsSelected) || !selectedPaymentMethod) && styles.continueArrowDisabled
             ]}>
               <Ionicons 
                 name="arrow-forward" 
                 size={16} 
-                color={(cartItems.length === 0 || !selectedPaymentMethod) ? '#9CA3AF' : '#111827'} 
+                color={((cartItems.length === 0 && !hasRentItemsSelected) || !selectedPaymentMethod) ? '#9CA3AF' : '#1E40AF'} 
               />
             </View>
           </TouchableOpacity>
@@ -362,7 +488,7 @@ const styles = StyleSheet.create({
   headerTitle: {
     fontSize: 17,
     fontWeight: '600',
-    color: '#111827',
+    color: '#1E40AF',
     letterSpacing: -0.4,
   },
   headerSubtitle: {
@@ -375,7 +501,7 @@ const styles = StyleSheet.create({
     minWidth: 36,
     height: 36,
     borderRadius: 10,
-    backgroundColor: '#111827',
+    backgroundColor: '#2563EB',
     justifyContent: 'center',
     alignItems: 'center',
     paddingHorizontal: 10,
@@ -470,7 +596,7 @@ const styles = StyleSheet.create({
   itemName: {
     fontSize: 14,
     fontWeight: '500',
-    color: '#111827',
+    color: '#1E40AF',
     marginBottom: 2,
   },
   itemQuantity: {
@@ -483,7 +609,7 @@ const styles = StyleSheet.create({
   itemPrice: {
     fontSize: 14,
     fontWeight: '600',
-    color: '#111827',
+    color: '#1E40AF',
   },
   itemUnitPrice: {
     fontSize: 11,
@@ -494,6 +620,25 @@ const styles = StyleSheet.create({
     height: 1,
     backgroundColor: '#F3F4F6',
     marginLeft: 48,
+  },
+  itemsList: {
+    gap: 0,
+  },
+  itemInfo: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    flex: 1,
+  },
+  itemCategory: {
+    fontSize: 11,
+    color: '#6B7280',
+    marginTop: 2,
+  },
+  rentItemIconBorrow: {
+    backgroundColor: '#ECFDF5',
+  },
+  rentItemIconDeposit: {
+    backgroundColor: '#EFF6FF',
   },
   customerRow: {
     flexDirection: 'row',
@@ -520,7 +665,7 @@ const styles = StyleSheet.create({
   customerName: {
     fontSize: 15,
     fontWeight: '600',
-    color: '#111827',
+    color: '#1E40AF',
   },
   customerPhone: {
     fontSize: 13,
@@ -549,37 +694,67 @@ const styles = StyleSheet.create({
     color: '#4B5563',
     lineHeight: 18,
   },
-  paymentGrid: {
+  paymentContainer: {
+    gap: 10,
+  },
+  paymentRow: {
     flexDirection: 'row',
-    gap: 12,
+    justifyContent: 'space-between',
+    width: '100%',
+  },
+  paymentRowBottom: {
+    justifyContent: 'center',
+    gap: 7,
   },
   paymentOption: {
-    flex: 1,
     alignItems: 'center',
     backgroundColor: '#F9FAFB',
-    borderRadius: 14,
-    padding: 14,
-    borderWidth: 2,
+    borderRadius: 10,
+    padding: 16,
+    borderWidth: 1,
     borderColor: 'transparent',
+    position: 'relative',
+    minHeight: 100,
+    justifyContent: 'center',
+  },
+  paymentOptionTop: {
+    flex: 1,
+    maxWidth: '32%',
+  },
+  paymentOptionBottom: {
+    flex: 0,
+    minWidth: '48%',
+    maxWidth: '46%',
   },
   paymentOptionSelected: {
     backgroundColor: '#FFFFFF',
-    borderColor: '#111827',
+    borderColor: '#2563EB',
   },
   paymentOptionDisabled: {
     opacity: 0.5,
   },
   paymentIconBox: {
-    width: 40,
-    height: 40,
-    borderRadius: 10,
+    width: 48,
+    height: 48,
+    borderRadius: 12,
     backgroundColor: '#FFFFFF',
     justifyContent: 'center',
     alignItems: 'center',
-    marginBottom: 8,
+    marginBottom: 10,
+    ...Platform.select({
+      ios: {
+        shadowColor: '#000',
+        shadowOffset: { width: 0, height: 1 },
+        shadowOpacity: 0.05,
+        shadowRadius: 2,
+      },
+      android: {
+        elevation: 1,
+      },
+    }),
   },
   paymentIconBoxSelected: {
-    backgroundColor: '#111827',
+    backgroundColor: '#2563EB',
   },
   paymentIconBoxNegative: {
     backgroundColor: '#FFF7ED',
@@ -593,7 +768,7 @@ const styles = StyleSheet.create({
     color: '#6B7280',
   },
   paymentLabelSelected: {
-    color: '#111827',
+    color: '#1E40AF',
   },
   walletBalance: {
     fontSize: 10,
@@ -611,14 +786,11 @@ const styles = StyleSheet.create({
   },
   paymentCheck: {
     position: 'absolute',
-    top: 8,
-    right: 8,
-    width: 16,
-    height: 16,
-    borderRadius: 8,
-    backgroundColor: '#ECFDF5',
-    justifyContent: 'center',
-    alignItems: 'center',
+    top: 10,
+    right: 10,
+    backgroundColor: '#FFFFFF',
+    borderRadius: 12,
+    padding: 2,
   },
   orgBadge: {
     backgroundColor: '#F3E8FF',
@@ -658,7 +830,7 @@ const styles = StyleSheet.create({
   summaryValue: {
     fontSize: 14,
     fontWeight: '500',
-    color: '#111827',
+    color: '#1E40AF',
   },
   summaryDivider: {
     height: 1,
@@ -668,12 +840,12 @@ const styles = StyleSheet.create({
   totalLabel: {
     fontSize: 15,
     fontWeight: '600',
-    color: '#111827',
+    color: '#1E40AF',
   },
   totalValue: {
     fontSize: 20,
     fontWeight: '700',
-    color: '#111827',
+    color: '#1E40AF',
   },
   actionSection: {
     flexDirection: 'row',
@@ -709,14 +881,14 @@ const styles = StyleSheet.create({
   actionTotal: {
     fontSize: 20,
     fontWeight: '700',
-    color: '#111827',
+    color: '#1E40AF',
     letterSpacing: -0.5,
   },
   continueButton: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
-    backgroundColor: '#111827',
+    backgroundColor: '#2563EB',
     height: 52,
     paddingHorizontal: 28,
     borderRadius: 14,

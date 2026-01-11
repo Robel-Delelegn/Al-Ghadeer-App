@@ -5,7 +5,7 @@ import * as FileSystem from 'expo-file-system';
 import * as Print from 'expo-print';
 import { useRouter } from 'expo-router';
 import * as Sharing from 'expo-sharing';
-import React, { useCallback, useState } from 'react';
+import React, { useCallback, useState, useEffect } from 'react';
 import { ActivityIndicator, ScrollView, Text, TouchableOpacity, View } from 'react-native';
 import { showSuccessAlert, showErrorAlert } from '@/store/utils/alert';
 
@@ -15,6 +15,9 @@ const PaymentReceipt: React.FC = () => {
   // Check both assignedOrders and completedOrders since order might have been marked as delivered
   const orderDetail = assignedOrders.find(item => selectedOrder === item.id) || 
                       completedOrders.find(item => selectedOrder === item.id) as Order | undefined;
+
+  // Check if this is rent-items-only (no cart items)
+  const isRentItemsOnly = cartItems.length === 0 && orderDetail?.rent_items?.some(item => item.in_truck === true);
 
   // Loading states for buttons
   const [isDownloading, setIsDownloading] = useState(false);
@@ -30,23 +33,32 @@ const PaymentReceipt: React.FC = () => {
   } : { name: 'N/A', address: 'N/A', contact: 'N/A', customerId: 'N/A' };
   const paymentMethodDisplay = selectedPaymentMethod === 'credit_card' ? 'Credit Card' : 
                                 selectedPaymentMethod === 'wallet' ? 'Wallet' : 
+                                selectedPaymentMethod === 'invoice' ? 'Invoice' :
+                                selectedPaymentMethod === 'credit_sale' ? 'Credit Sale' :
+                                selectedPaymentMethod === 'credit_invoice' ? 'Credit Invoice' :
                                 'Cash';
+  
+  // Determine if this should show delivery note (Credit Invoice) or invoice
+  const isDeliveryNote = selectedPaymentMethod === 'credit_invoice';
   // Debug logging
   console.log('Payment Receipt - orderDetail:', orderDetail);
   console.log('Payment Receipt - cartItems:', cartItems);
   console.log('Payment Receipt - shippingDetails:', shippingDetails);
   
   // Calculate totals with safety checks
-  const subtotal = cartItems.reduce((sum, item) => {
+  const productsSubtotal = cartItems.reduce((sum, item) => {
     if (!item || typeof item.price !== 'number' || typeof item.quantity !== 'number') {
       console.error('Invalid cart item for calculation in receipt:', item);
       return sum;
     }
     return sum + item.price * item.quantity;
-  }, 0).toFixed(2);
+  }, 0);
+  const subtotal = productsSubtotal.toFixed(2);
   const vat = (Number(subtotal) * 0.05).toFixed(2);
+  // Rent items are not included in receipt totals
   const totalWithVat = (Number(subtotal) + Number(vat)).toFixed(2);
   const orderId = orderDetail?.order_number || 'N/A';
+  const invoiceNumber = orderDetail?.invoice_number || orderId;
   const paymentDate = new Date().toLocaleDateString('en-GB', {
     day: '2-digit',
     month: '2-digit',
@@ -54,6 +66,240 @@ const PaymentReceipt: React.FC = () => {
     hour: '2-digit',
     minute: '2-digit'
   });
+
+  const generateDeliveryNoteHTML = useCallback(() => {
+    // Map cart items to delivery note format with item numbers
+    const itemsWithNumbers = cartItems
+      .filter(item => item?.name)
+      .map((item, index) => {
+        const itemNumber = String(index + 1).padStart(3, '0');
+        return {
+          itemNo: itemNumber,
+          name: item.name,
+          quantity: item.quantity,
+        };
+      });
+
+    const itemsHTML = itemsWithNumbers.map(item => {
+      // Create checkbox squares for quantity
+      const checkboxHTML = Array.from({ length: item.quantity }, (_, i) => 
+        '<span style="display: inline-block; width: 12px; height: 12px; border: 1px solid #000; margin: 2px;"></span>'
+      ).join('');
+      
+      return `
+        <tr style="border-bottom: 1px solid #e5e7eb;">
+          <td style="padding: 6px; text-align: center; font-size: 11px;">${item.itemNo}</td>
+          <td style="padding: 6px; text-align: center; font-size: 11px;"></td>
+          <td style="padding: 6px; text-align: left; font-size: 11px;">${item.name}</td>
+          <td style="padding: 6px; text-align: center; font-size: 11px;">${checkboxHTML}</td>
+        </tr>
+      `;
+    }).join('');
+
+    const currentDate = new Date();
+    const dateStr = currentDate.toLocaleDateString('en-GB', {
+      day: '2-digit',
+      month: '2-digit',
+      year: 'numeric'
+    });
+    const deliveryNoteNumber = invoiceNumber || orderId;
+
+    return `
+      <!DOCTYPE html>
+      <html>
+        <head>
+          <meta charset="utf-8">
+          <title>Delivery Note - ${deliveryNoteNumber}</title>
+          <style>
+            body { 
+              font-family: Arial, sans-serif; 
+              margin: 0; 
+              padding: 10px; 
+              color: #000; 
+              background: white;
+              font-size: 11px;
+              line-height: 1.3;
+            }
+            .delivery-container {
+              max-width: 300px;
+              margin: 0 auto;
+              background: white;
+            }
+            .company-header {
+              text-align: center;
+              margin-bottom: 15px;
+              border-bottom: 1px solid #000;
+              padding-bottom: 10px;
+            }
+            .company-name {
+              font-size: 12px;
+              font-weight: bold;
+              margin-bottom: 5px;
+              color: #0066CC;
+            }
+            .company-name-arabic {
+              font-size: 11px;
+              margin-bottom: 5px;
+              color: #0066CC;
+            }
+            .contact-info {
+              font-size: 9px;
+              margin: 3px 0;
+              line-height: 1.4;
+            }
+            .delivery-note-header {
+              text-align: center;
+              margin: 15px 0;
+              font-size: 14px;
+              font-weight: bold;
+            }
+            .delivery-note-number {
+              text-align: center;
+              margin-bottom: 10px;
+              font-size: 11px;
+            }
+            .info-section {
+              margin: 8px 0;
+              font-size: 10px;
+            }
+            .info-row {
+              display: flex;
+              margin: 4px 0;
+            }
+            .info-label {
+              min-width: 80px;
+              font-weight: bold;
+            }
+            .items-table {
+              width: 100%;
+              border-collapse: collapse;
+              margin: 15px 0;
+              font-size: 10px;
+            }
+            .items-table th {
+              text-align: center;
+              padding: 6px 4px;
+              border: 1px solid #000;
+              font-weight: bold;
+              background: #f0f0f0;
+            }
+            .items-table td {
+              padding: 6px 4px;
+              border: 1px solid #ccc;
+              text-align: center;
+            }
+            .footer-section {
+              margin-top: 20px;
+              border-top: 1px solid #000;
+              padding-top: 10px;
+              font-size: 10px;
+            }
+            .footer-row {
+              margin: 8px 0;
+            }
+            .signature-section {
+              margin-top: 15px;
+              display: flex;
+              justify-content: space-between;
+            }
+            .signature-field {
+              flex: 1;
+              text-align: center;
+              margin: 0 5px;
+              padding-top: 40px;
+              border-top: 1px solid #000;
+            }
+            .disclaimer {
+              margin-top: 15px;
+              font-size: 8px;
+              line-height: 1.4;
+              text-align: center;
+            }
+          </style>
+        </head>
+        <body>
+          <div class="delivery-container">
+            <div class="company-header">
+              <div class="company-name">Al Ghadeer Drinking Water Factory L.L.C</div>
+              <div class="company-name-arabic">مياه شرب معبأة</div>
+              <div class="contact-info">
+                <strong>Al Ain Head Office:</strong><br>
+                Tel.: 03/7211353, Fax: 03/7216169<br>
+                P.O.Box: 80239, U.A.E.
+              </div>
+              <div class="contact-info">
+                <strong>Abu Dhabi Branch:</strong><br>
+                Tel.: 02/5551324, Fax: 02/5551325<br>
+                P.O.Box: 54272, U.A.E.
+              </div>
+            </div>
+
+            <div class="delivery-note-header">
+              <div>Delivery Note</div>
+              <div style="font-size: 12px; margin-top: 3px;">سند تسليم</div>
+            </div>
+            <div class="delivery-note-number">
+              No. ${deliveryNoteNumber}
+            </div>
+
+            <div class="info-section">
+              <div class="info-row">
+                <span class="info-label">Date:</span>
+                <span>${dateStr}</span>
+              </div>
+              <div class="info-row">
+                <span class="info-label">Mr./M/s:</span>
+                <span>${shippingDetails.name || ''}</span>
+              </div>
+              <div class="info-row">
+                <span class="info-label">Address:</span>
+                <span>${shippingDetails.address || ''}</span>
+              </div>
+            </div>
+
+            <table class="items-table">
+              <thead>
+                <tr>
+                  <th style="width: 15%;">Item No.<br>رقم الصنف</th>
+                  <th style="width: 15%;">Unit<br>الوحدة</th>
+                  <th style="width: 45%;">DESCRIPTION<br>التفاصيل</th>
+                  <th style="width: 25%;">Qty.<br>الكمية</th>
+                </tr>
+              </thead>
+              <tbody>
+                ${itemsHTML}
+              </tbody>
+            </table>
+
+            <div class="footer-section">
+              <div class="footer-row">
+                <div>Received the goods in good Condition</div>
+                <div style="margin-top: 5px;">استلمت البضاعة اعلاه بحالة جيدة</div>
+              </div>
+              
+              <div class="signature-section">
+                <div class="signature-field">
+                  <div>Salesman</div>
+                </div>
+                <div class="signature-field">
+                  <div>Stamp</div>
+                </div>
+                <div class="signature-field">
+                  <div>Received By</div>
+                </div>
+              </div>
+
+              <div class="disclaimer">
+                <div>The Factory is not Responsible for any Payment Paid to our Staff Without Receipt Voucher issued by us.</div>
+                <div style="margin-top: 5px;">المصنع غير مسؤول عن أي دفعات مالية تسدد لمندوبنا بدون سند استلام نقدية صادر من قبلنا.</div>
+                <div style="margin-top: 10px; font-size: 7px;">AGW-AC-FM-05A REV.01</div>
+              </div>
+            </div>
+          </div>
+        </body>
+      </html>
+    `;
+  }, [cartItems, shippingDetails, orderId, invoiceNumber]);
 
   const generateReceiptHTML = useCallback(() => {
     const itemsHTML = cartItems.map(item => {
@@ -77,6 +323,9 @@ const PaymentReceipt: React.FC = () => {
         </tr>
       `;
     }).filter(Boolean).join('');
+
+    // Rent items are not shown in receipt
+    const rentItemsHTML = '';
 
     const currentDate = new Date();
     const dateStr = currentDate.toISOString().split('T')[0];
@@ -212,7 +461,7 @@ const PaymentReceipt: React.FC = () => {
               </div>
               <div class="info-row">
                 <span class="info-label">Invoice No:</span>
-                <span>${orderId}</span>
+                <span>${invoiceNumber}</span>
               </div>
               <div class="info-row">
                 <span class="info-label">Customer:</span>
@@ -251,6 +500,7 @@ const PaymentReceipt: React.FC = () => {
             </thead>
             <tbody>
               ${itemsHTML}
+              ${rentItemsHTML}
             </tbody>
           </table>
 
@@ -278,15 +528,16 @@ const PaymentReceipt: React.FC = () => {
         </body>
       </html>
     `;
-  }, [cartItems, shippingDetails, selectedPaymentMethod, subtotal, vat, totalWithVat, orderId]);
+  }, [cartItems, shippingDetails, selectedPaymentMethod, subtotal, vat, totalWithVat, orderId, invoiceNumber, orderDetail]);
 
   const handleDownloadInvoice = useCallback(async () => {
     if (isDownloading) return; // Prevent multiple simultaneous downloads
     
     setIsDownloading(true);
     try {
-      console.log('Starting invoice download...');
-      const html = generateReceiptHTML();
+      console.log('Starting document download...');
+      const html = isDeliveryNote ? generateDeliveryNoteHTML() : generateReceiptHTML();
+      const documentType = isDeliveryNote ? 'Delivery_Note' : 'Invoice';
       
       // Generate PDF
       const { uri } = await Print.printToFileAsync({ 
@@ -298,7 +549,7 @@ const PaymentReceipt: React.FC = () => {
       
       // Create a unique filename
       const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
-      const newPath = `${FileSystem.documentDirectory}Invoice_${orderId}_${timestamp}.pdf`;
+      const newPath = `${FileSystem.documentDirectory}${documentType}_${orderId}_${timestamp}.pdf`;
       
       // Move file to permanent location
       await FileSystem.moveAsync({
@@ -312,34 +563,34 @@ const PaymentReceipt: React.FC = () => {
       if (await Sharing.isAvailableAsync()) {
         await Sharing.shareAsync(newPath, {
           mimeType: 'application/pdf',
-          dialogTitle: 'Download Invoice',
+          dialogTitle: `Download ${documentType}`,
           UTI: 'com.adobe.pdf'
         });
-        console.log('Invoice shared successfully');
+        console.log(`${documentType} shared successfully`);
       } else {
         showSuccessAlert(
-          'Invoice Saved', 
-          `Invoice has been saved to your device.\nLocation: ${newPath}`
+          `${documentType} Saved`, 
+          `${documentType} has been saved to your device.\nLocation: ${newPath}`
         );
       }
     } catch (error) {
       console.error('Download error:', error);
       showErrorAlert(
         'Download Failed', 
-        'Unable to download the invoice. Please check your device storage and try again.'
+        `Unable to download the ${isDeliveryNote ? 'delivery note' : 'invoice'}. Please check your device storage and try again.`
       );
     } finally {
       setIsDownloading(false);
     }
-  }, [generateReceiptHTML, orderId, isDownloading]);
+  }, [generateReceiptHTML, generateDeliveryNoteHTML, isDeliveryNote, orderId, isDownloading]);
 
   const handlePrintInvoice = useCallback(async () => {
     if (isPrinting) return; // Prevent multiple simultaneous print requests
     
     setIsPrinting(true);
     try {
-      console.log('Starting invoice print...');
-      const html = generateReceiptHTML();
+      console.log('Starting document print...');
+      const html = isDeliveryNote ? generateDeliveryNoteHTML() : generateReceiptHTML();
       
       // Try different approaches based on platform
       try {
@@ -372,7 +623,7 @@ const PaymentReceipt: React.FC = () => {
     } finally {
       setIsPrinting(false);
     }
-  }, [generateReceiptHTML, isPrinting]);
+  }, [generateReceiptHTML, generateDeliveryNoteHTML, isDeliveryNote, isPrinting]);
 
   const handleBackToHome = useCallback(async () => {
     if (isNavigating) return; // Prevent multiple navigation attempts
@@ -397,6 +648,32 @@ const PaymentReceipt: React.FC = () => {
     }
   }, [router, isNavigating]);
 
+  // If rent-items-only, show message and redirect
+  useEffect(() => {
+    if (isRentItemsOnly) {
+      showSuccessAlert(
+        'Delivery Confirmed',
+        'This delivery contains only rent items. No receipt is available.',
+        [{ text: 'OK', onPress: () => router.push('/(root)/(tabs)/home') }]
+      );
+    }
+  }, [isRentItemsOnly, router]);
+
+  if (isRentItemsOnly) {
+    
+    return (
+      <View style={{ flex: 1, backgroundColor: '#F8F9FA', justifyContent: 'center', alignItems: 'center', padding: 20 }}>
+        <Ionicons name="checkmark-circle" size={64} color="#28A745" />
+        <Text style={{ color: '#212529', fontSize: 18, fontWeight: '600', marginTop: 16, textAlign: 'center' }}>
+          Delivery Confirmed
+        </Text>
+        <Text style={{ color: '#6C757D', fontSize: 14, marginTop: 8, textAlign: 'center' }}>
+          This delivery contains only rent items.{'\n'}No receipt is available.
+        </Text>
+      </View>
+    );
+  }
+
   return (
     <View style={{ flex: 1, backgroundColor: '#F8F9FA' }}>
           {/* Header */}
@@ -412,7 +689,9 @@ const PaymentReceipt: React.FC = () => {
           <TouchableOpacity onPress={handleBackToHome} style={{ padding: 8 }}>
             <Ionicons name="home" size={24} color="#495057" />
             </TouchableOpacity>
-          <Text style={{ color: '#212529', fontSize: 18, fontWeight: '600' }}>Payment Receipt</Text>
+          <Text style={{ color: '#212529', fontSize: 18, fontWeight: '600' }}>
+            {isDeliveryNote ? 'Delivery Note' : 'Payment Receipt'}
+          </Text>
           <View style={{ width: 40 }} />
           </View>
     
@@ -453,7 +732,7 @@ const PaymentReceipt: React.FC = () => {
           marginBottom: 16,
           borderWidth: 1,
           borderColor: '#E9ECEF',
-          shadowColor: '#000',
+          shadowColor: '#1E40AF',
           shadowOffset: { width: 0, height: 2 },
           shadowOpacity: 0.05,
           shadowRadius: 8,
@@ -471,7 +750,7 @@ const PaymentReceipt: React.FC = () => {
               Al Ain, UAE
             </Text>
             <Text style={{ color: '#212529', fontSize: 14, fontWeight: '600' }}>
-              Tax Invoice
+              {isDeliveryNote ? 'Delivery Note' : 'Tax Invoice'}
             </Text>
             <Text style={{ color: '#6C757D', fontSize: 10 }}>
               TRN: 100234134300003
@@ -494,7 +773,7 @@ const PaymentReceipt: React.FC = () => {
             </View>
             <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginBottom: 4 }}>
               <Text style={{ color: '#6C757D', fontSize: 11, fontWeight: '600' }}>Invoice No:</Text>
-              <Text style={{ color: '#212529', fontSize: 11 }}>{orderId}</Text>
+              <Text style={{ color: '#212529', fontSize: 11 }}>{invoiceNumber}</Text>
             </View>
             <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginBottom: 4 }}>
               <Text style={{ color: '#6C757D', fontSize: 11, fontWeight: '600' }}>Customer:</Text>
@@ -561,6 +840,7 @@ const PaymentReceipt: React.FC = () => {
                 </View>
               );
             })}
+            
           </View>
     
           {/* Totals - Professional Invoice Format */}
@@ -569,7 +849,7 @@ const PaymentReceipt: React.FC = () => {
               <Text style={{ color: '#6C757D', fontSize: 11 }}>Subtotal (Excluding VAT):</Text>
               <Text style={{ color: '#212529', fontSize: 11 }}>AED {subtotal}</Text>
             </View>
-            <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginBottom: 8 }}>
+            <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginBottom: 4 }}>
               <Text style={{ color: '#6C757D', fontSize: 11 }}>VAT (5%):</Text>
               <Text style={{ color: '#212529', fontSize: 11 }}>AED {vat}</Text>
             </View>
@@ -613,7 +893,7 @@ const PaymentReceipt: React.FC = () => {
               justifyContent: 'center',
               borderWidth: 1,
               borderColor: isDownloading ? '#E9ECEF' : '#1976D2',
-              shadowColor: '#000',
+              shadowColor: '#1E40AF',
               shadowOffset: { width: 0, height: 2 },
               shadowOpacity: isDownloading ? 0.05 : 0.1,
               shadowRadius: 8,
@@ -633,7 +913,7 @@ const PaymentReceipt: React.FC = () => {
               <>
                 <Ionicons name="download" size={20} color="white" />
                 <Text style={{ color: 'white', fontSize: 16, fontWeight: '600', marginLeft: 8 }}>
-                  Download Invoice
+                  {isDownloading ? 'Downloading...' : `Download ${isDeliveryNote ? 'Delivery Note' : 'Invoice'}`}
                 </Text>
               </>
             )}
@@ -650,7 +930,7 @@ const PaymentReceipt: React.FC = () => {
               flexDirection: 'row',
               alignItems: 'center',
               justifyContent: 'center',
-              shadowColor: '#000',
+              shadowColor: '#1E40AF',
               shadowOffset: { width: 0, height: 1 },
               shadowOpacity: 0.05,
               shadowRadius: 4,
@@ -670,7 +950,7 @@ const PaymentReceipt: React.FC = () => {
               <>
                 <Ionicons name="print" size={20} color="#6C757D" />
                 <Text style={{ color: '#6C757D', fontSize: 16, fontWeight: '600', marginLeft: 8 }}>
-                  Print Invoice
+                  Print {isDeliveryNote ? 'Delivery Note' : 'Invoice'}
                 </Text>
               </>
             )}

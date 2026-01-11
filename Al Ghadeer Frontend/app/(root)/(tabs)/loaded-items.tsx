@@ -2,7 +2,7 @@ import { useOrderStore } from '@/store/index';
 import { authenticatedFetch } from '@/store/auth';
 import { Ionicons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
-import React, { useState, useCallback } from 'react';
+import React, { useState, useCallback, useEffect } from 'react';
 import { 
   ScrollView, 
   Text, 
@@ -31,6 +31,7 @@ interface ItemsResponse {
   success: boolean;
   message: string;
   data: Item[];
+  requires_confirm?: boolean;
 }
 
 interface ConfirmationResponse {
@@ -51,8 +52,8 @@ const LoadedItems = () => {
   const [isLoading, setIsLoading] = useState(false);
   const [isConfirming, setIsConfirming] = useState(false);
   const [isRefreshing, setIsRefreshing] = useState(false);
-  const [hasRequested, setHasRequested] = useState(false);
-  const [step, setStep] = useState<'request' | 'review' | 'done'>('request');
+  const [requiresConfirm, setRequiresConfirm] = useState(true);
+  const [step, setStep] = useState<'request' | 'review' | 'done' | 'view'>('request');
   const [isCorrect, setIsCorrect] = useState<boolean | null>(null);
 
   const totalQuantity = items.reduce((sum, item) => sum + item.quantity, 0);
@@ -78,8 +79,14 @@ const LoadedItems = () => {
       }
 
       setItems(Array.isArray(data.data) ? data.data : []);
-      setHasRequested(true);
-      setStep(data.data?.length > 0 ? 'review' : 'request');
+      const needsConfirm = data.requires_confirm !== false; // Default to true if not specified
+      setRequiresConfirm(needsConfirm);
+      
+      if (data.data?.length > 0) {
+        setStep(needsConfirm ? 'review' : 'view');
+      } else {
+        setStep('request');
+      }
       setIsCorrect(null);
     } catch (error) {
       console.error('Error fetching items:', error);
@@ -91,9 +98,9 @@ const LoadedItems = () => {
 
   const resetProcess = useCallback(() => {
     setItems([]);
-    setHasRequested(false);
     setStep('request');
     setIsCorrect(null);
+    setRequiresConfirm(true);
   }, []);
 
   const handleConfirm = useCallback(async () => {
@@ -144,6 +151,11 @@ const LoadedItems = () => {
     setIsRefreshing(false);
   }, [fetchItems]);
 
+  // Auto-fetch items on component mount
+  useEffect(() => {
+    fetchItems();
+  }, [fetchItems]);
+
   return (
     <View style={[styles.container, { paddingTop: insets.top }]}>
       {/* Header */}
@@ -178,36 +190,20 @@ const LoadedItems = () => {
           <Text style={styles.statusTitle}>
             {step === 'request' && "Today's Loading"}
             {step === 'review' && 'Review Items'}
+            {step === 'view' && 'Loaded Items'}
             {step === 'done' && 'Loading Complete'}
             </Text>
           
           <Text style={styles.statusSubtitle}>
-            {step === 'request' && 'Request items assigned for loading today'}
+            {step === 'request' && 'Loading items assigned for today...'}
             {step === 'review' && 'Verify the items match your physical count'}
+            {step === 'view' && 'Items currently loaded in your truck'}
             {step === 'done' && 'Items have been confirmed and loaded'}
               </Text>
-
-          {step === 'request' && (
-              <TouchableOpacity
-              style={styles.requestButton}
-                onPress={fetchItems}
-                disabled={isLoading}
-              activeOpacity={0.8}
-              >
-                {isLoading ? (
-                <ActivityIndicator size="small" color="#FFFFFF" />
-                ) : (
-                <>
-                  <Ionicons name="download-outline" size={20} color="#FFFFFF" />
-                  <Text style={styles.requestButtonText}>Request Items</Text>
-                </>
-              )}
-              </TouchableOpacity>
-          )}
         </View>
 
-        {/* Items List */}
-        {items.length > 0 && step === 'review' && (
+        {/* Items List - Confirmation View */}
+        {items.length > 0 && step === 'review' && requiresConfirm && (
           <>
             {/* Summary Bar */}
             <View style={styles.summaryBar}>
@@ -297,8 +293,52 @@ const LoadedItems = () => {
           </>
         )}
 
+        {/* Items List - Table View (No Confirmation Required) */}
+        {items.length > 0 && step === 'view' && !requiresConfirm && (
+          <>
+            {/* Summary Bar */}
+            <View style={styles.summaryBar}>
+              <View style={styles.summaryItem}>
+                <Text style={styles.summaryValue}>{items.length}</Text>
+                <Text style={styles.summaryLabel}>Items</Text>
+              </View>
+              <View style={styles.summaryDivider} />
+              <View style={styles.summaryItem}>
+                <Text style={styles.summaryValue}>{totalQuantity}</Text>
+                <Text style={styles.summaryLabel}>Total Units</Text>
+              </View>
+            </View>
+
+            {/* Items Table */}
+            <View style={styles.itemsSection}>
+              <Text style={styles.sectionTitle}>Items in Truck</Text>
+              
+              <View style={styles.tableContainer}>
+                <View style={styles.tableHeader}>
+                  <Text style={[styles.tableHeaderText, styles.tableColName]}>Item</Text>
+                  <Text style={[styles.tableHeaderText, styles.tableColCategory]}>Category</Text>
+                  <Text style={[styles.tableHeaderText, styles.tableColQuantity]}>Quantity</Text>
+                  <Text style={[styles.tableHeaderText, styles.tableColUnit]}>Unit</Text>
+                </View>
+                
+                {items.map((item, index) => (
+                  <View key={item.id} style={[
+                    styles.tableRow,
+                    index < items.length - 1 && styles.tableRowBorder
+                  ]}>
+                    <Text style={[styles.tableCell, styles.tableColName]}>{item.name}</Text>
+                    <Text style={[styles.tableCell, styles.tableColCategory]}>{item.category}</Text>
+                    <Text style={[styles.tableCell, styles.tableColQuantity]}>{item.quantity}</Text>
+                    <Text style={[styles.tableCell, styles.tableColUnit]}>{item.unit}</Text>
+                  </View>
+                ))}
+              </View>
+            </View>
+          </>
+        )}
+
         {/* Empty State */}
-        {hasRequested && items.length === 0 && step === 'request' && (
+        {items.length === 0 && step === 'request' && !isLoading && (
           <View style={styles.emptyState}>
             <View style={styles.emptyIcon}>
               <Ionicons name="cube-outline" size={40} color="#CBD5E1" />
@@ -307,10 +347,6 @@ const LoadedItems = () => {
             <Text style={styles.emptySubtitle}>
               Items haven't arrived yet or no items are scheduled for today
             </Text>
-            <TouchableOpacity style={styles.retryButton} onPress={fetchItems}>
-              <Ionicons name="refresh-outline" size={18} color="#64748B" />
-              <Text style={styles.retryText}>Try Again</Text>
-            </TouchableOpacity>
           </View>
         )}
 
@@ -659,6 +695,56 @@ const styles = StyleSheet.create({
     backgroundColor: '#FFFFFF',
     justifyContent: 'center',
     alignItems: 'center',
+  },
+  tableContainer: {
+    backgroundColor: '#FFFFFF',
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: '#E2E8F0',
+    overflow: 'hidden',
+  },
+  tableHeader: {
+    flexDirection: 'row',
+    backgroundColor: '#F8FAFC',
+    paddingVertical: 12,
+    paddingHorizontal: 16,
+    borderBottomWidth: 1,
+    borderBottomColor: '#E2E8F0',
+  },
+  tableHeaderText: {
+    fontSize: 11,
+    fontWeight: '600',
+    color: '#64748B',
+    textTransform: 'uppercase',
+    letterSpacing: 0.5,
+  },
+  tableColName: {
+    flex: 2,
+  },
+  tableColCategory: {
+    flex: 1.5,
+  },
+  tableColQuantity: {
+    flex: 1,
+    textAlign: 'right',
+  },
+  tableColUnit: {
+    flex: 1,
+    textAlign: 'right',
+  },
+  tableRow: {
+    flexDirection: 'row',
+    paddingVertical: 14,
+    paddingHorizontal: 16,
+    backgroundColor: '#FFFFFF',
+  },
+  tableRowBorder: {
+    borderBottomWidth: 1,
+    borderBottomColor: '#F1F5F9',
+  },
+  tableCell: {
+    fontSize: 14,
+    color: '#0F172A',
   },
 });
 
