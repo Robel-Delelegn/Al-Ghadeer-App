@@ -25,9 +25,11 @@ export default function MyMap({orders}: {orders: Order[]}) {
     const { userLongitude, userLatitude, destinationLatitude, destinationLongitude, setUserLocation } = useLocationStore();
     const { currentDriver } = useOrderStore();
     
-    // Get driver's current location
+    // Get driver's current location with continuous updates
     useEffect(() => {
-        const getDriverLocation = async () => {
+        let subscription: Location.LocationSubscription | null = null;
+
+        const startLocationTracking = async () => {
             try {
                 const { status } = await Location.requestForegroundPermissionsAsync();
                 if (status !== 'granted') {
@@ -35,13 +37,21 @@ export default function MyMap({orders}: {orders: Order[]}) {
                     return;
                 }
 
-                const location = await Location.getCurrentPositionAsync({});
+                // Start watching position with updates
+                subscription = await Location.watchPositionAsync(
+                    {
+                        accuracy: Location.Accuracy.Balanced,
+                        distanceInterval: 10, // Update every 10 meters
+                        timeInterval: 5000, // Or every 5 seconds, whichever comes first
+                    },
+                    async (location) => {
+                        try {
                 const coords = {
                     latitude: location.coords.latitude,
                     longitude: location.coords.longitude
                 };
                 
-                console.log('Driver location obtained:', coords);
+                            console.log('Driver location updated:', coords);
                 setDriverLocation(coords);
                 
                 // Also update the location store
@@ -51,13 +61,35 @@ export default function MyMap({orders}: {orders: Order[]}) {
                     longitude: coords.longitude,
                     address: `${address[0]?.name || ''}, ${address[0]?.region || ''}`
                 });
-                
+                        } catch (error) {
+                            console.error('Error processing location update:', error);
+                            // Still update location even if reverse geocoding fails
+                            const coords = {
+                                latitude: location.coords.latitude,
+                                longitude: location.coords.longitude
+                            };
+                            setDriverLocation(coords);
+                            setUserLocation({
+                                latitude: coords.latitude,
+                                longitude: coords.longitude,
+                                address: ''
+                            });
+                        }
+                    }
+                );
             } catch (error) {
-                console.error('Error getting driver location:', error);
+                console.error('Error starting location tracking:', error);
             }
         };
 
-        getDriverLocation();
+        void startLocationTracking();
+
+        // Cleanup subscription on unmount
+        return () => {
+            if (subscription) {
+                subscription.remove();
+            }
+        };
     }, [setUserLocation]);
     
     // Filter orders that have valid coordinates - handle both nested and flat structures
@@ -75,13 +107,13 @@ export default function MyMap({orders}: {orders: Order[]}) {
         const customerName = order.customer?.name || order.customer_name || 'Customer';
         
         return {
-            id: `order-${order.id}`,
-            coordinates: {
+        id: `order-${order.id}`,
+        coordinates: {
                 latitude: latitude,
                 longitude: longitude 
-            },
+        },
             title: customerName,
-            icon: icons.pin,
+        icon: icons.pin,
         };
     });
     if (Platform.OS !== 'android') {

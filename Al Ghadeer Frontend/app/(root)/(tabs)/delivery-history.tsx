@@ -1,410 +1,683 @@
 import { Order } from '@/types/order';
+import { useAuthStore, authenticatedFetch } from '@/store/auth';
+import { getTotalItemsCount } from '@/utils/orderUtils';
 import { Ionicons } from '@expo/vector-icons';
-import React, { useEffect, useMemo, useState } from 'react';
-import { ActivityIndicator, FlatList, ScrollView, Text, TextInput, TouchableOpacity, View } from 'react-native';
+import { useRouter } from 'expo-router';
+import React, { useEffect, useMemo, useState, useCallback } from 'react';
+import { 
+  ActivityIndicator, 
+  FlatList, 
+  RefreshControl,
+  Text, 
+  TextInput, 
+  TouchableOpacity, 
+  View,
+  StyleSheet,
+  Dimensions,
+  Platform,
+} from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
-const IP_ADDRESS = "10.140.136.176/api";
+const { width } = Dimensions.get('window');
+const IP_ADDRESS = process.env.EXPO_PUBLIC_IP_ADDRESS || 'http://localhost:3000/api';
 
-// API Response interface
 interface ApiResponse {
   success: boolean;
   data: Order[];
 }
 
-const getStatusStyle = (status: string) => {
-  switch (status) {
-    case 'delivered':
-      return {
-        backgroundColor: '#F0FDF4',
-        borderColor: '#10B981',
-        textColor: '#10B981',
-        iconColor: '#10B981'
-      };
-    case 'failed':
-      return {
-        backgroundColor: '#FEF2F2',
-        borderColor: '#EF4444',
-        textColor: '#EF4444',
-        iconColor: '#EF4444'
-      };
-    case 'cancelled':
-      return {
-        backgroundColor: '#F9FAFB',
-        borderColor: '#6B7280',
-        textColor: '#6B7280',
-        iconColor: '#6B7280'
-      };
-    default:
-      return {
-        backgroundColor: '#F9FAFB',
-        borderColor: '#6B7280',
-        textColor: '#6B7280',
-        iconColor: '#6B7280'
-      };
-  }
+type StatusFilter = 'all' | 'delivered' | 'failed';
+
+const statusConfig: Record<StatusFilter, { label: string; color: string; bgColor: string; icon: keyof typeof Ionicons.glyphMap }> = {
+  all: { label: 'All', color: '#1E40AF', bgColor: '#F8FAFC', icon: 'apps' },
+  delivered: { label: 'Delivered', color: '#059669', bgColor: '#ECFDF5', icon: 'checkmark-circle' },
+  failed: { label: 'Failed', color: '#DC2626', bgColor: '#FEF2F2', icon: 'close-circle' },
 };
 
 const DeliveryHistory = () => {
+  const insets = useSafeAreaInsets();
+  const router = useRouter();
   const [search, setSearch] = useState('');
-  const [statusFilter, setStatusFilter] = useState<'All' | 'delivered' | 'failed' | 'cancelled'>('All');
+  const [statusFilter, setStatusFilter] = useState<StatusFilter>('all');
   const [history, setHistory] = useState<Order[]>([]);
   const [loading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
+  const { user } = useAuthStore()
 
-  useEffect(() => {
-    // Define an async function inside useEffect
-    const fetchHistory = async () => {
-      try {
-        setLoading(true); // Start loading before fetch
+  const fetchHistory = useCallback(async () => {
+    try {
+      setLoading(true);
+      const url = `${IP_ADDRESS}/driver/history?driver_id=${user?.id}`;
+      const response = await authenticatedFetch(url);
 
-        // Build URL with driver_id parameter
-        let url = `http://${IP_ADDRESS}/driver/history`;
-        url += "?driver_id=b97f3fc1-0708-4b97-bf5d-deb424b2cd93";
+      if (!response.ok) {
+        throw new Error(`HTTP error! Status: ${response.status}`);
+      }
 
-        // Fetch data from Express API
-        const response = await fetch(url);
+      const responseData = await response.json();
+      let orders: Order[] = [];
+      
+      if (responseData.success && responseData.data) {
+        orders = responseData.data;
+      } else if (Array.isArray(responseData)) {
+        orders = responseData;
+      } else {
+        throw new Error('Invalid API response format');
+      }
 
-        // If response is not OK, throw error
-        if (!response.ok) {
-          throw new Error(`HTTP error! Status: ${response.status}`);
-        }
-
-        // Parse the new API response format
-        const apiResponse: ApiResponse = await response.json();
-        console.log('History API Response:', apiResponse);
-        
-        if (!apiResponse.success || !apiResponse.data) {
-          throw new Error('Invalid API response format');
-        }
-
-        // Keep products as-is, no transformation needed
-        const transformedHistory: Order[] = apiResponse.data.map(order => ({
+        // Normalize orders - handle both array and Record formats for products
+        const transformedHistory: Order[] = orders.map(order => ({
           ...order,
-          products: order.products || {},
+          // Keep products as-is (can be array or Record)
+          products: order.products || (Array.isArray(order.products) ? [] : {}),
+          customer: {
+            id: order.customer_id || '',
+            site_id: order.customer_site_id,
+            name: order.customer_name || '',
+            phone: order.customer_phone || '',
+            email: order.customer_email,
+            address: order.customer_address || '',
+            latitude: order.latitude || 0,
+            longitude: order.longitude || 0,
+          }
         }));
 
-        // Save fetched data into state
-        setHistory(transformedHistory);
+      setHistory(transformedHistory);
+    } catch (err) {
+      console.error('Error fetching history:', err);
+      setHistory([]);
+    } finally {
+      setLoading(false);
+      setRefreshing(false);
+    }
+  }, [user?.id]);
 
-      } catch (err) {
-        console.error('Error fetching history:', err);
-      } finally {
-        setLoading(false); // End loading whether success or failure
-      }
-    };
-    console.log("Successful fetching");
-    // Call the async function
+  const onRefresh = useCallback(() => {
+    setRefreshing(true);
     fetchHistory();
-  }, []);
+  }, [fetchHistory]);
+
+  useEffect(() => {
+    fetchHistory();
+  }, [fetchHistory]);
 
   const filtered = useMemo(() => {
     const query = search.trim().toLowerCase();
     return history.filter((item) => {
-      const customerName = item.customer?.name || item.customer_name || '';
-      const customerAddress = item.customer?.address || item.customer_address || '';
-      const customerPhone = item.customer?.phone || item.customer_phone || '';
-      const deliveryInstructions = item.customer?.delivery_instructions || item.delivery_instructions || '';
+      const customerName = item.customer_name || '';
+      const customerAddress = item.customer_address || '';
+      const customerPhone = item.customer_phone || '';
       
       const matchesQuery =
         !query ||
         customerName.toLowerCase().includes(query) ||
         customerAddress.toLowerCase().includes(query) ||
-        item.status.toLowerCase().includes(query) ||
         customerPhone.toLowerCase().includes(query) ||
-        deliveryInstructions.toLowerCase().includes(query);
+        item.order_number?.toLowerCase().includes(query);
         
-      const matchesStatus = statusFilter === 'All' || item.status === statusFilter;
+      const matchesStatus = statusFilter === 'all' || item.status === statusFilter;
       return matchesQuery && matchesStatus;
     });
   }, [search, statusFilter, history]);
 
-  const StatusPills = () => (
-    <ScrollView 
-      horizontal 
-      showsHorizontalScrollIndicator={false}
-      contentContainerStyle={{ paddingVertical: 12 }}
-    >
-      <View style={{ flexDirection: 'row', gap: 8 }}>
-        {(['All', 'delivered', 'failed', 'cancelled'] as const).map((s) => (
-          <TouchableOpacity
-            key={s}
-            style={{
-              paddingHorizontal: 16,
-              paddingVertical: 8,
-              borderRadius: 20,
-              borderWidth: 1,
-              backgroundColor: statusFilter === s ? '#10B981' : 'white',
-              borderColor: statusFilter === s ? '#10B981' : '#E5E7EB'
-            }}
-            onPress={() => setStatusFilter(s)}
-          >
-            <Text style={{
-              color: statusFilter === s ? 'white' : '#6B7280',
-              fontSize: 14,
-              fontWeight: '600'
-            }}>
-              {s.charAt(0).toUpperCase() + s.slice(1)}
-            </Text>
-          </TouchableOpacity>
-        ))}
-      </View>
-    </ScrollView>
-  );
+  const stats = useMemo(() => ({
+    total: history.length,
+    delivered: history.filter(h => h.status === 'delivered').length,
+    failed: history.filter(h => h.status === 'failed').length,
+  }), [history]);
 
-  const renderItem = ({ item }: { item: Order }) => {
-    // Calculate total items dynamically
-    const calculateTotalItems = (): number => {
-      if (item.products && typeof item.products === 'object') {
-        return Object.values(item.products).reduce((total, quantity) => {
-          return total + (typeof quantity === 'number' ? quantity : 0);
-        }, 0);
-      }
-      return 0;
-    };
+  const formatDate = useCallback((dateString: string) => {
+    const date = new Date(dateString);
+    const now = new Date();
+    const diffTime = Math.abs(now.getTime() - date.getTime());
+    const diffDays = Math.floor(diffTime / (1000 * 60 * 60 * 24));
     
-    const totalItems = calculateTotalItems();
-    const customerName = item.customer?.name || item.customer_name || 'N/A';
-    const customerAddress = item.customer?.address || item.customer_address || 'N/A';
-    const customerPhone = item.customer?.phone || item.customer_phone || 'N/A';
-    const totalAmount = item.pricing?.total_amount || item.total_amount || 0;
-    const deliveryInstructions = item.customer?.delivery_instructions || item.delivery_instructions;
-    const statusStyle = getStatusStyle(item.status);
+    if (diffDays === 0) return 'Today';
+    if (diffDays === 1) return 'Yesterday';
+    if (diffDays < 7) return `${diffDays}d ago`;
+    return date.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+  }, []);
+
+  const renderItem = useCallback(({ item }: { item: Order }) => {
+    const customerName = item.customer_name || 'Unknown';
+    const customerAddress = item.customer_address || '';
+    const totalAmount = item.total_amount || 0;
+    const config = statusConfig[item.status as StatusFilter] ;
+    
+    const totalItems = getTotalItemsCount(item);
 
     return (
-      <View style={{
-        backgroundColor: 'white',
-        borderRadius: 16,
-        padding: 20,
-        marginBottom: 16,
-        shadowColor: '#000',
-        shadowOffset: { width: 0, height: 2 },
-        shadowOpacity: 0.1,
-        shadowRadius: 4,
-        elevation: 4
-      }}>
-        {/* Header with customer name and status */}
-        <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 16 }}>
-          <View style={{ flex: 1 }}>
-            <Text style={{ color: '#111827', fontSize: 18, fontWeight: 'bold', marginBottom: 4 }}>
-              {customerName}
-            </Text>
-            <Text style={{ color: '#6B7280', fontSize: 12, fontWeight: '600' }}>
-              Order #{item.order_number}
-            </Text>
-          </View>
-          <View style={{
-            backgroundColor: statusStyle.backgroundColor,
-            borderWidth: 1,
-            borderColor: statusStyle.borderColor,
-            borderRadius: 20,
-            paddingHorizontal: 12,
-            paddingVertical: 6,
-            flexDirection: 'row',
-            alignItems: 'center'
-          }}>
-            <Ionicons 
-              name={item.status === 'delivered' ? 'checkmark-circle' : item.status === 'failed' ? 'close-circle' : 'time'} 
-              size={14} 
-              color={statusStyle.iconColor} 
-              style={{ marginRight: 4 }}
-            />
-            <Text style={{ color: statusStyle.textColor, fontSize: 12, fontWeight: '600' }}>
-              {item.status.charAt(0).toUpperCase() + item.status.slice(1).replace('_', ' ')}
-            </Text>
-          </View>
-        </View>
-
-        {/* Customer Information */}
-        <View style={{ marginBottom: 16 }}>
-          <View style={{ flexDirection: 'row', alignItems: 'flex-start', marginBottom: 8 }}>
-            <Ionicons name="location" size={16} color="#6B7280" style={{ marginTop: 2, marginRight: 8 }} />
-            <Text style={{ color: '#374151', fontSize: 14, flex: 1, lineHeight: 20 }}>
-              {customerAddress}
-            </Text>
-          </View>
-          
-          <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 8 }}>
-            <Ionicons name="call" size={16} color="#6B7280" style={{ marginRight: 8 }} />
-            <Text style={{ color: '#374151', fontSize: 14 }}>
-              {customerPhone}
-            </Text>
-          </View>
-
-          <View style={{ flexDirection: 'row', alignItems: 'center' }}>
-            <Ionicons name="cube" size={16} color="#6B7280" style={{ marginRight: 8 }} />
-            <Text style={{ color: '#374151', fontSize: 14 }}>
-              {totalItems} items • AED {totalAmount}
-            </Text>
-          </View>
-        </View>
-
-        {/* Delivery Instructions */}
-        {deliveryInstructions && (
-          <View style={{ 
-            backgroundColor: '#F9FAFB', 
-            borderRadius: 8, 
-            padding: 12, 
-            marginBottom: 16 
-          }}>
-            <Text style={{ color: '#6B7280', fontSize: 12, fontWeight: '600', marginBottom: 4 }}>
-              DELIVERY NOTES
-            </Text>
-            <Text style={{ color: '#374151', fontSize: 14, lineHeight: 20 }}>
-              {deliveryInstructions}
-            </Text>
-          </View>
-        )}
-
-        {/* Timestamps */}
-        <View style={{ borderTopWidth: 1, borderTopColor: '#E5E7EB', paddingTop: 12 }}>
-          <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}>
-            <View style={{ flex: 1 }}>
-              {item.assigned_at && (
-                <Text style={{ color: '#6B7280', fontSize: 12, marginBottom: 2 }}>
-                  Assigned: {new Date(item.assigned_at).toLocaleDateString()}
-                </Text>
-              )}
-              {item.completed_at && (
-                <Text style={{ color: '#6B7280', fontSize: 12, marginBottom: 2 }}>
-                  Completed: {new Date(item.completed_at).toLocaleDateString()}
-                </Text>
-              )}
-              {item.delivery?.delivered_at && (
-                <Text style={{ color: '#6B7280', fontSize: 12 }}>
-                  Delivered: {new Date(item.delivery.delivered_at).toLocaleDateString()}
-                </Text>
-              )}
+      <TouchableOpacity 
+        style={styles.card}
+        activeOpacity={0.7}
+        onPress={() => {}}
+      >
+        {/* Status Strip */}
+        <View style={[styles.statusStrip, { backgroundColor: config.color }]} />
+        
+        <View style={styles.cardContent}>
+          {/* Top Row */}
+          <View style={styles.cardTopRow}>
+            <View style={styles.orderIdContainer}>
+              <Text style={styles.orderId}>{item.order_number}</Text>
             </View>
-            <View style={{ alignItems: 'flex-end' }}>
-              <Text style={{ color: '#10B981', fontSize: 16, fontWeight: 'bold' }}>
-                AED {totalAmount}
+            <View style={[styles.statusChip, { backgroundColor: config.bgColor }]}>
+              <View style={[styles.statusDot, { backgroundColor: config.color }]} />
+              <Text style={[styles.statusLabel, { color: config.color }]}>
+                {config.label}
               </Text>
             </View>
           </View>
-        </View>
-      </View>
-    );
-  };
 
+          {/* Customer Info */}
+          <View style={styles.customerSection}>
+            <View style={styles.avatarContainer}>
+              <View style={styles.avatar}>
+                <Text style={styles.avatarText}>
+                  {customerName.charAt(0).toUpperCase()}
+                </Text>
+              </View>
+            </View>
+            <View style={styles.customerDetails}>
+              <Text style={styles.customerName} numberOfLines={1}>
+                {customerName}
+              </Text>
+              <Text style={styles.customerAddress} numberOfLines={1}>
+                {customerAddress || 'No address'}
+              </Text>
+            </View>
+          </View>
+
+          {/* Metrics Row */}
+          <View style={styles.metricsRow}>
+            <View style={styles.metric}>
+              <View style={styles.metricIcon}>
+                <Ionicons name="cube-outline" size={14} color="#64748B" />
+              </View>
+              <Text style={styles.metricValue}>{totalItems}</Text>
+              <Text style={styles.metricLabel}>items</Text>
+            </View>
+            <View style={styles.metricDivider} />
+            <View style={styles.metric}>
+              <View style={styles.metricIcon}>
+                <Ionicons name="wallet-outline" size={14} color="#64748B" />
+              </View>
+              <Text style={styles.metricValueHighlight}>AED {totalAmount}</Text>
+            </View>
+          </View>
+        </View>
+      </TouchableOpacity>
+    );
+  }, [formatDate]);
 
   return (
-    <View style={{ flex: 1, backgroundColor: '#F9FAFB' }}>
+    <View style={[styles.container, { paddingTop: insets.top }]}>
       {/* Header */}
-      <View style={{ 
-        backgroundColor: '#10B981', 
-        paddingHorizontal: 20, 
-        paddingTop: 16, 
-        paddingBottom: 20,
-        shadowColor: '#000',
-        shadowOffset: { width: 0, height: 2 },
-        shadowOpacity: 0.1,
-        shadowRadius: 4,
-        elevation: 4
-      }}>
-        <Text style={{ color: 'white', fontSize: 20, fontWeight: 'bold', textAlign: 'center' }}>
-          Delivery History
-        </Text>
-        <Text style={{ color: 'rgba(255, 255, 255, 0.8)', fontSize: 14, textAlign: 'center', marginTop: 4 }}>
-          {filtered.length} deliveries found
-        </Text>
+      <View style={styles.header}>
+        <TouchableOpacity 
+          style={styles.backButton} 
+          onPress={() => router.back()}
+          activeOpacity={0.7}
+        >
+          <Ionicons name="chevron-back" size={20} color="#1E40AF" />
+        </TouchableOpacity>
+        <View style={styles.headerTitleContainer}>
+          <Text style={styles.headerTitle}>History</Text>
+        </View>
+        <View style={styles.headerRight} />
       </View>
 
-      {/* Search and Filters */}
-      <View style={{ padding: 20, paddingBottom: 0 }}>
-        {/* Search Bar */}
-        <View style={{
-          backgroundColor: 'white',
-          borderRadius: 16,
-          paddingHorizontal: 16,
-          paddingVertical: 12,
-          flexDirection: 'row',
-          alignItems: 'center',
-          marginBottom: 16,
-          shadowColor: '#000',
-          shadowOffset: { width: 0, height: 2 },
-          shadowOpacity: 0.1,
-          shadowRadius: 4,
-          elevation: 4
-        }}>
-          <Ionicons name="search" size={20} color="#6B7280" style={{ marginRight: 12 }} />
+      {/* Stats Overview */}
+      <View style={styles.statsContainer}>
+        <View style={styles.statsCard}>
+          <View style={styles.statBlock}>
+            <Text style={styles.statNumber}>{stats.total}</Text>
+            <Text style={styles.statLabel}>Total</Text>
+          </View>
+          <View style={styles.statDivider} />
+          <View style={styles.statBlock}>
+            <Text style={[styles.statNumber, { color: '#059669' }]}>{stats.delivered}</Text>
+            <Text style={styles.statLabel}>Delivered</Text>
+          </View>
+          <View style={styles.statDivider} />
+          <View style={styles.statBlock}>
+            <Text style={[styles.statNumber, { color: '#DC2626' }]}>{stats.failed}</Text>
+            <Text style={styles.statLabel}>Failed</Text>
+          </View>
+        </View>
+      </View>
+
+      {/* Search */}
+      <View style={styles.searchSection}>
+        <View style={styles.searchBar}>
+          <Ionicons name="search" size={18} color="#9CA3AF" />
           <TextInput
-            style={{ flex: 1, fontSize: 16, color: '#111827' }}
-            placeholder="Search by customer, address, or status..."
+            style={styles.searchInput}
+            placeholder="Search by name, order, address..."
             placeholderTextColor="#9CA3AF"
             value={search}
             onChangeText={setSearch}
           />
           {search.length > 0 && (
-            <TouchableOpacity onPress={() => setSearch('')} style={{ padding: 4 }}>
-              <Ionicons name="close" size={20} color="#6B7280" />
+            <TouchableOpacity 
+              onPress={() => setSearch('')} 
+              hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}
+            >
+              <View style={styles.clearButton}>
+                <Ionicons name="close" size={12} color="#6B7280" />
+              </View>
             </TouchableOpacity>
           )}
         </View>
+      </View>
 
-        {/* Status Pills */}
-        <StatusPills />
+      {/* Filter Pills */}
+      <View style={styles.filterRow}>
+        {(Object.keys(statusConfig) as StatusFilter[]).map((status) => {
+          const config = statusConfig[status];
+          const isActive = statusFilter === status;
+          return (
+            <TouchableOpacity
+              key={status}
+              style={[
+                styles.filterPill,
+                isActive && styles.filterPillActive,
+              ]}
+              onPress={() => setStatusFilter(status)}
+              activeOpacity={0.7}
+            >
+              <Text style={[
+                styles.filterPillText,
+                isActive && styles.filterPillTextActive
+              ]}>
+                {config.label}
+              </Text>
+            </TouchableOpacity>
+          );
+        })}
       </View>
 
       {/* Content */}
       {loading ? (
-        <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center' }}>
-          <View style={{
-            backgroundColor: 'white',
-            borderRadius: 20,
-            padding: 32,
-            alignItems: 'center',
-            shadowColor: '#000',
-            shadowOffset: { width: 0, height: 4 },
-            shadowOpacity: 0.1,
-            shadowRadius: 8,
-            elevation: 8
-          }}>
-            <ActivityIndicator size="large" color="#10B981" />
-            <Text style={{ color: '#6B7280', fontSize: 16, marginTop: 16, fontWeight: '500' }}>
-              Loading delivery history...
-            </Text>
+        <View style={styles.loadingContainer}>
+          <View style={styles.loadingIndicator}>
+            <ActivityIndicator size="large" color="#1E40AF" />
           </View>
+          <Text style={styles.loadingText}>Loading history...</Text>
         </View>
       ) : (
         <FlatList
           data={filtered}
           keyExtractor={(item) => item.id.toString()}
           renderItem={renderItem}
-          contentContainerStyle={{ padding: 20, paddingBottom: 120 }}
+          contentContainerStyle={styles.listContent}
+          showsVerticalScrollIndicator={false}
+          refreshControl={
+            <RefreshControl
+              refreshing={refreshing}
+              onRefresh={onRefresh}
+              tintColor="#1E40AF"
+              colors={["#1E40AF"]}
+            />
+          }
           ListEmptyComponent={
-            <View style={{
-              flex: 1,
-              alignItems: 'center',
-              justifyContent: 'center',
-              paddingVertical: 60
-            }}>
-              <View style={{
-                backgroundColor: 'white',
-                borderRadius: 20,
-                padding: 32,
-                alignItems: 'center',
-                shadowColor: '#000',
-                shadowOffset: { width: 0, height: 4 },
-                shadowOpacity: 0.1,
-                shadowRadius: 8,
-                elevation: 8
-              }}>
-                <Ionicons name="time" size={48} color="#9CA3AF" />
-                <Text style={{ color: '#6B7280', fontSize: 18, fontWeight: '600', marginTop: 16, textAlign: 'center' }}>
-                  No delivery history found
-                </Text>
-                <Text style={{ color: '#9CA3AF', fontSize: 14, marginTop: 8, textAlign: 'center' }}>
-                  {search ? 'Try adjusting your search criteria' : 'Your completed deliveries will appear here'}
-                </Text>
+            <View style={styles.emptyContainer}>
+              <View style={styles.emptyIconContainer}>
+                <Ionicons name="time-outline" size={44} color="#D1D5DB" />
               </View>
+              <Text style={styles.emptyTitle}>No deliveries found</Text>
+              <Text style={styles.emptySubtitle}>
+                {search ? 'Try adjusting your search' : 'Completed deliveries will appear here'}
+              </Text>
             </View>
           }
-          showsVerticalScrollIndicator={false}
         />
       )}
     </View>
   );
 };
 
+const styles = StyleSheet.create({
+  container: {
+    flex: 1,
+    backgroundColor: '#FAFBFC',
+  },
+  header: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingHorizontal: 20,
+    paddingTop: 8,
+    paddingBottom: 12,
+    backgroundColor: '#FFFFFF',
+  },
+  backButton: {
+    width: 36,
+    height: 36,
+    borderRadius: 10,
+    backgroundColor: '#F3F4F6',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  headerTitleContainer: {
+    alignItems: 'center',
+  },
+  headerTitle: {
+    fontSize: 17,
+    fontWeight: '600',
+    color: '#1E40AF',
+    letterSpacing: -0.4,
+  },
+  headerRight: {
+    width: 36,
+  },
+  statsContainer: {
+    paddingHorizontal: 20,
+    paddingTop: 16,
+    paddingBottom: 20,
+    backgroundColor: '#FFFFFF',
+    borderBottomWidth: 1,
+    borderBottomColor: '#F3F4F6',
+  },
+  statsCard: {
+    flexDirection: 'row',
+    backgroundColor: '#F9FAFB',
+    borderRadius: 16,
+    paddingVertical: 20,
+  },
+  statBlock: {
+    flex: 1,
+    alignItems: 'center',
+  },
+  statNumber: {
+    fontSize: 28,
+    fontWeight: '700',
+    color: '#1E40AF',
+    letterSpacing: -1,
+  },
+  statLabel: {
+    fontSize: 12,
+    fontWeight: '500',
+    color: '#6B7280',
+    marginTop: 4,
+    letterSpacing: 0.2,
+  },
+  statDivider: {
+    width: 1,
+    height: 40,
+    backgroundColor: '#E5E7EB',
+  },
+  searchSection: {
+    paddingHorizontal: 20,
+    paddingTop: 16,
+    paddingBottom: 12,
+    backgroundColor: '#FFFFFF',
+  },
+  searchBar: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#F3F4F6',
+    borderRadius: 12,
+    paddingHorizontal: 14,
+    height: 44,
+    gap: 10,
+  },
+  searchInput: {
+    flex: 1,
+    fontSize: 15,
+    color: '#1E40AF',
+    fontWeight: '400',
+  },
+  clearButton: {
+    width: 20,
+    height: 20,
+    borderRadius: 10,
+    backgroundColor: '#E5E7EB',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  filterRow: {
+    flexDirection: 'row',
+    paddingHorizontal: 20,
+    paddingTop: 4,
+    paddingBottom: 16,
+    gap: 8,
+    backgroundColor: '#FFFFFF',
+  },
+  filterPill: {
+    paddingHorizontal: 16,
+    paddingVertical: 8,
+    borderRadius: 20,
+    backgroundColor: '#F3F4F6',
+  },
+  filterPillActive: {
+    backgroundColor: '#2563EB',
+  },
+  filterPillText: {
+    fontSize: 13,
+    fontWeight: '500',
+    color: '#6B7280',
+  },
+  filterPillTextActive: {
+    color: '#FFFFFF',
+  },
+  listContent: {
+    paddingHorizontal: 20,
+    paddingTop: 16,
+    paddingBottom: 100,
+  },
+  card: {
+    backgroundColor: '#FFFFFF',
+    borderRadius: 16,
+    marginBottom: 12,
+    overflow: 'hidden',
+    ...Platform.select({
+      ios: {
+        shadowColor: '#1E40AF',
+        shadowOffset: { width: 0, height: 2 },
+        shadowOpacity: 0.04,
+        shadowRadius: 8,
+      },
+      android: {
+        elevation: 2,
+      },
+    }),
+  },
+  statusStrip: {
+    height: 3,
+    width: '100%',
+  },
+  cardContent: {
+    padding: 16,
+  },
+  cardTopRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginBottom: 14,
+  },
+  orderIdContainer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+  },
+  orderId: {
+    fontSize: 15,
+    fontWeight: '700',
+    color: '#1E40AF',
+    letterSpacing: -0.3,
+  },
+  dateBadge: {
+    backgroundColor: '#F3F4F6',
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    borderRadius: 6,
+  },
+  dateText: {
+    fontSize: 11,
+    fontWeight: '500',
+    color: '#6B7280',
+  },
+  statusChip: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    borderRadius: 8,
+    gap: 6,
+  },
+  statusDot: {
+    width: 6,
+    height: 6,
+    borderRadius: 3,
+  },
+  statusLabel: {
+    fontSize: 12,
+    fontWeight: '600',
+  },
+  customerSection: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginBottom: 14,
+  },
+  avatarContainer: {
+    marginRight: 12,
+  },
+  avatar: {
+    width: 40,
+    height: 40,
+    borderRadius: 12,
+    backgroundColor: '#F3F4F6',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  avatarText: {
+    fontSize: 16,
+    fontWeight: '600',
+    color: '#6B7280',
+  },
+  customerDetails: {
+    flex: 1,
+  },
+  customerName: {
+    fontSize: 15,
+    fontWeight: '600',
+    color: '#1E40AF',
+    marginBottom: 2,
+  },
+  customerAddress: {
+    fontSize: 13,
+    color: '#6B7280',
+  },
+  metricsRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#F9FAFB',
+    borderRadius: 10,
+    paddingVertical: 10,
+    paddingHorizontal: 14,
+  },
+  metric: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+  },
+  metricIcon: {
+    width: 24,
+    height: 24,
+    borderRadius: 6,
+    backgroundColor: '#FFFFFF',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  metricValue: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: '#1E40AF',
+  },
+  metricValueHighlight: {
+    fontSize: 14,
+    fontWeight: '700',
+    color: '#059669',
+  },
+  metricLabel: {
+    fontSize: 12,
+    color: '#6B7280',
+  },
+  metricDivider: {
+    width: 1,
+    height: 20,
+    backgroundColor: '#E5E7EB',
+    marginHorizontal: 12,
+  },
+  loadingContainer: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+    paddingBottom: 100,
+  },
+  loadingIndicator: {
+    width: 64,
+    height: 64,
+    borderRadius: 20,
+    backgroundColor: '#FFFFFF',
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginBottom: 16,
+    ...Platform.select({
+      ios: {
+        shadowColor: '#1E40AF',
+        shadowOffset: { width: 0, height: 4 },
+        shadowOpacity: 0.08,
+        shadowRadius: 12,
+      },
+      android: {
+        elevation: 4,
+      },
+    }),
+  },
+  loadingText: {
+    fontSize: 14,
+    fontWeight: '500',
+    color: '#6B7280',
+  },
+  emptyContainer: {
+    alignItems: 'center',
+    paddingVertical: 60,
+  },
+  emptyIconContainer: {
+    width: 88,
+    height: 88,
+    borderRadius: 28,
+    backgroundColor: '#FFFFFF',
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginBottom: 20,
+    ...Platform.select({
+      ios: {
+        shadowColor: '#1E40AF',
+        shadowOffset: { width: 0, height: 4 },
+        shadowOpacity: 0.06,
+        shadowRadius: 12,
+      },
+      android: {
+        elevation: 3,
+      },
+    }),
+  },
+  emptyTitle: {
+    fontSize: 17,
+    fontWeight: '600',
+    color: '#1E40AF',
+    marginBottom: 6,
+  },
+  emptySubtitle: {
+    fontSize: 14,
+    color: '#9CA3AF',
+    textAlign: 'center',
+    maxWidth: 240,
+  },
+});
+
 export default DeliveryHistory;
-
-

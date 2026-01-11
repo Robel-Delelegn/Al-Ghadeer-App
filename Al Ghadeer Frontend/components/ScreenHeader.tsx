@@ -17,11 +17,11 @@ const ScreenHeader: React.FC<ScreenHeaderProps> = ({ title, showBack = true, rig
       <View className="w-8">
         {showBack && (
           <TouchableOpacity onPress={() => router.back()} className="pt-10 -ml-2">
-            <Ionicons name="arrow-back" size={24} color="#0F172A" />
+            <Ionicons name="arrow-back" size={24} color="#1E40AF" />
           </TouchableOpacity>
         )}
       </View>
-      <Text className="text-[#0F172A] text-xl font-JakartaSemiBold pt-10">{title}</Text>
+      <Text className="text-[#1E40AF] text-xl font-JakartaSemiBold pt-10">{title}</Text>
       <View className="w-8">{right}</View>
     </BlurView>
   );

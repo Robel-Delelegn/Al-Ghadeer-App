@@ -1,5 +1,3 @@
-import { ClerkProvider } from '@clerk/clerk-expo';
-import { tokenCache } from '@clerk/clerk-expo/token-cache';
 import { useFonts } from 'expo-font';
 import { SplashScreen, Stack } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
@@ -9,6 +7,8 @@ import { View, ActivityIndicator } from 'react-native';
 import 'react-native-reanimated';
 import { appTheme } from '../theme/paper';
 import './global.css';
+import CustomAlert from '@/components/CustomAlert';
+import { useAlertStore } from '@/store/alert';
 
 SplashScreen.preventAutoHideAsync();
 
@@ -22,6 +22,8 @@ export default function RootLayout() {
     'Jakarta-Regular': require('../assets/fonts/PlusJakartaSans-Regular.ttf'),
     'Jakarta-SemiBold': require('../assets/fonts/PlusJakartaSans-SemiBold.ttf'),
   });
+
+  const { visible, config, hideAlert } = useAlertStore();
 
   useEffect(() => {
     if (loaded) {
@@ -38,10 +40,6 @@ export default function RootLayout() {
   }
 
   return (
-    <ClerkProvider 
-      publishableKey={process.env.EXPO_PUBLIC_CLERK_PUBLISHABLE_KEY!}
-      tokenCache={tokenCache}
-    >
       <PaperProvider theme={appTheme}>
         <StatusBar style="dark" />
         <Stack>
@@ -50,7 +48,7 @@ export default function RootLayout() {
           <Stack.Screen name="(auth)" options={{ headerShown: false }} />
           <Stack.Screen name="+not-found" />
         </Stack>
+        <CustomAlert visible={visible} config={config} onClose={hideAlert} />
       </PaperProvider>
-    </ClerkProvider>
   );
 }

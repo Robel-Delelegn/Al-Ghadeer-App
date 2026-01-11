@@ -1,453 +1,379 @@
-import ScreenHeader from '@/components/ScreenHeader';
 import { icons } from '@/constants';
 import { useOrderStore } from '@/store/index';
-import { useAuth, useUser } from '@clerk/clerk-expo';
+import { useAuthStore } from '@/store/auth';
 import { Ionicons } from '@expo/vector-icons';
 import { useRouter } from "expo-router";
 import React, { useMemo } from 'react';
-import { Image, Text, TouchableOpacity, View, ScrollView, Dimensions } from 'react-native';
-
-const { width } = Dimensions.get('window');
+import { 
+  Image, 
+  Text, 
+  TouchableOpacity, 
+  View, 
+  ScrollView, 
+  StyleSheet,
+} from 'react-native';
+import { showWarningAlert } from '@/store/utils/alert';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 const Profile = () => {
-  const router = useRouter()
-  const { user } = useUser();
-  const { signOut } = useAuth();
+  const insets = useSafeAreaInsets();
+  const router = useRouter();
+  const { user, signOut } = useAuthStore();
   const { assignedOrders, currentDriver, getDriverMetrics } = useOrderStore();
 
   const onLogOut = () => {
-    signOut();
-    router.push("/")
-  }
+    showWarningAlert(
+      'Sign Out',
+      'Are you sure you want to sign out?',
+      [
+        { text: 'Cancel', style: 'cancel' },
+        { 
+          text: 'Sign Out', 
+          style: 'destructive',
+          onPress: async () => {
+            await signOut();
+            router.replace("/");
+          }
+        }
+      ]
+    );
+  };
 
-  const avatar = currentDriver?.profile_image || user?.imageUrl || icons.person;
-  const driverName = currentDriver?.name || user?.fullName || user?.username || user?.emailAddresses?.[0]?.emailAddress?.split('@')[0] || 'Driver';
-  const email = currentDriver?.email || user?.emailAddresses?.[0]?.emailAddress || 'Not set';
-  const phone = currentDriver?.phone || user?.primaryPhoneNumber?.phoneNumber || user?.phoneNumbers?.[0]?.phoneNumber || 'Not set';
-  const memberSince = currentDriver?.account.joined_date ? new Date(currentDriver.account.joined_date).toLocaleDateString() : '—';
-  const vehicleInfo = currentDriver?.vehicle ? `${currentDriver.vehicle.model} (${currentDriver.vehicle.plate_number})` : 'Not set';
+  const avatar = currentDriver?.profile_image || icons.person;
+  const driverName = currentDriver?.name || user?.name || user?.name || 'Driver';
+  const helperName = currentDriver?.helper_name || user?.helper_name;
+  const helperPhone = (currentDriver as any)?.helper_phone || '—';
+  const phone = currentDriver?.phone || user?.phone || '—';
+  const vehicleType = currentDriver?.vehicle?.type || user?.vehicle_type || '—';
+  const vehiclePlate = currentDriver?.vehicle?.plate_number || user?.vehicle_number || '—';
+  const zone = (currentDriver as any)?.zone || user?.zone || '—';
+  const status = currentDriver?.status || 'online';
 
   const stats = useMemo(() => {
-    const total = assignedOrders.length;
-    const delivered = assignedOrders.filter(o => o.status === 'delivered').length;
-    const failed = assignedOrders.filter(o => o.status === 'failed').length;
-    const inProgress = assignedOrders.filter(o => o.status === 'in_progress').length;
-    const pending = assignedOrders.filter(o => o.status === 'pending').length;
-    return { total, delivered, failed, inProgress, pending };
+    const delivered = assignedOrders.filter(o => o.status === 'delivered').length;;
+    const pending = assignedOrders.filter(o => o.status === 'pending' || o.status === 'assigned').length;
+    return { delivered, pending };
   }, [assignedOrders]);
 
-  const driverMetrics = getDriverMetrics();
+
+  const getStatusConfig = () => {
+    switch (status) {
+      case 'online': return { color: '#10B981', bg: '#ECFDF5', label: 'Online' };
+      default: return { color: '#64748B', bg: '#F1F5F9', label: 'Offline' };
+    }
+  };
+
+  const statusConfig = getStatusConfig();
+
+  const InfoItem = ({ icon, label, value }: { 
+    icon: keyof typeof Ionicons.glyphMap; 
+    label: string; 
+    value: string;
+  }) => (
+    <View style={styles.infoItem}>
+      <View style={styles.infoIcon}>
+        <Ionicons name={icon} size={18} color="#64748B" />
+      </View>
+      <View style={styles.infoContent}>
+        <Text style={styles.infoLabel}>{label}</Text>
+        <Text style={styles.infoValue}>{value}</Text>
+      </View>
+    </View>
+  );
 
   return (
-    <View style={{ flex: 1, backgroundColor: '#F8F9FA' }}>
-      {/* Custom Header */}
-      <View style={{ 
-        backgroundColor: '#FFFFFF', 
-        paddingHorizontal: 20, 
-        paddingTop: 16, 
-        paddingBottom: 20,
-        borderBottomWidth: 1,
-        borderBottomColor: '#E9ECEF',
-        shadowColor: '#000',
-        shadowOffset: { width: 0, height: 2 },
-        shadowOpacity: 0.05,
-        shadowRadius: 4,
-        elevation: 2
-      }}>
-        <Text style={{ color: '#212529', fontSize: 24, fontWeight: '700', textAlign: 'center' }}>
-          Profile
-        </Text>
-      </View>
-
+    <View style={[styles.container, { paddingTop: insets.top }]}>
       <ScrollView 
-        style={{ flex: 1 }}
-        contentContainerStyle={{ padding: 20, paddingBottom: 120 }}
+        style={styles.scrollView}
+        contentContainerStyle={styles.scrollContent}
         showsVerticalScrollIndicator={false}
       >
-        {/* Profile Header Card */}
-        <View style={{ 
-          backgroundColor: '#FFFFFF', 
-          borderRadius: 16, 
-          padding: 24, 
-          marginBottom: 20,
-          borderWidth: 1,
-          borderColor: '#E9ECEF',
-          shadowColor: '#000',
-          shadowOffset: { width: 0, height: 4 },
-          shadowOpacity: 0.08,
-          shadowRadius: 12,
-          elevation: 4
-        }}>
-          <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 16 }}>
-            <View style={{
-              width: 80,
-              height: 80,
-              borderRadius: 40,
-              backgroundColor: '#F8F9FA',
-              borderWidth: 3,
-              borderColor: '#1976D2',
-              alignItems: 'center',
-              justifyContent: 'center',
-              marginRight: 16,
-              shadowColor: '#1976D2',
-              shadowOffset: { width: 0, height: 2 },
-              shadowOpacity: 0.2,
-              shadowRadius: 8,
-              elevation: 4
-            }}>
-              <Image
-                source={typeof avatar === 'string' ? { uri: avatar } : avatar}
-                style={{ width: 70, height: 70, borderRadius: 35 }}
-              />
-            </View>
-            <View style={{ flex: 1 }}>
-              <Text style={{ color: '#212529', fontSize: 22, fontWeight: '700', marginBottom: 4 }} numberOfLines={1}>
-                {driverName}
-              </Text>
-              <Text style={{ color: '#6C757D', fontSize: 14, marginBottom: 2 }} numberOfLines={1}>
-                {email}
-              </Text>
-              <View style={{ flexDirection: 'row', alignItems: 'center' }}>
-                <Ionicons name="calendar" size={14} color="#6C757D" />
-                <Text style={{ color: '#6C757D', fontSize: 12, marginLeft: 4 }}>
-                  Member since {memberSince}
-                </Text>
-              </View>
-            </View>
+        {/* Profile Header */}
+        <View style={styles.header}>
+          <View style={styles.avatarContainer}>
+            <Image
+              source={typeof avatar === 'string' ? { uri: avatar } : avatar}
+              style={styles.avatar}
+            />
+            <View style={[styles.statusIndicator, { backgroundColor: statusConfig.color }]} />
           </View>
-          
+
+          <Text style={styles.name}>{driverName}</Text>
+          {helperName && (
+            <Text style={styles.helperName}>Helper: {helperName}</Text>
+          )}
+
           {/* Status Badge */}
-          <View style={{
-            backgroundColor: currentDriver?.status === 'active' ? '#E8F5E8' : '#FFF3E0',
-            borderRadius: 20,
-            paddingHorizontal: 12,
-            paddingVertical: 6,
-            alignSelf: 'flex-start',
-            borderWidth: 1,
-            borderColor: currentDriver?.status === 'active' ? '#C8E6C9' : '#FFE0B2'
-          }}>
-            <Text style={{ 
-              color: currentDriver?.status === 'active' ? '#2E7D32' : '#F57C00', 
-              fontSize: 12, 
-              fontWeight: '600' 
-            }}>
-              {currentDriver?.status === 'active' ? '● Active' : '● Inactive'}
+          <View style={[styles.statusBadge, { backgroundColor: statusConfig.bg }]}>
+            <View style={[styles.statusDot, { backgroundColor: statusConfig.color }]} />
+            <Text style={[styles.statusText, { color: statusConfig.color }]}>
+              {statusConfig.label}
             </Text>
           </View>
         </View>
 
-        {/* Stats Cards */}
-        <View style={{ flexDirection: 'row', gap: 12, marginBottom: 20 }}>
-          <View style={{ 
-            flex: 1, 
-            backgroundColor: '#FFFFFF', 
-            borderRadius: 12, 
-            padding: 16, 
-            alignItems: 'center',
-            borderWidth: 1,
-            borderColor: '#E9ECEF',
-            shadowColor: '#000',
-            shadowOffset: { width: 0, height: 2 },
-            shadowOpacity: 0.05,
-            shadowRadius: 8,
-            elevation: 2
-          }}>
-            <View style={{
-              width: 40,
-              height: 40,
-              borderRadius: 20,
-              backgroundColor: '#E8F5E8',
-              alignItems: 'center',
-              justifyContent: 'center',
-              marginBottom: 8
-            }}>
-              <Ionicons name="checkmark-circle" size={20} color="#28A745" />
-            </View>
-            <Text style={{ color: '#212529', fontSize: 20, fontWeight: '700', marginBottom: 2 }}>
-              {stats.delivered}
-            </Text>
-            <Text style={{ color: '#6C757D', fontSize: 12, fontWeight: '500' }}>Delivered</Text>
+        {/* Stats Section */}
+        <View style={styles.statsContainer}>
+          <View style={styles.statItem}>
+            <Text style={styles.statValue}>{stats.delivered}</Text>
+            <Text style={styles.statLabel}>Delivered</Text>
           </View>
-          
-          <View style={{ 
-            flex: 1, 
-            backgroundColor: '#FFFFFF', 
-            borderRadius: 12, 
-            padding: 16, 
-            alignItems: 'center',
-            borderWidth: 1,
-            borderColor: '#E9ECEF',
-            shadowColor: '#000',
-            shadowOffset: { width: 0, height: 2 },
-            shadowOpacity: 0.05,
-            shadowRadius: 8,
-            elevation: 2
-          }}>
-            <View style={{
-              width: 40,
-              height: 40,
-              borderRadius: 20,
-              backgroundColor: '#E3F2FD',
-              alignItems: 'center',
-              justifyContent: 'center',
-              marginBottom: 8
-            }}>
-              <Ionicons name="time" size={20} color="#1976D2" />
-            </View>
-            <Text style={{ color: '#212529', fontSize: 20, fontWeight: '700', marginBottom: 2 }}>
-              {stats.inProgress}
-            </Text>
-            <Text style={{ color: '#6C757D', fontSize: 12, fontWeight: '500' }}>In Progress</Text>
-          </View>
-          
-          <View style={{ 
-            flex: 1, 
-            backgroundColor: '#FFFFFF', 
-            borderRadius: 12, 
-            padding: 16, 
-            alignItems: 'center',
-            borderWidth: 1,
-            borderColor: '#E9ECEF',
-            shadowColor: '#000',
-            shadowOffset: { width: 0, height: 2 },
-            shadowOpacity: 0.05,
-            shadowRadius: 8,
-            elevation: 2
-          }}>
-            <View style={{
-              width: 40,
-              height: 40,
-              borderRadius: 20,
-              backgroundColor: '#FEF2F2',
-              alignItems: 'center',
-              justifyContent: 'center',
-              marginBottom: 8
-            }}>
-              <Ionicons name="close-circle" size={20} color="#DC3545" />
-            </View>
-            <Text style={{ color: '#212529', fontSize: 20, fontWeight: '700', marginBottom: 2 }}>
-              {stats.failed}
-            </Text>
-            <Text style={{ color: '#6C757D', fontSize: 12, fontWeight: '500' }}>Failed</Text>
+          <View style={styles.statDivider} />
+          <View style={styles.statDivider} />
+          <View style={styles.statItem}>
+            <Text style={styles.statValue}>{stats.pending}</Text>
+            <Text style={styles.statLabel}>Pending</Text>
           </View>
         </View>
 
-        {/* Driver Details Card */}
-        <View style={{ 
-          backgroundColor: '#FFFFFF', 
-          borderRadius: 16, 
-          padding: 24, 
-          marginBottom: 20,
-          borderWidth: 1,
-          borderColor: '#E9ECEF',
-          shadowColor: '#000',
-          shadowOffset: { width: 0, height: 4 },
-          shadowOpacity: 0.08,
-          shadowRadius: 12,
-          elevation: 4
-        }}>
-          <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 20 }}>
-            <View style={{
-              width: 40,
-              height: 40,
-              borderRadius: 20,
-              backgroundColor: '#F3E8FF',
-              alignItems: 'center',
-              justifyContent: 'center',
-              marginRight: 12
-            }}>
-              <Ionicons name="person" size={20} color="#8B5CF6" />
-            </View>
-            <Text style={{ color: '#212529', fontSize: 18, fontWeight: '700' }}>
-              Driver Information
-            </Text>
-          </View>
-          
-          <View style={{ gap: 16 }}>
-            <View style={{ flexDirection: 'row', alignItems: 'center' }}>
-              <View style={{
-                width: 32,
-                height: 32,
-                borderRadius: 16,
-                backgroundColor: '#E8F5E8',
-                alignItems: 'center',
-                justifyContent: 'center',
-                marginRight: 12
-              }}>
-                <Ionicons name="person-outline" size={16} color="#28A745" />
-              </View>
-              <View style={{ flex: 1 }}>
-                <Text style={{ color: '#6C757D', fontSize: 12, fontWeight: '600', marginBottom: 2 }}>
-                  FULL NAME
-                </Text>
-                <Text style={{ color: '#212529', fontSize: 16, fontWeight: '600' }}>
-                  {driverName}
-                </Text>
-              </View>
-            </View>
-            
-            <View style={{ flexDirection: 'row', alignItems: 'center' }}>
-              <View style={{
-                width: 32,
-                height: 32,
-                borderRadius: 16,
-                backgroundColor: '#E3F2FD',
-                alignItems: 'center',
-                justifyContent: 'center',
-                marginRight: 12
-              }}>
-                <Ionicons name="mail-outline" size={16} color="#1976D2" />
-              </View>
-              <View style={{ flex: 1 }}>
-                <Text style={{ color: '#6C757D', fontSize: 12, fontWeight: '600', marginBottom: 2 }}>
-                  EMAIL ADDRESS
-                </Text>
-                <Text style={{ color: '#212529', fontSize: 16, fontWeight: '600' }} numberOfLines={1}>
-                  {email}
-                </Text>
-              </View>
-            </View>
-            
-            <View style={{ flexDirection: 'row', alignItems: 'center' }}>
-              <View style={{
-                width: 32,
-                height: 32,
-                borderRadius: 16,
-                backgroundColor: '#FFF3E0',
-                alignItems: 'center',
-                justifyContent: 'center',
-                marginRight: 12
-              }}>
-                <Ionicons name="call-outline" size={16} color="#F59E0B" />
-              </View>
-              <View style={{ flex: 1 }}>
-                <Text style={{ color: '#6C757D', fontSize: 12, fontWeight: '600', marginBottom: 2 }}>
-                  PHONE NUMBER
-                </Text>
-                <Text style={{ color: '#212529', fontSize: 16, fontWeight: '600' }}>
-                  {phone}
-                </Text>
-              </View>
-            </View>
-            
-            <View style={{ flexDirection: 'row', alignItems: 'center' }}>
-              <View style={{
-                width: 32,
-                height: 32,
-                borderRadius: 16,
-                backgroundColor: '#E8F5E8',
-                alignItems: 'center',
-                justifyContent: 'center',
-                marginRight: 12
-              }}>
-                <Ionicons name="car-outline" size={16} color="#28A745" />
-              </View>
-              <View style={{ flex: 1 }}>
-                <Text style={{ color: '#6C757D', fontSize: 12, fontWeight: '600', marginBottom: 2 }}>
-                  VEHICLE INFO
-                </Text>
-                <Text style={{ color: '#212529', fontSize: 16, fontWeight: '600' }}>
-                  {vehicleInfo}
-                </Text>
-              </View>
-            </View>
-            
-            {driverMetrics && (
+        {/* Information Section */}
+        <View style={styles.section}>
+          <Text style={styles.sectionTitle}>Information</Text>
+          <View style={styles.infoCard}>
+            <InfoItem icon="call-outline" label="Phone" value={phone} />
+            <View style={styles.infoDivider} />
+            {helperName && (
               <>
-                <View style={{ flexDirection: 'row', alignItems: 'center' }}>
-                  <View style={{
-                    width: 32,
-                    height: 32,
-                    borderRadius: 16,
-                    backgroundColor: '#FFF3E0',
-                    alignItems: 'center',
-                    justifyContent: 'center',
-                    marginRight: 12
-                  }}>
-                    <Ionicons name="star-outline" size={16} color="#F59E0B" />
-                  </View>
-                  <View style={{ flex: 1 }}>
-                    <Text style={{ color: '#6C757D', fontSize: 12, fontWeight: '600', marginBottom: 2 }}>
-                      AVERAGE RATING
-                    </Text>
-                    <Text style={{ color: '#212529', fontSize: 16, fontWeight: '600' }}>
-                      {driverMetrics.average_rating.toFixed(1)}/5.0
-                    </Text>
-                  </View>
-                </View>
-                
-                <View style={{ flexDirection: 'row', alignItems: 'center' }}>
-                  <View style={{
-                    width: 32,
-                    height: 32,
-                    borderRadius: 16,
-                    backgroundColor: '#E8F5E8',
-                    alignItems: 'center',
-                    justifyContent: 'center',
-                    marginRight: 12
-                  }}>
-                    <Ionicons name="cash-outline" size={16} color="#28A745" />
-                  </View>
-                  <View style={{ flex: 1 }}>
-                    <Text style={{ color: '#6C757D', fontSize: 12, fontWeight: '600', marginBottom: 2 }}>
-                      TOTAL EARNINGS
-                    </Text>
-                    <Text style={{ color: '#212529', fontSize: 16, fontWeight: '600' }}>
-                      AED {driverMetrics.total_earnings}
-                    </Text>
-                  </View>
-                </View>
+                <InfoItem icon="people-outline" label="Helper" value={helperName} />
+                {helperPhone !== '—' && (
+                  <>
+                    <View style={styles.infoDivider} />
+                    <InfoItem icon="call-outline" label="Helper Phone" value={helperPhone} />
+                  </>
+                )}
+                <View style={styles.infoDivider} />
+              </>
+            )}
+            <InfoItem icon="car-outline" label="Vehicle" value={vehicleType} />
+            <View style={styles.infoDivider} />
+            <InfoItem icon="document-text-outline" label="Plate" value={vehiclePlate} />
+            {zone !== '—' && (
+              <>
+                <View style={styles.infoDivider} />
+                <InfoItem icon="location-outline" label="Zone" value={zone} />
               </>
             )}
           </View>
         </View>
 
-        {/* Action Buttons */}
-        <View style={{ gap: 12 }}>
-          <TouchableOpacity style={{ 
-            backgroundColor: '#1976D2', 
-            paddingVertical: 16, 
-            borderRadius: 12, 
-            alignItems: 'center',
-            flexDirection: 'row',
-            justifyContent: 'center',
-            shadowColor: '#1976D2',
-            shadowOffset: { width: 0, height: 4 },
-            shadowOpacity: 0.3,
-            shadowRadius: 8,
-            elevation: 6
-          }}>
-            <Ionicons name="create-outline" size={20} color="white" style={{ marginRight: 8 }} />
-            <Text style={{ color: 'white', fontSize: 16, fontWeight: '600' }}>
-              Edit Profile
-            </Text>
-          </TouchableOpacity>
-          
-          <TouchableOpacity
-            style={{ 
-              backgroundColor: '#DC3545', 
-              paddingVertical: 16, 
-              borderRadius: 12, 
-              alignItems: 'center',
-              flexDirection: 'row',
-              justifyContent: 'center',
-              shadowColor: '#DC3545',
-              shadowOffset: { width: 0, height: 4 },
-              shadowOpacity: 0.3,
-              shadowRadius: 8,
-              elevation: 6
-            }}
-            onPress={onLogOut}
-          >
-            <Ionicons name="log-out-outline" size={20} color="white" style={{ marginRight: 8 }} />
-            <Text style={{ color: 'white', fontSize: 16, fontWeight: '600' }}>
-              Sign Out
-            </Text>
-          </TouchableOpacity>
-        </View>
+        {/* Sign Out */}
+        <TouchableOpacity style={styles.signOutButton} onPress={onLogOut} activeOpacity={0.8}>
+          <Ionicons name="log-out-outline" size={16} color="#EF4444" />
+          <Text style={styles.signOutText}>Sign Out</Text>
+        </TouchableOpacity>
+
+        {/* App Version */}
+        <Text style={styles.version}>Al Ghadeer Driver v1.0.0</Text>
+        <View style={{ height: Math.max(insets.bottom, 20) + 80 }} />
       </ScrollView>
     </View>
   );
 };
+
+const styles = StyleSheet.create({
+  container: {
+    flex: 1,
+    backgroundColor: '#FFFFFF',
+  },
+  scrollView: {
+    flex: 1,
+  },
+  scrollContent: {
+    paddingBottom: 40,
+  },
+  header: {
+    alignItems: 'center',
+    paddingTop: 24,
+    paddingBottom: 32,
+    paddingHorizontal: 24,
+  },
+  avatarContainer: {
+    position: 'relative',
+    marginBottom: 20,
+  },
+  avatar: {
+    width: 100,
+    height: 100,
+    borderRadius: 50,
+    backgroundColor: '#F1F5F9',
+  },
+  statusIndicator: {
+    position: 'absolute',
+    bottom: 4,
+    right: 4,
+    width: 24,
+    height: 24,
+    borderRadius: 12,
+    borderWidth: 4,
+    borderColor: '#FFFFFF',
+  },
+  name: {
+    fontSize: 26,
+    fontWeight: '700',
+    color: '#0F172A',
+    letterSpacing: -0.5,
+    marginBottom: 4,
+  },
+  helperName: {
+    fontSize: 15,
+    color: '#64748B',
+    marginBottom: 16,
+  },
+  statusBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 14,
+    paddingVertical: 8,
+    borderRadius: 20,
+    gap: 8,
+    marginBottom: 12,
+  },
+  statusDot: {
+    width: 8,
+    height: 8,
+    borderRadius: 4,
+  },
+  statusText: {
+    fontSize: 14,
+    fontWeight: '600',
+  },
+  ratingContainer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+  },
+  ratingText: {
+    fontSize: 15,
+    fontWeight: '600',
+    color: '#0F172A',
+  },
+  statsContainer: {
+    flexDirection: 'row',
+    marginHorizontal: 24,
+    backgroundColor: '#F8FAFC',
+    borderRadius: 20,
+    paddingVertical: 20,
+    marginBottom: 32,
+  },
+  statItem: {
+    flex: 1,
+    alignItems: 'center',
+  },
+  statValue: {
+    fontSize: 28,
+    fontWeight: '700',
+    color: '#0F172A',
+    letterSpacing: -0.5,
+    marginBottom: 4,
+  },
+  statLabel: {
+    fontSize: 13,
+    fontWeight: '500',
+    color: '#64748B',
+  },
+  statDivider: {
+    width: 1,
+    height: 40,
+    backgroundColor: '#E2E8F0',
+  },
+  section: {
+    paddingHorizontal: 24,
+    marginBottom: 28,
+  },
+  sectionTitle: {
+    fontSize: 13,
+    fontWeight: '600',
+    color: '#94A3B8',
+    textTransform: 'uppercase',
+    letterSpacing: 0.5,
+    marginBottom: 16,
+  },
+  infoCard: {
+    backgroundColor: '#F8FAFC',
+    borderRadius: 20,
+    padding: 8,
+  },
+  infoItem: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingVertical: 14,
+    paddingHorizontal: 12,
+  },
+  infoIcon: {
+    width: 40,
+    height: 40,
+    borderRadius: 12,
+    backgroundColor: '#FFFFFF',
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginRight: 14,
+  },
+  infoContent: {
+    flex: 1,
+  },
+  infoLabel: {
+    fontSize: 12,
+    fontWeight: '500',
+    color: '#94A3B8',
+    marginBottom: 2,
+  },
+  infoValue: {
+    fontSize: 16,
+    fontWeight: '600',
+    color: '#0F172A',
+  },
+  infoDivider: {
+    height: 1,
+    backgroundColor: '#E2E8F0',
+    marginLeft: 66,
+  },
+  actionsGrid: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 12,
+  },
+  actionCard: {
+    width: '47%',
+    backgroundColor: '#F8FAFC',
+    borderRadius: 16,
+    padding: 20,
+    alignItems: 'center',
+  },
+  actionIcon: {
+    width: 52,
+    height: 52,
+    borderRadius: 16,
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginBottom: 12,
+  },
+  actionLabel: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: '#0F172A',
+  },
+  signOutButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginHorizontal: 24,
+    marginTop: 8,
+    paddingVertical: 16,
+    backgroundColor: '#FEF2F2',
+    borderRadius: 16,
+    gap: 10,
+  },
+  signOutText: {
+    fontSize: 16,
+    fontWeight: '600',
+    color: '#EF4444',
+  },
+  version: {
+    fontSize: 12,
+    color: '#CBD5E1',
+    textAlign: 'center',
+    marginTop: 24,
+  },
+});
 
 export default Profile;

@@ -1,22 +1,40 @@
 import { useExpenseStore, useOrderStore } from '@/store/index';
+import { authenticatedFetch } from '@/store/auth';
 import { Ionicons } from '@expo/vector-icons';
 import * as ImagePicker from 'expo-image-picker';
 import * as FileSystem from 'expo-file-system';
 import React, { useMemo, useState, useEffect, useCallback } from 'react';
-import { Alert, Image, Modal, ScrollView, Text, TextInput, TouchableOpacity, View, ActivityIndicator } from 'react-native';
+import { 
+  Image, 
+  Modal, 
+  ScrollView, 
+  Text, 
+  TextInput, 
+  TouchableOpacity, 
+  View, 
+  ActivityIndicator,
+  StyleSheet,
+  Dimensions,
+  Platform,
+  Pressable,
+  KeyboardAvoidingView
+} from 'react-native';
+import { showErrorAlert, showWarningAlert, showSuccessAlert } from '@/store/utils/alert';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
+
+const { width } = Dimensions.get('window');
 
 const EXPENSE_TYPES = [
-  'Fuel',
-  'Parking',
-  'Toll',
-  'Maintenance',
-  'Supplies',
-  'Other',
+  { id: 'fuel', label: 'Fuel', icon: 'flame-outline' as const },
+  { id: 'parking', label: 'Parking', icon: 'car-outline' as const },
+  { id: 'toll', label: 'Toll', icon: 'card-outline' as const },
+  { id: 'maintenance', label: 'Maintenance', icon: 'construct-outline' as const },
+  { id: 'supplies', label: 'Supplies', icon: 'cube-outline' as const },
+  { id: 'other', label: 'Other', icon: 'ellipsis-horizontal-outline' as const },
 ];
 
-const IP_ADDRESS = "192.168.0.194:3000/api";
+const IP_ADDRESS = process.env.EXPO_PUBLIC_IP_ADDRESS;
 
-// API Response interfaces
 interface SubmitExpenseResponse {
   success: boolean;
   message: string;
@@ -35,16 +53,17 @@ interface ServerExpense {
   amount: number;
   description?: string;
   receipt_image?: string;
-  status: 'pending' | 'approved' | 'rejected';
-  submission_date: string;
-  created_at: string;
-  updated_at: string;
+  status?: 'pending' | 'approved' | 'rejected';
+  submission_date?: string;
+  created_at?: string;
+  updated_at?: string;
   reviewed_at?: string;
   reviewed_by?: string;
   review_notes?: string;
 }
 
 const Expenses = () => {
+  const insets = useSafeAreaInsets();
   const { addExpense } = useExpenseStore();
   const { currentDriver } = useOrderStore();
   const [selectedType, setSelectedType] = useState<string>('');
@@ -53,15 +72,14 @@ const Expenses = () => {
   const [receiptUri, setReceiptUri] = useState<string | undefined>(undefined);
   const [receiptBase64, setReceiptBase64] = useState<string | undefined>(undefined);
   const [submitting, setSubmitting] = useState(false);
-  const [openTypeModal, setOpenTypeModal] = useState(false);
   const [showHistory, setShowHistory] = useState(false);
   const [expenseHistory, setExpenseHistory] = useState<ServerExpense[]>([]);
   const [loadingHistory, setLoadingHistory] = useState(false);
   const [activeTab, setActiveTab] = useState<'pending' | 'all'>('pending');
 
   const formattedAmount = useMemo(() => amount.replace(/[^0-9.]/g, ''), [amount]);
+  const isFormValid = selectedType && formattedAmount && Number(formattedAmount) > 0;
 
-  // Convert image to base64
   const convertImageToBase64 = async (uri: string): Promise<string> => {
     try {
       const base64 = await FileSystem.readAsStringAsync(uri, {
@@ -74,43 +92,56 @@ const Expenses = () => {
     }
   };
 
-  // Fetch expense history from server
   const fetchExpenseHistory = useCallback(async (status?: string) => {
     if (!currentDriver?.id) {
-      Alert.alert('Error', 'Driver information not available.');
+      showErrorAlert('Error', 'Driver information not available.');
       return;
     }
 
     try {
       setLoadingHistory(true);
-      let url = `http://${IP_ADDRESS}/expenses`;
-      url += `?driver_id=${currentDriver.id}`;
-      if (status) {
-        url += `&status=${status}`;
-      }
+      let url = `${IP_ADDRESS}/expenses?driver_id=${currentDriver.id}`;
+      if (status) url += `&status=${status}`;
 
-      console.log('Fetching expense history from:', url);
-      const response = await fetch(url);
-      if (!response.ok) {
-        throw new Error(`HTTP error! Status: ${response.status}`);
-      }
+      const response = await authenticatedFetch(url);
+      if (!response.ok) throw new Error(`HTTP error! Status: ${response.status}`);
 
-      const data: ServerExpense[] = await response.json();
-      console.log('Expense history fetched:', data.length, 'items');
-      setExpenseHistory(data);
+      const data = await response.json();
+      
+      // Handle different response formats
+      let expenses: ServerExpense[] = [];
+      
+      if (Array.isArray(data)) {
+        // Direct array response
+        expenses = data.filter((item: unknown): item is ServerExpense => 
+          item !== null && item !== undefined && typeof item === 'object' && 'id' in item
+        );
+      } else if (data && typeof data === 'object') {
+        // Wrapped response format
+        if (Array.isArray(data.data)) {
+          expenses = data.data.filter((item: unknown): item is ServerExpense => 
+            item !== null && item !== undefined && typeof item === 'object' && 'id' in item
+          );
+        } else if (Array.isArray(data.expenses)) {
+          expenses = data.expenses.filter((item: unknown): item is ServerExpense => 
+            item !== null && item !== undefined && typeof item === 'object' && 'id' in item
+          );
+        }
+      }
+      
+      setExpenseHistory(expenses);
     } catch (error) {
       console.error('Error fetching expense history:', error);
-      Alert.alert('Error', 'Failed to load expense history.');
+      showErrorAlert('Error', 'Failed to load expense history.');
+      setExpenseHistory([]); // Set empty array on error
     } finally {
       setLoadingHistory(false);
     }
   }, [currentDriver?.id]);
 
-  // Load expense history when component mounts or tab changes
   useEffect(() => {
     if (showHistory) {
-      const status = activeTab === 'pending' ? 'pending' : undefined;
-      fetchExpenseHistory(status);
+      fetchExpenseHistory(activeTab === 'pending' ? 'pending' : undefined);
     }
   }, [showHistory, activeTab, fetchExpenseHistory]);
 
@@ -118,32 +149,28 @@ const Expenses = () => {
     try {
       const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
       if (status !== 'granted') {
-        Alert.alert('Permission required', 'We need access to your photos to upload a receipt.');
+        showWarningAlert('Permission required', 'We need access to your photos to upload a receipt.');
         return;
       }
       const result = await ImagePicker.launchImageLibraryAsync({
         mediaTypes: ImagePicker.MediaTypeOptions.Images,
         allowsEditing: true,
-        quality: 0.7, // Reduced quality for smaller base64 size
-        base64: false, // We'll convert manually for better control
+        quality: 0.7,
+        base64: false,
       });
       if (!result.canceled && result.assets?.[0]?.uri) {
         const imageUri = result.assets[0].uri;
         setReceiptUri(imageUri);
-        
-        // Convert to base64
         try {
           const base64String = await convertImageToBase64(imageUri);
           setReceiptBase64(base64String);
-          console.log('Image converted to base64 successfully');
-        } catch (error) {
-          console.error('Error converting image to base64:', error);
-          Alert.alert('Error', 'Failed to process the selected image. Please try again.');
+        } catch {
+          showErrorAlert('Error', 'Failed to process the selected image.');
           setReceiptUri(undefined);
         }
       }
-    } catch (e) {
-      Alert.alert('Error', 'Could not open image library.');
+    } catch {
+      showErrorAlert('Error', 'Could not open image library.');
     }
   };
 
@@ -158,22 +185,21 @@ const Expenses = () => {
   const handleSubmit = async () => {
     const numericAmount = Number(formattedAmount);
     if (!selectedType) {
-      Alert.alert('Missing info', 'Please select an expense type.');
+      showWarningAlert('Missing info', 'Please select an expense type.');
       return;
     }
     if (!formattedAmount || isNaN(numericAmount) || numericAmount <= 0) {
-      Alert.alert('Invalid amount', 'Please enter a valid amount.');
+      showWarningAlert('Invalid amount', 'Please enter a valid amount.');
       return;
     }
     if (!currentDriver?.id) {
-      Alert.alert('Error', 'Driver information not available.');
+      showErrorAlert('Error', 'Driver information not available.');
       return;
     }
 
     try {
       setSubmitting(true);
       
-      // Prepare expense data for server
       const expenseData = {
         driver_id: currentDriver.id,
         type: selectedType,
@@ -183,17 +209,9 @@ const Expenses = () => {
         submission_date: new Date().toISOString()
       };
 
-      // Submit to server
-      let url = `http://${IP_ADDRESS}/expenses/submit`;
-      url += `?driver_id=+${currentDriver.id}`;
-      console.log('Submitting expense to:', url);
-      console.log('Expense data:', { ...expenseData, receipt_image: receiptBase64 ? 'base64...' : 'none' });
-      
-      const response = await fetch(url, {
+      const url = `${IP_ADDRESS}/expenses/submit?driver_id=${currentDriver.id}`;
+      const response = await authenticatedFetch(url, {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
         body: JSON.stringify(expenseData),
       });
 
@@ -203,187 +221,100 @@ const Expenses = () => {
       }
 
       const result: SubmitExpenseResponse = await response.json();
-      console.log('Expense submitted successfully:', result);
+      if (!result.success) throw new Error(result.message || 'Failed to submit expense');
 
-      if (!result.success) {
-        throw new Error(result.message || 'Failed to submit expense');
-      }
-
-      // Also add to local store for immediate UI update
       addExpense({ 
         type: selectedType, 
         amount: numericAmount, 
         description: description?.trim() || undefined, 
-        receiptUri: receiptBase64 || receiptUri // Use base64 if available, fallback to URI
+        receiptUri: receiptBase64 || receiptUri
       });
 
-      Alert.alert(
-        'Success!', 
-        result.message || `Expense submitted successfully!\nRequest ID: ${result.expense.request_id}`,
-        [
-          { text: 'OK', onPress: () => resetForm() }
-        ]
-      );
+      showSuccessAlert('Success', 'Expense submitted successfully!', [
+        { text: 'OK', onPress: resetForm }
+      ]);
     } catch (error) {
-      console.error('Error submitting expense:', error);
-      Alert.alert('Error', error instanceof Error ? error.message : 'Could not submit expense.');
+      showErrorAlert('Error', error instanceof Error ? error.message : 'Could not submit expense.');
     } finally {
       setSubmitting(false);
     }
   };
 
+  const getStatusStyle = (status: string) => {
+    switch (status) {
+      case 'approved': return { bg: '#ECFDF5', text: '#059669', border: '#A7F3D0' };
+      case 'rejected': return { bg: '#FEF2F2', text: '#DC2626', border: '#FECACA' };
+      default: return { bg: '#FFFBEB', text: '#D97706', border: '#FDE68A' };
+    }
+  };
+
   return (
-    <View style={{ flex: 1, backgroundColor: '#F9FAFB' }}>
+    <View style={[styles.container, { paddingTop: insets.top }]}>
       {/* Header */}
-      <View style={{ 
-        backgroundColor: '#10B981', 
-        paddingHorizontal: 20, 
-        paddingTop: 16, 
-        paddingBottom: 20,
-        shadowColor: '#000',
-        shadowOffset: { width: 0, height: 2 },
-        shadowOpacity: 0.1,
-        shadowRadius: 4,
-        elevation: 4
-      }}>
-        <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8 }}>
-          <View style={{ flex: 1 }}>
-            <Text style={{ color: 'white', fontSize: 20, fontWeight: 'bold' }}>
-              Submit Expense
-            </Text>
-            <Text style={{ color: 'rgba(255, 255, 255, 0.8)', fontSize: 14, marginTop: 2 }}>
-              Track your work-related expenses
-            </Text>
+      <View style={styles.header}>
+        <View>
+          <Text style={styles.headerTitle}>Expenses</Text>
+          <Text style={styles.headerSubtitle}>Submit reimbursement requests</Text>
           </View>
-          
-          {/* Top Right History Button */}
-          <TouchableOpacity
-            style={{
-              backgroundColor: 'rgba(255, 255, 255, 0.2)',
-              borderRadius: 20,
-              paddingHorizontal: 16,
-              paddingVertical: 10,
-              borderWidth: 1,
-              borderColor: 'rgba(255, 255, 255, 0.3)',
-              flexDirection: 'row',
-              alignItems: 'center'
-            }}
-            onPress={() => setShowHistory(true)}
-          >
-            <Ionicons name="time" size={16} color="white" style={{ marginRight: 6 }} />
-            <Text style={{ 
-              color: 'white', 
-              fontSize: 14, 
-              fontWeight: '600'
-            }}>
-              History
-            </Text>
+        <TouchableOpacity style={styles.historyButton} onPress={() => setShowHistory(true)}>
+          <Ionicons name="time-outline" size={20} color="#1E40AF" />
           </TouchableOpacity>
-        </View>
       </View>
 
-      {/* Content */}
-      <ScrollView 
-        contentContainerStyle={{ padding: 20, paddingBottom: 100 }} 
-        showsVerticalScrollIndicator={false}
+      <KeyboardAvoidingView 
+        style={{ flex: 1 }} 
+        behavior={Platform.OS === 'ios' ? 'padding' : undefined}
       >
-        {/* Expense Type Card */}
-        <View style={{ 
-          backgroundColor: 'white', 
-          borderRadius: 16, 
-          padding: 20, 
-          marginBottom: 16,
-          shadowColor: '#000',
-          shadowOffset: { width: 0, height: 2 },
-          shadowOpacity: 0.08,
-          shadowRadius: 4,
-          elevation: 3
-        }}>
-          <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 16 }}>
-            <View style={{ 
-              width: 4, 
-              height: 24, 
-              backgroundColor: '#3B82F6', 
-              borderRadius: 2, 
-              marginRight: 12 
-            }} />
-            <Text style={{ color: '#111827', fontSize: 18, fontWeight: '600' }}>
-              Expense Type
-            </Text>
-          </View>
-          
+      <ScrollView 
+          style={styles.content}
+          contentContainerStyle={styles.contentContainer}
+        showsVerticalScrollIndicator={false}
+          keyboardShouldPersistTaps="handled"
+      >
+          {/* Expense Type Selection */}
+          <View style={styles.section}>
+            <Text style={styles.sectionLabel}>Type</Text>
+            <View style={styles.typeGrid}>
+              {EXPENSE_TYPES.map((type) => (
           <TouchableOpacity
-            style={{
-              backgroundColor: '#F8FAFC',
-              borderRadius: 12,
-              padding: 16,
-              borderWidth: 1,
-              borderColor: '#E2E8F0',
-              flexDirection: 'row',
-              alignItems: 'center',
-              justifyContent: 'space-between'
-            }}
-            onPress={() => setOpenTypeModal(true)}
-            activeOpacity={0.8}
+                  key={type.id}
+                  style={[
+                    styles.typeCard,
+                    selectedType === type.label && styles.typeCardSelected
+                  ]}
+                  onPress={() => setSelectedType(type.label)}
+                  activeOpacity={0.7}
           >
-            <Text style={{ 
-              color: selectedType ? '#111827' : '#64748B', 
-              fontSize: 16, 
-              fontWeight: '500' 
-            }}>
-              {selectedType || 'Choose expense type'}
+                  <View style={[
+                    styles.typeIcon,
+                    selectedType === type.label && styles.typeIconSelected
+                  ]}>
+                    <Ionicons 
+                      name={type.icon} 
+                      size={20} 
+                      color={selectedType === type.label ? '#FFFFFF' : '#64748B'} 
+                    />
+                  </View>
+                  <Text style={[
+                    styles.typeLabel,
+                    selectedType === type.label && styles.typeLabelSelected
+                  ]}>
+                    {type.label}
             </Text>
-            <Ionicons name="chevron-down" size={20} color="#64748B" />
           </TouchableOpacity>
+              ))}
         </View>
-
-        {/* Amount Card */}
-        <View style={{ 
-          backgroundColor: 'white', 
-          borderRadius: 16, 
-          padding: 20, 
-          marginBottom: 16,
-          shadowColor: '#000',
-          shadowOffset: { width: 0, height: 2 },
-          shadowOpacity: 0.08,
-          shadowRadius: 4,
-          elevation: 3
-        }}>
-          <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 16 }}>
-            <View style={{ 
-              width: 4, 
-              height: 24, 
-              backgroundColor: '#F59E0B', 
-              borderRadius: 2, 
-              marginRight: 12 
-            }} />
-            <Text style={{ color: '#111827', fontSize: 18, fontWeight: '600' }}>
-              Amount
-            </Text>
           </View>
           
-          <View style={{
-            backgroundColor: '#F8FAFC',
-            borderRadius: 12,
-            paddingHorizontal: 16,
-            paddingVertical: 14,
-            borderWidth: 1,
-            borderColor: '#E2E8F0',
-            flexDirection: 'row',
-            alignItems: 'center'
-          }}>
-            <Text style={{ color: '#64748B', fontSize: 16, fontWeight: '600', marginRight: 12 }}>
-              AED
-            </Text>
+          {/* Amount Input */}
+          <View style={styles.section}>
+            <Text style={styles.sectionLabel}>Amount</Text>
+            <View style={styles.amountContainer}>
+              <Text style={styles.currency}>AED</Text>
             <TextInput
-              style={{ 
-                flex: 1, 
-                fontSize: 16, 
-                color: '#111827',
-                fontWeight: '500'
-              }}
+                style={styles.amountInput}
               placeholder="0.00"
-              placeholderTextColor="#94A3B8"
+                placeholderTextColor="#CBD5E1"
               keyboardType="decimal-pad"
               value={formattedAmount}
               onChangeText={setAmount}
@@ -391,503 +322,492 @@ const Expenses = () => {
           </View>
         </View>
 
-        {/* Description Card */}
-        <View style={{ 
-          backgroundColor: 'white', 
-          borderRadius: 16, 
-          padding: 20, 
-          marginBottom: 16,
-          shadowColor: '#000',
-          shadowOffset: { width: 0, height: 2 },
-          shadowOpacity: 0.08,
-          shadowRadius: 4,
-          elevation: 3
-        }}>
-          <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 16 }}>
-            <View style={{ 
-              width: 4, 
-              height: 24, 
-              backgroundColor: '#8B5CF6', 
-              borderRadius: 2, 
-              marginRight: 12 
-            }} />
-            <Text style={{ color: '#111827', fontSize: 18, fontWeight: '600' }}>
-              Description
-            </Text>
-            <Text style={{ color: '#94A3B8', fontSize: 14, marginLeft: 8 }}>
-              (Optional)
-            </Text>
-          </View>
-          
-          <TextInput
-            style={{
-              backgroundColor: '#F8FAFC',
-              borderRadius: 12,
-              padding: 16,
-              borderWidth: 1,
-              borderColor: '#E2E8F0',
-              fontSize: 16,
-              color: '#111827',
-              minHeight: 100,
-              textAlignVertical: 'top'
-            }}
-            placeholder="Add any additional details..."
-            placeholderTextColor="#94A3B8"
-            multiline
-            numberOfLines={4}
-            value={description}
-            onChangeText={setDescription}
-          />
-        </View>
-
-        {/* Receipt Card */}
-        <View style={{ 
-          backgroundColor: 'white', 
-          borderRadius: 16, 
-          padding: 20, 
-          marginBottom: 20,
-          shadowColor: '#000',
-          shadowOffset: { width: 0, height: 2 },
-          shadowOpacity: 0.08,
-          shadowRadius: 4,
-          elevation: 3
-        }}>
-          <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 16 }}>
-            <View style={{ 
-              width: 4, 
-              height: 24, 
-              backgroundColor: '#10B981', 
-              borderRadius: 2, 
-              marginRight: 12 
-            }} />
-            <Text style={{ color: '#111827', fontSize: 18, fontWeight: '600' }}>
-              Receipt Photo
-            </Text>
-            <Text style={{ color: '#94A3B8', fontSize: 14, marginLeft: 8 }}>
-              (Optional)
-            </Text>
-          </View>
-          
+          {/* Receipt Upload */}
+          <View style={styles.section}>
+            <Text style={styles.sectionLabel}>Receipt <Text style={styles.optional}>(optional)</Text></Text>
           {receiptUri ? (
-            <View>
-              <Image 
-                source={{ uri: receiptUri }} 
-                style={{ 
-                  width: '100%', 
-                  height: 180, 
-                  borderRadius: 12,
-                  marginBottom: 16
-                }} 
-                resizeMode="cover"
-              />
-              <View style={{ flexDirection: 'row', gap: 12 }}>
+              <View style={styles.receiptPreview}>
+                <Image source={{ uri: receiptUri }} style={styles.receiptImage} />
                 <TouchableOpacity 
-                  style={{ 
-                    flex: 1, 
-                    backgroundColor: '#F1F5F9', 
-                    borderRadius: 12, 
-                    paddingVertical: 14,
-                    alignItems: 'center',
-                    borderWidth: 1,
-                    borderColor: '#E2E8F0'
-                  }} 
-                  onPress={() => {
-                    setReceiptUri(undefined);
-                    setReceiptBase64(undefined);
-                  }}
+                  style={styles.removeReceipt}
+                  onPress={() => { setReceiptUri(undefined); setReceiptBase64(undefined); }}
                 >
-                  <Text style={{ color: '#64748B', fontSize: 16, fontWeight: '600' }}>
-                    Remove
-                  </Text>
+                  <Ionicons name="close" size={16} color="#FFFFFF" />
                 </TouchableOpacity>
-                <TouchableOpacity 
-                  style={{ 
-                    flex: 1, 
-                    backgroundColor: '#10B981', 
-                    borderRadius: 12, 
-                    paddingVertical: 14,
-                    alignItems: 'center',
-                    shadowColor: '#10B981',
-                    shadowOffset: { width: 0, height: 2 },
-                    shadowOpacity: 0.2,
-                    shadowRadius: 4,
-                    elevation: 4
-                  }} 
-                  onPress={pickReceipt}
-                >
-                  <Text style={{ color: 'white', fontSize: 16, fontWeight: '600' }}>
-                    Replace
-                  </Text>
-                </TouchableOpacity>
-              </View>
             </View>
           ) : (
-            <TouchableOpacity 
-              style={{
-                backgroundColor: '#F8FAFC',
-                borderRadius: 12,
-                borderWidth: 2,
-                borderColor: '#E2E8F0',
-                borderStyle: 'dashed',
-                paddingVertical: 32,
-                alignItems: 'center',
-                justifyContent: 'center'
-              }} 
-              onPress={pickReceipt}
-            >
-              <Ionicons name="camera" size={32} color="#94A3B8" />
-              <Text style={{ color: '#64748B', fontSize: 16, fontWeight: '500', marginTop: 8 }}>
-                Tap to upload receipt
-              </Text>
-              <Text style={{ color: '#94A3B8', fontSize: 14, marginTop: 4 }}>
-                JPG, PNG supported
-              </Text>
+              <TouchableOpacity style={styles.uploadButton} onPress={pickReceipt}>
+                <Ionicons name="cloud-upload-outline" size={24} color="#94A3B8" />
+                <Text style={styles.uploadText}>Upload receipt</Text>
             </TouchableOpacity>
           )}
         </View>
 
-        {/* Action Buttons */}
-        <View style={{ flexDirection: 'row', gap: 12 }}>
+          {/* Description */}
+          <View style={styles.section}>
+            <Text style={styles.sectionLabel}>Note <Text style={styles.optional}>(optional)</Text></Text>
+            <TextInput
+              style={styles.descriptionInput}
+              placeholder="Add a note..."
+              placeholderTextColor="#CBD5E1"
+              multiline
+              numberOfLines={3}
+              value={description}
+              onChangeText={setDescription}
+              textAlignVertical="top"
+            />
+          </View>
+
+          {/* Submit Button */}
+          <View style={styles.actionSection}>
           <TouchableOpacity
-            style={{ 
-              flex: 1, 
-              backgroundColor: '#F1F5F9', 
-              borderRadius: 16, 
-              paddingVertical: 16,
-              alignItems: 'center',
-              borderWidth: 1,
-              borderColor: '#E2E8F0'
-            }}
-            onPress={resetForm}
-            disabled={submitting}
-          >
-            <Text style={{ color: '#64748B', fontSize: 16, fontWeight: '600' }}>
-              Cancel
-            </Text>
-          </TouchableOpacity>
-          <TouchableOpacity
-            style={{ 
-              flex: 1, 
-              backgroundColor: selectedType && formattedAmount && !submitting ? '#10B981' : '#94A3B8', 
-              borderRadius: 16, 
-              paddingVertical: 16,
-              alignItems: 'center',
-              shadowColor: selectedType && formattedAmount && !submitting ? '#10B981' : 'transparent',
-              shadowOffset: { width: 0, height: 4 },
-              shadowOpacity: selectedType && formattedAmount && !submitting ? 0.3 : 0,
-              shadowRadius: 8,
-              elevation: selectedType && formattedAmount && !submitting ? 6 : 0
-            }}
+              style={[styles.submitButton, !isFormValid && styles.submitButtonDisabled]}
             onPress={handleSubmit}
-            disabled={!selectedType || !formattedAmount || submitting}
+              disabled={!isFormValid || submitting}
+              activeOpacity={0.8}
           >
             {submitting ? (
-              <View style={{ flexDirection: 'row', alignItems: 'center' }}>
-                <ActivityIndicator size="small" color="white" style={{ marginRight: 8 }} />
-                <Text style={{ color: 'white', fontSize: 16, fontWeight: '600' }}>
-                  Submitting...
-                </Text>
-              </View>
-            ) : (
-              <Text style={{ color: 'white', fontSize: 16, fontWeight: '600' }}>
-                Submit Expense
-              </Text>
+                <ActivityIndicator size="small" color="#FFFFFF" />
+              ) : (
+                <>
+                  <Ionicons name="paper-plane-outline" size={20} color="#FFFFFF" />
+                  <Text style={styles.submitText}>Submit Expense</Text>
+                </>
             )}
           </TouchableOpacity>
         </View>
+
+          <View style={{ height: Math.max(insets.bottom, 16) + 80 }} />
       </ScrollView>
+      </KeyboardAvoidingView>
 
-      {/* Expense Type Modal */}
-      <Modal visible={openTypeModal} transparent animationType="fade" onRequestClose={() => setOpenTypeModal(false)}>
-        <View style={{ 
-          flex: 1, 
-          backgroundColor: 'rgba(0, 0, 0, 0.4)', 
-          alignItems: 'center', 
-          justifyContent: 'flex-end' 
-        }}>
-          <View style={{ 
-            backgroundColor: 'white', 
-            width: '100%', 
-            borderTopLeftRadius: 16, 
-            borderTopRightRadius: 16, 
-            padding: 16, 
-            maxHeight: '60%' 
-          }}>
-            <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 16 }}>
-              <Text style={{ fontSize: 18, fontWeight: '600', color: '#111827' }}>
-                Select Expense Type
-              </Text>
-              <TouchableOpacity onPress={() => setOpenTypeModal(false)}>
-                <Ionicons name="close" size={22} color="#6B7280" />
-              </TouchableOpacity>
+      {/* History Modal */}
+      <Modal visible={showHistory} animationType="slide" presentationStyle="pageSheet">
+        <View style={[styles.modalContainer, { paddingTop: Platform.OS === 'ios' ? 20 : insets.top }]}>
+          <View style={styles.modalHeader}>
+            <View>
+              <Text style={styles.modalTitle}>History</Text>
+              <Text style={styles.modalSubtitle}>{expenseHistory.length} requests</Text>
             </View>
-            <ScrollView showsVerticalScrollIndicator={false}>
-              {EXPENSE_TYPES.map((type) => (
-                <TouchableOpacity
-                  key={type}
-                  style={{
-                    paddingVertical: 14,
-                    borderBottomWidth: 1,
-                    borderBottomColor: '#F3F4F6',
-                    flexDirection: 'row',
-                    alignItems: 'center',
-                    justifyContent: 'space-between'
-                  }}
-                  onPress={() => {
-                    setSelectedType(type);
-                    setOpenTypeModal(false);
-                  }}
-                >
-                  <Text style={{ 
-                    fontSize: 15, 
-                    color: selectedType === type ? '#10B981' : '#111827',
-                    fontWeight: selectedType === type ? '600' : '400'
-                  }}>
-                    {type}
-                  </Text>
-                  {selectedType === type && (
-                    <Ionicons name="checkmark" size={18} color="#10B981" />
-                  )}
-                </TouchableOpacity>
-              ))}
-            </ScrollView>
-          </View>
-        </View>
-      </Modal>
-
-      {/* Expense History Modal */}
-      <Modal visible={showHistory} transparent animationType="slide" onRequestClose={() => setShowHistory(false)}>
-        <View style={{ flex: 1, backgroundColor: 'rgba(0, 0, 0, 0.4)' }}>
-          <View style={{ 
-            flex: 1, 
-            backgroundColor: 'white', 
-            marginTop: 60, 
-            borderTopLeftRadius: 20, 
-            borderTopRightRadius: 20 
-          }}>
-            {/* Header */}
-            <View style={{ 
-              flexDirection: 'row', 
-              alignItems: 'center', 
-              justifyContent: 'space-between', 
-              padding: 16, 
-              borderBottomWidth: 1, 
-              borderBottomColor: '#E5E7EB' 
-            }}>
-              <Text style={{ fontSize: 20, fontWeight: '600', color: '#111827' }}>
-                Expense History
-              </Text>
-              <TouchableOpacity onPress={() => setShowHistory(false)}>
-                <Ionicons name="close" size={22} color="#6B7280" />
+            <TouchableOpacity style={styles.closeButton} onPress={() => setShowHistory(false)}>
+              <Ionicons name="close" size={22} color="#64748B" />
               </TouchableOpacity>
             </View>
 
             {/* Tabs */}
-            <View style={{ 
-              flexDirection: 'row', 
-              backgroundColor: '#F3F4F6', 
-              margin: 16, 
-              borderRadius: 10, 
-              padding: 3 
-            }}>
+          <View style={styles.tabContainer}>
               <TouchableOpacity
-                style={{
-                  flex: 1,
-                  paddingVertical: 10,
-                  borderRadius: 7,
-                  backgroundColor: activeTab === 'pending' ? 'white' : 'transparent',
-                  shadowColor: activeTab === 'pending' ? '#000' : 'transparent',
-                  shadowOffset: { width: 0, height: 1 },
-                  shadowOpacity: activeTab === 'pending' ? 0.1 : 0,
-                  shadowRadius: 2,
-                  elevation: activeTab === 'pending' ? 1 : 0
-                }}
+              style={[styles.tab, activeTab === 'pending' && styles.tabActive]}
                 onPress={() => setActiveTab('pending')}
               >
-                <Text style={{ 
-                  textAlign: 'center', 
-                  fontSize: 14, 
-                  fontWeight: '600',
-                  color: activeTab === 'pending' ? '#10B981' : '#6B7280'
-                }}>
+              <Text style={[styles.tabText, activeTab === 'pending' && styles.tabTextActive]}>
                   Pending
                 </Text>
               </TouchableOpacity>
               <TouchableOpacity
-                style={{
-                  flex: 1,
-                  paddingVertical: 10,
-                  borderRadius: 7,
-                  backgroundColor: activeTab === 'all' ? 'white' : 'transparent',
-                  shadowColor: activeTab === 'all' ? '#000' : 'transparent',
-                  shadowOffset: { width: 0, height: 1 },
-                  shadowOpacity: activeTab === 'all' ? 0.1 : 0,
-                  shadowRadius: 2,
-                  elevation: activeTab === 'all' ? 1 : 0
-                }}
+              style={[styles.tab, activeTab === 'all' && styles.tabActive]}
                 onPress={() => setActiveTab('all')}
               >
-                <Text style={{ 
-                  textAlign: 'center', 
-                  fontSize: 14, 
-                  fontWeight: '600',
-                  color: activeTab === 'all' ? '#10B981' : '#6B7280'
-                }}>
-                  All Requests
+              <Text style={[styles.tabText, activeTab === 'all' && styles.tabTextActive]}>
+                All
                 </Text>
               </TouchableOpacity>
             </View>
 
-            {/* Content */}
-            <ScrollView style={{ flex: 1, paddingHorizontal: 16 }}>
+          <ScrollView style={styles.historyList} showsVerticalScrollIndicator={false}>
               {loadingHistory ? (
-                <View style={{ 
-                  flex: 1, 
-                  alignItems: 'center', 
-                  justifyContent: 'center', 
-                  paddingVertical: 40 
-                }}>
-                  <View style={{
-                    backgroundColor: 'white',
-                    borderRadius: 16,
-                    padding: 24,
-                    alignItems: 'center',
-                    shadowColor: '#000',
-                    shadowOffset: { width: 0, height: 2 },
-                    shadowOpacity: 0.1,
-                    shadowRadius: 4,
-                    elevation: 4
-                  }}>
-                    <ActivityIndicator size="large" color="#10B981" />
-                    <Text style={{ color: '#6B7280', fontSize: 14, marginTop: 12, fontWeight: '500' }}>
-                      Loading expenses...
-                    </Text>
-                  </View>
+              <View style={styles.emptyState}>
+                <ActivityIndicator size="large" color="#1E40AF" />
                 </View>
               ) : expenseHistory.length === 0 ? (
-                <View style={{ 
-                  flex: 1, 
-                  alignItems: 'center', 
-                  justifyContent: 'center', 
-                  paddingVertical: 40 
-                }}>
-                  <View style={{
-                    backgroundColor: 'white',
-                    borderRadius: 16,
-                    padding: 24,
-                    alignItems: 'center',
-                    shadowColor: '#000',
-                    shadowOffset: { width: 0, height: 2 },
-                    shadowOpacity: 0.1,
-                    shadowRadius: 4,
-                    elevation: 4
-                  }}>
-                    <Ionicons name="receipt" size={40} color="#9CA3AF" />
-                    <Text style={{ color: '#6B7280', fontSize: 16, fontWeight: '600', marginTop: 12, textAlign: 'center' }}>
-                      {activeTab === 'pending' ? 'No pending expenses' : 'No expense requests found'}
-                    </Text>
-                    <Text style={{ color: '#9CA3AF', fontSize: 12, marginTop: 6, textAlign: 'center' }}>
-                      Your submitted expenses will appear here
-                    </Text>
+              <View style={styles.emptyState}>
+                <View style={styles.emptyIcon}>
+                  <Ionicons name="receipt-outline" size={32} color="#CBD5E1" />
                   </View>
+                <Text style={styles.emptyTitle}>No expenses yet</Text>
+                <Text style={styles.emptySubtitle}>Your submitted expenses will appear here</Text>
                 </View>
               ) : (
-                expenseHistory.map((expense) => (
-                  <View key={expense.id} style={{ 
-                    backgroundColor: 'white', 
-                    borderRadius: 12, 
-                    padding: 16, 
-                    marginBottom: 12,
-                    shadowColor: '#000',
-                    shadowOffset: { width: 0, height: 1 },
-                    shadowOpacity: 0.05,
-                    shadowRadius: 2,
-                    elevation: 2
-                  }}>
-                    <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 8 }}>
-                      <View style={{ flex: 1 }}>
-                        <Text style={{ color: '#111827', fontSize: 16, fontWeight: '600', marginBottom: 2 }}>
-                          {expense.type}
-                        </Text>
-                        <Text style={{ color: '#6B7280', fontSize: 11, fontWeight: '600' }}>
-                          ID: {expense.request_id}
+              expenseHistory
+                .filter((expense) => expense !== null && expense !== undefined)
+                .map((expense) => {
+                  if (!expense || !expense.id) return null;
+                  const statusStyle = getStatusStyle(expense.status || 'pending');
+                  return (
+                    <View key={expense.id} style={styles.historyCard}>
+                    <View style={styles.historyCardHeader}>
+                      <View style={styles.historyType}>
+                        <Text style={styles.historyTypeText}>{expense.type}</Text>
+                        <Text style={styles.historyDate}>
+                          {(() => {
+                            const dateStr = expense.submission_date;
+                            if (!dateStr) return 'N/A';
+                            try {
+                              const date = new Date(dateStr);
+                              if (isNaN(date.getTime())) return 'N/A';
+                              return date.toLocaleDateString('en-US', { 
+                                month: 'short', 
+                                day: 'numeric' 
+                              });
+                            } catch {
+                              return 'N/A';
+                            }
+                          })()}
                         </Text>
                       </View>
-                      <View style={{
-                        backgroundColor: expense.status === 'pending' ? '#FEF3C7' : 
-                                        expense.status === 'approved' ? '#F0FDF4' : '#FEF2F2',
-                        borderWidth: 1,
-                        borderColor: expense.status === 'pending' ? '#F59E0B' : 
-                                     expense.status === 'approved' ? '#10B981' : '#EF4444',
-                        borderRadius: 12,
-                        paddingHorizontal: 8,
-                        paddingVertical: 4
-                      }}>
-                        <Text style={{ 
-                          fontSize: 10, 
-                          fontWeight: '600',
-                          color: expense.status === 'pending' ? '#D97706' : 
-                                 expense.status === 'approved' ? '#10B981' : '#EF4444'
-                        }}>
-                          {expense.status.toUpperCase()}
+                      <View style={[styles.statusBadge, { backgroundColor: statusStyle.bg, borderColor: statusStyle.border }]}>
+                        <Text style={[styles.statusText, { color: statusStyle.text }]}>
+                          {expense.status || 'pending'}
                         </Text>
                       </View>
                     </View>
-                    
-                    <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
-                      <Text style={{ color: '#10B981', fontSize: 18, fontWeight: '600' }}>
-                        AED {expense.amount.toFixed(2)}
-                      </Text>
-                      <Text style={{ color: '#6B7280', fontSize: 11 }}>
-                        {new Date(expense.created_at).toLocaleDateString()}
-                      </Text>
-                    </View>
-
+                    <Text style={styles.historyAmount}>
+                      AED {expense.amount ? expense.amount.toFixed(2) : '0.00'}
+                    </Text>
                     {expense.description && (
-                      <View style={{ marginBottom: 8 }}>
-                        <Text style={{ color: '#6B7280', fontSize: 11, fontWeight: '600', marginBottom: 2 }}>
-                          DESCRIPTION
-                        </Text>
-                        <Text style={{ color: '#374151', fontSize: 13, lineHeight: 18 }}>
+                      <Text style={styles.historyDescription} numberOfLines={2}>
                           {expense.description}
-                        </Text>
-                      </View>
-                    )}
-
-                    {expense.review_notes && (
-                      <View style={{ 
-                        backgroundColor: '#EFF6FF', 
-                        borderRadius: 6, 
-                        padding: 8, 
-                        marginBottom: 8,
-                        borderWidth: 1,
-                        borderColor: '#DBEAFE'
-                      }}>
-                        <Text style={{ color: '#1E40AF', fontSize: 11, fontWeight: '600', marginBottom: 2 }}>
-                          REVIEW NOTES
-                        </Text>
-                        <Text style={{ color: '#1E3A8A', fontSize: 13, lineHeight: 18 }}>
-                          {expense.review_notes}
-                        </Text>
-                      </View>
-                    )}
-
-                    {expense.reviewed_at && (
-                      <Text style={{ color: '#6B7280', fontSize: 11 }}>
-                        Reviewed: {new Date(expense.reviewed_at).toLocaleDateString()}
                       </Text>
                     )}
                   </View>
-                ))
+                  );
+                })
+                .filter(Boolean)
               )}
+            <View style={{ height: 40 }} />
             </ScrollView>
-          </View>
         </View>
       </Modal>
     </View>
   );
 };
 
+const styles = StyleSheet.create({
+  container: {
+    flex: 1,
+    backgroundColor: '#FFFFFF',
+  },
+  header: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    paddingHorizontal: 24,
+    paddingTop: 16,
+    paddingBottom: 24,
+  },
+  headerTitle: {
+    fontSize: 28,
+    fontWeight: '700',
+    color: '#1E40AF',
+    letterSpacing: -0.5,
+  },
+  headerSubtitle: {
+    fontSize: 14,
+    color: '#64748B',
+    marginTop: 2,
+  },
+  historyButton: {
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    backgroundColor: '#F8FAFC',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  content: {
+    flex: 1,
+  },
+  contentContainer: {
+    paddingHorizontal: 24,
+    paddingBottom: 24,
+  },
+  section: {
+    marginBottom: 28,
+  },
+  sectionLabel: {
+    fontSize: 13,
+    fontWeight: '600',
+    color: '#64748B',
+    marginBottom: 12,
+    textTransform: 'uppercase',
+    letterSpacing: 0.5,
+  },
+  optional: {
+    fontWeight: '400',
+    textTransform: 'none',
+    color: '#94A3B8',
+  },
+  typeGrid: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    marginHorizontal: -6,
+  },
+  typeCard: {
+    width: (width - 48 - 24) / 3,
+    marginHorizontal: 6,
+    marginBottom: 12,
+    paddingVertical: 16,
+    alignItems: 'center',
+    backgroundColor: '#F8FAFC',
+    borderRadius: 16,
+    borderWidth: 2,
+    borderColor: 'transparent',
+  },
+  typeCardSelected: {
+    backgroundColor: '#F0F9FF',
+    borderColor: '#0EA5E9',
+  },
+  typeIcon: {
+    width: 44,
+    height: 44,
+    borderRadius: 12,
+    backgroundColor: '#FFFFFF',
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginBottom: 8,
+  },
+  typeIconSelected: {
+    backgroundColor: '#0EA5E9',
+  },
+  typeLabel: {
+    fontSize: 12,
+    fontWeight: '600',
+    color: '#64748B',
+  },
+  typeLabelSelected: {
+    color: '#0369A1',
+  },
+  amountContainer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#F8FAFC',
+    borderRadius: 16,
+    paddingHorizontal: 20,
+    height: 64,
+  },
+  currency: {
+    fontSize: 18,
+    fontWeight: '600',
+    color: '#94A3B8',
+    marginRight: 12,
+  },
+  amountInput: {
+    flex: 1,
+    fontSize: 32,
+    fontWeight: '700',
+    color: '#1E40AF',
+    letterSpacing: -1,
+  },
+  uploadButton: {
+    height: 120,
+    backgroundColor: '#F8FAFC',
+    borderRadius: 16,
+    borderWidth: 2,
+    borderColor: '#E2E8F0',
+    borderStyle: 'dashed',
+    justifyContent: 'center',
+    alignItems: 'center',
+    gap: 8,
+  },
+  uploadText: {
+    fontSize: 14,
+    fontWeight: '500',
+    color: '#94A3B8',
+  },
+  receiptPreview: {
+    position: 'relative',
+    height: 180,
+    borderRadius: 16,
+    overflow: 'hidden',
+  },
+  receiptImage: {
+    width: '100%',
+    height: '100%',
+  },
+  removeReceipt: {
+    position: 'absolute',
+    top: 12,
+    right: 12,
+    width: 32,
+    height: 32,
+    borderRadius: 16,
+    backgroundColor: 'rgba(0,0,0,0.6)',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  descriptionInput: {
+    backgroundColor: '#F8FAFC',
+    borderRadius: 16,
+    padding: 16,
+    fontSize: 16,
+    color: '#1E40AF',
+    minHeight: 88,
+  },
+  actionSection: {
+    backgroundColor: '#FFFFFF',
+    borderRadius: 16,
+    padding: 16,
+    marginTop: 16,
+    shadowColor: '#1E40AF',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.04,
+    shadowRadius: 8,
+    elevation: 2,
+  },
+  submitButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#2563EB',
+    height: 56,
+    borderRadius: 16,
+    gap: 10,
+  },
+  submitButtonDisabled: {
+    backgroundColor: '#CBD5E1',
+  },
+  submitText: {
+    fontSize: 16,
+    fontWeight: '600',
+    color: '#FFFFFF',
+  },
+  modalContainer: {
+    flex: 1,
+    backgroundColor: '#FFFFFF',
+  },
+  modalHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    paddingHorizontal: 24,
+    paddingTop: 8,
+    paddingBottom: 20,
+  },
+  modalTitle: {
+    fontSize: 28,
+    fontWeight: '700',
+    color: '#1E40AF',
+    letterSpacing: -0.5,
+  },
+  modalSubtitle: {
+    fontSize: 14,
+    color: '#64748B',
+    marginTop: 2,
+  },
+  closeButton: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    backgroundColor: '#F8FAFC',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  tabContainer: {
+    flexDirection: 'row',
+    marginHorizontal: 24,
+    backgroundColor: '#F1F5F9',
+    borderRadius: 12,
+    padding: 4,
+    marginBottom: 20,
+  },
+  tab: {
+    flex: 1,
+    paddingVertical: 10,
+    alignItems: 'center',
+    borderRadius: 8,
+  },
+  tabActive: {
+    backgroundColor: '#FFFFFF',
+    shadowColor: '#1E40AF',
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.05,
+    shadowRadius: 2,
+    elevation: 1,
+  },
+  tabText: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: '#64748B',
+  },
+  tabTextActive: {
+    color: '#1E40AF',
+  },
+  historyList: {
+    flex: 1,
+    paddingHorizontal: 24,
+  },
+  historyCard: {
+    backgroundColor: '#F8FAFC',
+    borderRadius: 16,
+    padding: 16,
+    marginBottom: 12,
+  },
+  historyCardHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'flex-start',
+    marginBottom: 8,
+  },
+  historyType: {
+    flex: 1,
+  },
+  historyTypeText: {
+    fontSize: 16,
+    fontWeight: '600',
+    color: '#1E40AF',
+  },
+  historyDate: {
+    fontSize: 13,
+    color: '#64748B',
+    marginTop: 2,
+  },
+  statusBadge: {
+    paddingHorizontal: 10,
+    paddingVertical: 4,
+    borderRadius: 8,
+    borderWidth: 1,
+  },
+  statusText: {
+    fontSize: 12,
+    fontWeight: '600',
+    textTransform: 'capitalize',
+  },
+  historyAmount: {
+    fontSize: 24,
+    fontWeight: '700',
+    color: '#1E40AF',
+    letterSpacing: -0.5,
+  },
+  historyDescription: {
+    fontSize: 14,
+    color: '#64748B',
+    marginTop: 8,
+    lineHeight: 20,
+  },
+  emptyState: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: 60,
+  },
+  emptyIcon: {
+    width: 72,
+    height: 72,
+    borderRadius: 36,
+    backgroundColor: '#F8FAFC',
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginBottom: 16,
+  },
+  emptyTitle: {
+    fontSize: 18,
+    fontWeight: '600',
+    color: '#1E40AF',
+    marginBottom: 4,
+  },
+  emptySubtitle: {
+    fontSize: 14,
+    color: '#94A3B8',
+  },
+});
+
 export default Expenses;
-
-

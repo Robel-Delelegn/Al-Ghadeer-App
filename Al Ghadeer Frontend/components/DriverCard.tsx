@@ -20,7 +20,7 @@ const DriverCard = ({item, selected, setSelected}: DriverCardProps) => {
                 selected ? "bg-blue-600" : "bg-white"
             } flex flex-row items-center justify-between py-5 px-3 rounded-2xl`}
             style={{
-                shadowColor: '#0F172A',
+                shadowColor: '#1E40AF',
                 shadowOpacity: 0.08,
                 shadowRadius: 14,
                 shadowOffset: { width: 0, height: 8 },
@@ -41,6 +41,12 @@ const DriverCard = ({item, selected, setSelected}: DriverCardProps) => {
                         <Text className="text-sm font-JakartaRegular">{item.metrics.average_rating.toFixed(1)}</Text>
                     </View>
                 </View>
+                
+                {item.helper_name && (
+                    <Text className="text-sm font-JakartaRegular text-gray-600 mt-0.5">
+                        Helper: {item.helper_name}
+                    </Text>
+                )}
 
                 <View className="flex flex-row items-center justify-start">
                     <View className="flex flex-row items-center">

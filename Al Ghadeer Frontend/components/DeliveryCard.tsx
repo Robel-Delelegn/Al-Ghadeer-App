@@ -22,13 +22,38 @@ const getStatusChipStyle = (status: string) => {
     }
   };
 
+const getCustomerTypeStyle = (customerType?: string) => {
+  if (customerType === 'organization') {
+    return {
+      badge: 'bg-purple-100 border-purple-300',
+      text: 'text-purple-700',
+      label: 'Organization',
+      borderColor: '#A855F7',
+      bgColor: '#FAF5FF',
+    };
+  }
+  return {
+    badge: 'bg-emerald-100 border-emerald-300',
+    text: 'text-emerald-700',
+    label: 'Individual',
+    borderColor: '#10B981',
+    bgColor: '#ECFDF5',
+  };
+};
+
 const DeliveryCard = ({ item, onPress }: { item: Order; onPress?: () => void }) => {
   // Handle both nested and flat structures for backward compatibility
-  const customerName = item.customer?.name || item.customer_name || 'N/A';
-  const customerAddress = item.customer?.address || item.customer_address || 'N/A';
-  const totalAmount = item.pricing?.total_amount || item.total_amount || 0;
-  const distanceKm = item.delivery?.distance_km || 0;
-  const scheduledTime = item.delivery?.scheduled_time || 'Time N/A';
+  const customerName =  item.customer_name || 'N/A';
+  const customerAddress = item.customer_address || 'N/A';
+  // Ensure totalAmount is always a number (handle string values from API like "0.00")
+  const totalAmountRaw = item.total_amount || 0;
+  const totalAmount = typeof totalAmountRaw === 'string' ? parseFloat(totalAmountRaw) || 0 : (typeof totalAmountRaw === 'number' ? totalAmountRaw : 0);
+  const scheduledTime = item.start_time || 'Time N/A';
+  const customerType = item.customer_type || 'individual';
+  const customerTypeStyle = getCustomerTypeStyle(customerType);
+  // Ensure walletBalance is always a number (handle string values from API)
+  const walletBalanceRaw = item.wallet_balance ?? 0;
+  const walletBalance = typeof walletBalanceRaw === 'string' ? parseFloat(walletBalanceRaw) || 0 : (typeof walletBalanceRaw === 'number' ? walletBalanceRaw : 0);
   
   // Format availability times (expects "18:30" format)
   const formatAvailabilityTime = (timeString?: string) => {
@@ -87,42 +112,99 @@ const DeliveryCard = ({ item, onPress }: { item: Order; onPress?: () => void }) 
   
   const currentlyAvailable = isCurrentlyAvailable();
   
-  // Calculate total items dynamically from products object
-  const calculateTotalItems = (): number => {
-    if (item.products && typeof item.products === 'object') {
-      // Sum all quantities from the products object
-      return Object.values(item.products).reduce((total, quantity) => {
-        return total + (typeof quantity === 'number' ? quantity : 0);
-      }, 0);
+  // Calculate distinct product count and total price dynamically from products object
+  const calculateTotals = (): { totalItems: number; totalPrice: number } => {
+    let distinctProductCount = 0;
+    let totalPrice = 0;
+
+    if (item.products) {
+      if (Array.isArray(item.products)) {
+        // Array format: [{ id, name, quantity, price, ... }, ...]
+        // Count distinct products (each product in array is a distinct product)
+        distinctProductCount = item.products.filter((product) => 
+          product && typeof product === 'object' && (product.quantity || 0) > 0
+        ).length;
+        
+        // Calculate total price (if price info is available in the product object)
+        item.products.forEach((product) => {
+          if (product && typeof product === 'object') {
+            const qty = typeof product.quantity === 'number' ? product.quantity : 0;
+            // Try to get price from product object (may not exist in Order type)
+            const productAny = product as any;
+            const price = typeof productAny.price === 'number' ? productAny.price : 
+                         (typeof productAny.pricing === 'number' ? productAny.pricing : 0);
+            totalPrice += qty * price;
+          }
+        });
+      } else if (typeof item.products === 'object') {
+        // Dictionary/Record format
+        const productsRecord = item.products as Record<string, number | { quantity?: number; price?: number }>;
+        // Count distinct products (each key is a distinct product)
+        const productKeys = Object.keys(productsRecord);
+        distinctProductCount = productKeys.filter((key) => {
+          const value = productsRecord[key];
+          if (typeof value === 'number') {
+            return value > 0;
+          } else if (value && typeof value === 'object') {
+            return (value.quantity || 0) > 0;
+          }
+          return false;
+        }).length;
+        
+        // Calculate total price
+        Object.values(productsRecord).forEach((value) => {
+          if (typeof value === 'number') {
+            // Legacy format: { "product_name": quantity } - can't calculate price without price info
+          } else if (value && typeof value === 'object') {
+            // New format: { "product_name": { quantity: X, price: Y } }
+            const qty = typeof value.quantity === 'number' ? value.quantity : 0;
+            const price = typeof value.price === 'number' ? value.price : 0;
+            totalPrice += qty * price;
+          }
+        });
+      }
     }
-    // Fallback to legacy flat structure
-    return (
-      (item.five_litre_bottles || 0) + 
-      (item.ten_litre_bottles || 0) + 
-      (item.three_hundred_ml_bottles || 0) + 
-      (item.one_litre_bottles || 0) + 
-      (item.twenty_litre_bottles || 0) + 
-      (item.water_dispenser || 0)
-    );
+
+    // Fallback: if no products found, return 0
+    if (distinctProductCount === 0 && totalPrice === 0 && !item.products) {
+      distinctProductCount = 0;
+    }
+
+    return { totalItems: distinctProductCount, totalPrice };
   };
   
-  const totalItems = calculateTotalItems();
+  const { totalItems, totalPrice: calculatedPrice } = calculateTotals();
+  
+  // Use calculated price if available, otherwise fall back to item.total_amount
+  const displayPrice = calculatedPrice > 0 ? calculatedPrice : totalAmount;
 
   return (
     <TouchableOpacity
       onPress={async () => { try { await Haptics.selectionAsync(); } catch {}; onPress?.(); }}
       activeOpacity={0.9}
-      className="mb-4 rounded-2xl bg-white px-5 py-4 flex flex-col gap-2 border border-gray-100"
+      className="mb-4 rounded-2xl bg-white px-5 py-4 flex flex-col gap-2"
       style={{
-        shadowColor: '#0F172A',
+        shadowColor: '#1E40AF',
         shadowOpacity: 0.08,
         shadowRadius: 16,
         shadowOffset: { width: 0, height: 10 },
         elevation: 6,
+        borderLeftWidth: 4,
+        borderLeftColor: customerTypeStyle.borderColor,
+        borderWidth: 1,
+        borderColor: '#F3F4F6',
       }}
     >
+      {/* Header Row */}
       <View className="flex-row items-center justify-between mb-1">
-        <Text className="text-base font-JakartaSemiBold text-gray-900 flex-1" numberOfLines={1}>{customerName}</Text>
+        <View className="flex-row items-center flex-1 gap-2">
+          <Text className="text-base font-JakartaSemiBold text-gray-900 flex-shrink" numberOfLines={1}>{customerName}</Text>
+          <View className={`px-2 py-0.5 rounded-md border ${customerTypeStyle.badge}`}>
+            <Text className={`text-[10px] font-JakartaSemiBold ${customerTypeStyle.text}`}>
+              {customerTypeStyle.label}
+            </Text>
+          </View>
+        </View>
         <View className="flex-row items-center gap-2">
           {currentlyAvailable && (
             <View className="w-3 h-3 bg-green-500 rounded-full shadow-sm" 
@@ -140,10 +222,14 @@ const DeliveryCard = ({ item, onPress }: { item: Order; onPress?: () => void }) 
           </Text>
         </View>
       </View>
+      
+      {/* Address Row */}
       <View className="flex-row items-center gap-2 mb-1">
         <Image source={icons.pin} className="w-4 h-4 mr-1" />
-        <Text className="text-gray-700 text-sm justify-start" numberOfLines={1}>{customerAddress}</Text>
+        <Text className="text-gray-700 text-sm justify-start flex-1" numberOfLines={1}>{customerAddress}</Text>
       </View>
+      
+      {/* Time & Items Row */}
       <View className="flex-row items-center gap-2">
         <Image source={icons.list} className="w-4 h-4 mr-1" />
         <Text className="text-gray-500 text-xs">{availabilityTime}</Text>
@@ -151,8 +237,25 @@ const DeliveryCard = ({ item, onPress }: { item: Order; onPress?: () => void }) 
           {totalItems} Items
         </Text>
       </View>
-      <View className="flex-row items-center gap-2 mt-1">
-        <Text className="text-gray-600 text-xs">Total: AED {totalAmount}</Text>
+      
+      {/* Footer Row */}
+      <View className="flex-row items-center justify-between mt-1">
+        <Text className="text-gray-800 text-sm font-JakartaSemiBold">AED {displayPrice.toFixed(2)}</Text>
+        {customerType === 'organization' ? (
+          <View className="flex-row items-center gap-1">
+            <Text className="text-gray-500 text-xs">Wallet:</Text>
+            <Text className={`text-xs font-JakartaSemiBold ${walletBalance >= 0 ? 'text-emerald-600' : 'text-orange-600'}`}>
+              AED {walletBalance.toFixed(2)}
+            </Text>
+          </View>
+        ) : walletBalance > 0 ? (
+          <View className="flex-row items-center gap-1">
+            <Text className="text-gray-500 text-xs">Wallet:</Text>
+            <Text className="text-emerald-600 text-xs font-JakartaSemiBold">
+              AED {walletBalance.toFixed(2)}
+            </Text>
+          </View>
+        ) : null}
       </View>
     </TouchableOpacity>
   );

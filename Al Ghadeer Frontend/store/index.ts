@@ -1,5 +1,5 @@
 import { Driver, Order, Product } from "@/types/order";
-import { DriverStore, LocationStore, MarkerData } from "@/types/type";
+import { LocationStore } from "@/types/type";
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { create } from "zustand";
 import { createJSONStorage, persist } from "zustand/middleware";
@@ -16,13 +16,6 @@ export const useLocationStore = create<LocationStore>((set)=>({
 
 }))
 
-export const useDriverStore = create<DriverStore>((set) => ({
-    drivers: [] as MarkerData[],
-    selectedDriver: null,
-    setSelectedDriver: (driverId: number) => set({ selectedDriver: driverId}),
-    setDrivers: (drivers: MarkerData[])=>set({drivers: drivers}),
-    clearSelectedDriver: () => set({selectedDriver: null})
-}))
 
 // Expense tracking
 interface ExpenseItem {
@@ -69,38 +62,13 @@ interface CartItem {
   price: number;
   quantity: number;
   currency: string;
-  type: '5L' | '10L' | '300ml' | '1L' | '20L' | 'dispenser';
-}
-
-interface ShippingDetails {
-  name: string;
-  address: string;
-  contact: string;
-}
-
-interface PaymentMethod {
-  id: string;
-  name: string;
-  selected: boolean;
-  icon: string;
-}
-
-interface OrderSummary {
-  orderId: string;
-  cartItems: CartItem[];
-  shippingDetails: ShippingDetails;
-  selectedPaymentMethod: string;
-  subtotal: string;
-  vat: string;
-  totalWithVat: string;
-  paymentDate?: string;
-  status: 'pending' | 'confirmed' | 'processing' | 'completed' | 'failed';
+  category?: string; // Product category
+  type?: '5L' | '10L' | '300ml' | '1L' | '20L' | 'dispenser'; // Optional - not used in UI
 }
 
 // Enhanced Order Store with new Order structure
 interface OrderStore {
   // Order management
-  availableOrders: Order[];
   assignedOrders: Order[];
   selectedOrder: string | null;
   completedOrders: Order[];
@@ -113,21 +81,26 @@ interface OrderStore {
   cartItems: CartItem[];
   
   // Payment management
-  selectedPaymentMethod: 'cash' | 'card';
+  selectedPaymentMethod: 'cash' | 'wallet' | 'credit_card' | 'invoice' | 'credit_sale' | 'credit_invoice';
   
   // Order actions
   selectOrder: (id: string) => void;
-  acceptOrder: (id: string) => void;
   updateOrderStatus: (id: string, status: Order['status'], failureReason?: string, failureNote?: string) => void;
   setAssignedOrders: (orders: Order[]) => void;
-  setAvailableOrders: (orders: Order[]) => void;
-  completeOrder: (orderId: string) => void;
   
   // Driver actions
-  setCurrentDriver: (driver: Driver) => void;
-  initializeDriver: (user: any) => void;
-  updateDriverStatus: (status: Driver['status']) => void;
-  updateDriverLocation: (latitude: number, longitude: number, address: string) => void;
+  updateDriverInfo: (info: {
+    driver_number: string;
+    name: string;
+    helper_name: string;
+    helper_phone: string;
+    vehicle_name: string;
+    vehicle_id: string;
+    vehicle_plate: string;
+    zone: string;
+    status: 'online' | 'offline';
+    phone: string;
+  }) => void;
   
   // Product actions
   setProducts: (products: Product[]) => void;
@@ -135,9 +108,10 @@ interface OrderStore {
   removeFromCart: (productId: string) => void;
   updateCartItemQuantity: (productId: string, quantity: number) => void;
   clearCart: () => void;
+  getAvailableStock: (productId: string) => number; // Get available stock for a product (loaded_quantity - cart quantity)
   
   // Payment actions
-  setPaymentMethod: (method: 'cash' | 'card') => void;
+  setPaymentMethod: (method: 'cash' | 'wallet' | 'credit_card' | 'invoice' | 'credit_sale' | 'credit_invoice') => void;
   
   // Utility actions
   getOrderHistory: () => Order[];
@@ -147,7 +121,6 @@ interface OrderStore {
 export const useOrderStore = create<OrderStore>()(persist(
   (set, get) => ({
     // Order management state
-    availableOrders: [],
     assignedOrders: [],
     selectedOrder: null,
     completedOrders: [],
@@ -160,158 +133,80 @@ export const useOrderStore = create<OrderStore>()(persist(
     cartItems: [],
     
     // Payment management state
-    selectedPaymentMethod: 'cash' as 'cash' | 'card',
+    selectedPaymentMethod: 'cash' as 'cash' | 'wallet' | 'credit_card' | 'invoice' | 'credit_sale' | 'credit_invoice',
 
     
     // Order management actions
     setAssignedOrders: (orders) => set(() => ({ assignedOrders: orders })),
-    setAvailableOrders: (orders) => set(() => ({ availableOrders: orders })),
     
     selectOrder: (id: string) => {
       set({ selectedOrder: id });
     },
     
-    acceptOrder: (id: string) => {
-      set((state) => {
-        const order = state.availableOrders.find(o => o.id === id);
-        if (order) {
-          const updatedOrder = {
-            ...order,
-            status: 'assigned' as Order['status'],
-            tracking: {
-              ...order.tracking,
-              assigned_at: new Date().toISOString()
-            }
-          };
-          return {
-            availableOrders: state.availableOrders.filter(o => o.id !== id),
-            assignedOrders: [...state.assignedOrders, updatedOrder]
-          };
-        }
-        return state;
-      });
-    },
-    
     updateOrderStatus: (id: string, status: Order['status'], failureReason?: string, failureNote?: string) => {
-      set((state) => ({
-        assignedOrders: state.assignedOrders.map(o =>
-          o.id === id
-            ? { 
-                ...o, 
-                status,
-                delivery: {
-                  ...o.delivery,
-                  ...(status === 'failed' ? { failure_reason: failureReason, failure_note: failureNote } : {}),
-                  ...(status === 'delivered' ? { delivered_at: new Date().toISOString() } : {}),
-                  ...(status === 'in_progress' ? { started_at: new Date().toISOString() } : {})
-                }
-              }
-            : o
-        )
-      }));
-    },
-    
-    completeOrder: (orderId: string) => {
       set((state) => {
-        const order = state.assignedOrders.find(o => o.id === orderId);
-        if (order) {
-          const completedOrder = {
-            ...order,
-            status: 'delivered' as Order['status'],
-            delivery: {
-              ...order.delivery,
-              delivered_at: new Date().toISOString()
-            }
-          };
+        const order = state.assignedOrders.find(o => o.id === id);
+        if (!order) return state;
+
+        const updatedOrder: Order = {
+          ...order,
+          status,
+          delivery: {
+            ...order.delivery,
+            distance_km: order.delivery?.distance_km ?? order.distance_km ?? 0,
+            delivery_zone: order.delivery?.delivery_zone ?? order.delivery_zone ?? 'General',
+            ...(status === 'failed' ? { failure_reason: failureReason, failure_note: failureNote } : {}),
+            ...(status === 'delivered' ? { delivered_at: new Date().toISOString() } : {}),
+            ...(status === 'in_progress' ? { started_at: new Date().toISOString() } : {})
+          }
+        };
+
+        // If order is delivered or failed, remove from assignedOrders and add to completedOrders
+        if (status === 'delivered' || status === 'failed') {
           return {
-            assignedOrders: state.assignedOrders.filter(o => o.id !== orderId),
-            completedOrders: [...state.completedOrders, completedOrder]
+            assignedOrders: state.assignedOrders.filter(o => o.id !== id),
+            completedOrders: [...state.completedOrders, updatedOrder]
           };
         }
-        return state;
+
+        // Otherwise, just update the status in assignedOrders
+        return {
+          assignedOrders: state.assignedOrders.map(o =>
+            o.id === id ? updatedOrder : o
+          )
+        };
       });
     },
     
     // Driver management actions
-    setCurrentDriver: (driver: Driver) => {
-      set({ currentDriver: driver });
-    },
-    
-    initializeDriver: (user: any) => {
-      const driverData: Driver = {
-        id: "b97f3fc1-0708-4b97-bf5d-deb424b2cd93",
-        clerk_id: user.id,
-        name: user.fullName || 'Driver',
-        email: user.emailAddresses[0]?.emailAddress || '',
-        phone: user.primaryPhoneNumber?.phoneNumber || '',
-        profile_image: user.imageUrl,
-        vehicle: {
-          type: 'Van',
-          plate_number: 'ABC-123',
-          model: 'Ford Transit',
-          year: 2020,
-          capacity: 1000
-        },
-        status: 'online',
-        current_location: {
-          latitude: 0,
-          longitude: 0,
-          address: '',
-          updated_at: new Date().toISOString()
-        },
-        metrics: {
-          total_deliveries: 0,
-          completed_deliveries: 0,
-          failed_deliveries: 0,
-          average_rating: 0,
-          total_earnings: 0,
-          total_distance_km: 0,
-          average_delivery_time: 0,
-          customer_satisfaction: 0
-        },
-        earnings: {
-          daily_earnings: 0,
-          weekly_earnings: 0,
-          monthly_earnings: 0,
-          commission_rate: 0.15,
-          pending_payments: 0,
-          total_paid: 0
-        },
-        schedule: {
-          working_days: ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'],
-          start_time: '08:00',
-          end_time: '18:00',
-          is_available: true,
-          preferred_zones: []
-        },
-        account: {
-          joined_date: new Date().toISOString(),
-          last_active: new Date().toISOString(),
-          is_active: true,
-          emergency_contact: ''
-        }
-      };
-      set({ currentDriver: driverData });
-    },
-    
-    updateDriverStatus: (status: Driver['status']) => {
-      set((state) => ({
-        currentDriver: state.currentDriver ? { ...state.currentDriver, status } : null
-      }));
-    },
-    
-    updateDriverLocation: (latitude: number, longitude: number, address: string) => {
-      set((state) => ({
-        currentDriver: state.currentDriver ? {
-          ...state.currentDriver,
-          current_location: {
-            latitude,
-            longitude,
-            address,
+    updateDriverInfo: (info) => {
+      set((state) => {
+        // Create a completely new driver object to ensure Zustand detects the change
+        // This is critical for React to detect the update and re-render
+        console.log('Updating driver info:', info);
+        const updatedDriver: Driver = {
+          id: info.driver_number,
+          name: info.name,
+          helper_name: info.helper_name || undefined,
+          helper_phone: info.helper_phone || undefined,
+          phone: info.phone,
+          profile_image: state.currentDriver?.profile_image,
+          vehicle: {
+            type: info.vehicle_name,
+            plate_number: info.vehicle_plate
+          },
+          status: info.status,
+          current_location: state.currentDriver?.current_location || {
+            latitude: 0,
+            longitude: 0,
+            address: '',
             updated_at: new Date().toISOString()
-          }
-        } : null
-      }));
+          },
+          zone: info.zone || undefined
+        };
+        
+        return { currentDriver: updatedDriver };
+      });
     },
     
     // Product management actions
@@ -321,46 +216,57 @@ export const useOrderStore = create<OrderStore>()(persist(
     
     addToCart: (product: Product, quantity: number) => {
       set((state) => {
-        // Validate product structure
-        if (!product || !product.id || !product.name) {
-          console.error('Invalid product passed to addToCart:', product);
+        if (!product?.id || !product?.name) return state;
+
+        // Check available stock
+        const availableStock = product.loaded_quantity !== undefined 
+          ? (product.loaded_quantity - (state.cartItems.find(item => item.id === product.id)?.quantity || 0))
+          : Infinity;
+        
+        // Limit quantity to available stock
+        const maxQuantity = Math.max(0, availableStock);
+        if (maxQuantity === 0 && quantity > 0) {
+          // No stock available, don't add
           return state;
         }
+        
+        const actualQuantity = Math.min(quantity, maxQuantity);
 
         const existingItem = state.cartItems.find(item => item.id === product.id);
         if (existingItem) {
+          const newQuantity = existingItem.quantity + actualQuantity;
+          // Check if new total exceeds available stock
+          const finalQuantity = product.loaded_quantity !== undefined
+            ? Math.min(newQuantity, product.loaded_quantity)
+            : newQuantity;
+          
+          if (finalQuantity <= 0) {
+            // Remove from cart if quantity becomes 0
+            return {
+              cartItems: state.cartItems.filter(item => item.id !== product.id)
+            };
+          }
+          
           return {
             cartItems: state.cartItems.map(item =>
               item.id === product.id
-                ? { ...item, quantity: item.quantity + quantity }
+                ? { ...item, quantity: finalQuantity }
                 : item
             )
           };
-        } else {
-          // Safe access to pricing with fallback
-          const price = product.pricing?.selling_price || 0;
-          const imageUrl = product.image_url || 'https://via.placeholder.com/150';
-          
-          console.log('Adding product to cart:', {
+        }
+
+        return {
+          cartItems: [...state.cartItems, {
             id: product.id,
             name: product.name,
-            price: price,
-            quantity: quantity,
-            imageUrl: imageUrl
-          });
-
-          return {
-            cartItems: [...state.cartItems, {
-              id: product.id,
-              name: product.name,
-              image: { uri: imageUrl },
-              price: price,
-              quantity,
-              currency: 'AED',
-              type: product.type
-            }]
-          };
-        }
+            image: { uri: product.image_url || 'https://via.placeholder.com/150' },
+            price: typeof product.pricing === 'number' ? product.pricing : 0,
+            quantity: actualQuantity,
+            currency: 'AED',
+            category: product.category, // Include category from product
+          }]
+        };
       });
     },
     
@@ -377,6 +283,21 @@ export const useOrderStore = create<OrderStore>()(persist(
             cartItems: state.cartItems.filter(item => item.id !== productId)
           };
         }
+        
+        // Check available stock
+        const product = state.products.find(p => p.id === productId);
+        if (product && product.loaded_quantity !== undefined) {
+          // Limit quantity to loaded_quantity
+          const maxQuantity = product.loaded_quantity;
+          const limitedQuantity = Math.min(quantity, maxQuantity);
+          
+          return {
+            cartItems: state.cartItems.map(item =>
+              item.id === productId ? { ...item, quantity: limitedQuantity } : item
+            )
+          };
+        }
+        
         return {
           cartItems: state.cartItems.map(item =>
             item.id === productId ? { ...item, quantity } : item
@@ -389,8 +310,24 @@ export const useOrderStore = create<OrderStore>()(persist(
       set({ cartItems: [] });
     },
     
+    getAvailableStock: (productId: string) => {
+      const state = get();
+      // Find the product to get its loaded_quantity
+      const product = state.products.find(p => p.id === productId);
+      if (!product || typeof product.loaded_quantity !== 'number') {
+        return Infinity; // No limit if product not found or no loaded_quantity
+      }
+      
+      // Get current cart quantity for this product
+      const cartItem = state.cartItems.find(item => item.id === productId);
+      const cartQuantity = cartItem?.quantity || 0;
+      
+      // Available stock = loaded_quantity - cart quantity
+      return Math.max(0, product.loaded_quantity - cartQuantity);
+    },
+    
     // Payment management actions
-    setPaymentMethod: (method: 'cash' | 'card') => {
+    setPaymentMethod: (method: 'cash' | 'wallet' | 'credit_card' | 'invoice' | 'credit_sale' | 'credit_invoice') => {
       set({ selectedPaymentMethod: method });
     },
     

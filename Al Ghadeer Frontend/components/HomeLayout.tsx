@@ -1,7 +1,7 @@
 import MyMap from "@/components/map";
 import { icons } from '@/constants';
 import { useOrderStore } from '@/store/index';
-import { useUser } from '@clerk/clerk-expo';
+import { useAuthStore } from '@/store/auth';
 import BottomSheet, { BottomSheetView } from "@gorhom/bottom-sheet";
 import { useRef } from "react";
 import { Image, Text, View } from "react-native";
@@ -12,9 +12,9 @@ const formatDate = (date: Date) =>
     date.toLocaleDateString(undefined, { weekday: 'long', month: 'short', day: 'numeric' });
 
 const HomeLayout = ({children, snapPoints, driverName}:{children: React.ReactNode, snapPoints?:string[], driverName:string}) => {
-    const { user } = useUser();
-    const { assignedOrders } = useOrderStore(); // Removed unused variables
-    const avatar = user?.imageUrl || icons.person;
+    const { user } = useAuthStore();
+    const { assignedOrders, currentDriver } = useOrderStore();
+    const avatar = currentDriver?.profile_image || icons.person;
     const today = new Date();
     const bottomSheet = useRef<BottomSheet>(null);
 
@@ -26,7 +26,7 @@ const HomeLayout = ({children, snapPoints, driverName}:{children: React.ReactNod
 
                 {/* ✨ START: Revamped Aesthetic Header */}
                 <SafeAreaView className="absolute top-0 w-full">
-                    <View className="m-4 rounded-2xl p-5" style={{ backgroundColor: 'rgba(255,255,255,0.85)', shadowColor: '#0F172A', shadowOpacity: 0.08, shadowRadius: 16, shadowOffset: { width: 0, height: 8 }, elevation: 6 }}>
+                    <View className="m-4 rounded-2xl p-5" style={{ backgroundColor: 'rgba(255,255,255,0.85)', shadowColor: '#1E40AF', shadowOpacity: 0.08, shadowRadius: 16, shadowOffset: { width: 0, height: 8 }, elevation: 6 }}>
                         <View className="flex-row items-center justify-between">
                             {/* Greeting and Name */}
                             <View className="flex-row items-center">
@@ -41,7 +41,7 @@ const HomeLayout = ({children, snapPoints, driverName}:{children: React.ReactNod
                             </View>
 
                             {/* Date */}
-                            <View className="bg-white rounded-full px-4 py-2" style={{ shadowColor: '#0F172A', shadowOpacity: 0.06, shadowRadius: 10, shadowOffset: { width: 0, height: 6 }, elevation: 3 }}>
+                            <View className="bg-white rounded-full px-4 py-2" style={{ shadowColor: '#1E40AF', shadowOpacity: 0.06, shadowRadius: 10, shadowOffset: { width: 0, height: 6 }, elevation: 3 }}>
                                 <Text className="text-gray-700 text-xs font-JakartaSemiBold">{formatDate(today)}</Text>
                             </View>
                         </View>
