@@ -160,16 +160,7 @@ app.post('/api/auth/request-otp', async (req, res) => {
         });
     }
 
-    // Look up driver by phone (in real app, query database)
-    const driver = drivers.find(d => d.phone === phone);
-    
-    if (!driver) {
-        return res.status(404).json({
-            success: false,
-            message: 'Phone number not registered'
-        });
-    }
-
+    // Accept any phone number - no driver lookup required
     // Clean expired OTPs
     cleanExpiredOTPs();
 
@@ -226,70 +217,24 @@ app.post('/api/auth/verify-otp', async (req, res) => {
         });
     }
 
-    // Validate OTP format
-    if (otp.length !== 6 || !/^\d{6}$/.test(otp)) {
-        return res.status(400).json({
-            success: false,
-            message: 'Invalid OTP format. OTP must be 6 digits.'
-        });
-    }
-
+    // Accept any OTP code - no validation required
     // Clean expired OTPs
     cleanExpiredOTPs();
-
-    // Get stored OTP data
-    const storedData = otpStore.get(phone);
-
-    if (!storedData) {
-        return res.status(400).json({
-            success: false,
-            message: 'OTP not found or expired. Please request a new OTP.'
-        });
-    }
-
-    // Check if temp token matches
-    if (storedData.tempToken !== tempToken) {
-        return res.status(401).json({
-            success: false,
-            message: 'Invalid temporary token'
-        });
-    }
-
-    // Check if OTP is expired
-    if (storedData.expiresAt < Date.now()) {
-        otpStore.delete(phone);
-        return res.status(410).json({
-            success: false,
-            message: 'OTP expired. Please request a new OTP.'
-        });
-    }
-
-    // Verify OTP
-    if (storedData.otp !== otp) {
-        console.log(`\n❌ OTP VERIFICATION FAILED`);
-        console.log(`Phone: ${phone}`);
-        console.log(`Expected: ${storedData.otp}`);
-        console.log(`Received: ${otp}\n`);
-        return res.status(400).json({
-            success: false,
-            message: 'Invalid OTP. Please check and try again.'
-        });
-    }
-
-    // OTP verified successfully - remove from store
-    otpStore.delete(phone);
 
     // Generate permanent token
     const permanentToken = `perm_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
 
-    // Lookup driver data (in real app, get from database)
-    const driver = drivers.find(d => d.phone === phone);
+    // Lookup driver data, or create default driver if not found
+    let driver = drivers.find(d => d.phone === phone);
     
     if (!driver) {
-        return res.status(404).json({
-            success: false,
-            message: 'Driver not found for this phone number'
-        });
+        // Create default driver for any phone number
+        driver = {
+            id: `driver_${Date.now()}`,
+            phone: phone,
+            driver_name: 'Driver',
+            status: 'online'
+        };
     }
 
     const user = {
@@ -443,6 +388,28 @@ app.get('/api/driver/orders', async (req, res) => {
             },
             payment_method: 'cash',
             payment_status: 'pending',
+            requires_signature: false,
+            rent_items: [
+                {
+                    id: 'rent_001',
+                    name: 'Water Dispenser',
+                    category: 'borrow',
+                    price: 30.00,
+                    quantity: 1,
+                    image_url: 'https://www.alghadeerwater.com/lovable-uploads/33ae9524-aa29-4945-a1a0-90d4e13adccd.png',
+                    in_truck: true
+                },
+                {
+                    id: 'rent_002',
+                    name: 'Manual Pump',
+                    category: 'deposit',
+                    price: 25.00,
+                    quantity: 2,
+                    image_url: 'https://plus.unsplash.com/premium_photo-1667516700355-4e153de39581?w=600&auto=format&fit=crop&q=60&ixlib=rb-4.1.0&ixid=M3wxMjA3fDB8MHxwaG90by1yZWxhdGVkfDEyfHx8ZW58MHx8fHx8',
+                    in_truck: false
+                }
+            ],
+            reasons: ['Regular delivery', 'Monthly subscription'],
         },
         {
             id: '2',
@@ -470,6 +437,9 @@ app.get('/api/driver/orders', async (req, res) => {
             },
             payment_method: 'wallet',
             payment_status: 'paid',
+            requires_signature: false,
+            rent_items: [],
+            reasons: ['Urgent delivery', 'Customer request'],
         },
         {
             id: '3',
@@ -497,6 +467,19 @@ app.get('/api/driver/orders', async (req, res) => {
             },
             payment_method: 'cash',
             payment_status: 'pending',
+            requires_signature: false,
+            rent_items: [
+                {
+                    id: 'rent_003',
+                    name: 'Water Cooler',
+                    category: 'borrow',
+                    price: 350.00,
+                    quantity: 1,
+                    image_url: 'https://www.alghadeerwater.com/lovable-uploads/33ae9524-aa29-4945-a1a0-90d4e13adccd.png',
+                    in_truck: true
+                }
+            ],
+            reasons: ['First-time customer', 'Special promotion'],
         },
         {
             id: '4',
@@ -524,6 +507,28 @@ app.get('/api/driver/orders', async (req, res) => {
             },
             payment_method: 'wallet',
             payment_status: 'paid',
+            requires_signature: true,
+            rent_items: [
+                {
+                    id: 'rent_004',
+                    name: 'Kitchen Dispenser',
+                    category: 'borrow',
+                    price: 40.00,
+                    quantity: 2,
+                    image_url: 'https://images.unsplash.com/photo-1544198841-10f34f31f8dd?q=80&w=687&auto=format&fit=crop&ixlib=rb-4.1.0&ixid=M3wxMjA3fDB8MHxwaG90by1wYWdlfHx8fGVufDB8fHx8fA%3D%3D',
+                    in_truck: true
+                },
+                {
+                    id: 'rent_005',
+                    name: 'Water Dispenser Rental',
+                    category: 'deposit',
+                    price: 30.00,
+                    quantity: 1,
+                    image_url: 'https://images.unsplash.com/photo-1593784991095-a205069470b6?w=300&h=300&fit=crop',
+                    in_truck: false
+                }
+            ],
+            reasons: ['Organization order', 'Bulk delivery', 'Contract fulfillment'],
         },
         {
             id: '5',
@@ -551,6 +556,9 @@ app.get('/api/driver/orders', async (req, res) => {
             },
             payment_method: 'wallet',
             payment_status: 'due',
+            requires_signature: true,
+            rent_items: [],
+            reasons: ['Institutional order', 'Quarterly delivery', 'Academic partnership'],
         }
     ];
 
@@ -822,7 +830,7 @@ app.post('/api/driver/orders/validate-payment', async (req, res) => {
     }
 
     // Validate payment method
-    const validMethods = ['cash', 'wallet', 'credit_card'];
+    const validMethods = ['cash', 'wallet', 'credit_card', 'cheque', 'invoice'];
     const normalizedMethod = payment_method.toLowerCase();
     console.log(`🔍 Validating payment method: "${normalizedMethod}" against valid methods: [${validMethods.join(', ')}]`);
     
@@ -830,7 +838,7 @@ app.post('/api/driver/orders/validate-payment', async (req, res) => {
         console.log(`❌ Invalid payment method: "${normalizedMethod}"`);
         return res.status(400).json({
             success: false,
-            message: 'Invalid payment method. Must be "cash", "wallet", or "credit_card"'
+            message: 'Invalid payment method. Must be "cash", "wallet", "credit_card", "cheque", or "invoice"'
         });
     }
     
@@ -872,14 +880,29 @@ app.post('/api/driver/orders/validate-payment', async (req, res) => {
             console.log(`❌ Individual customer - insufficient wallet balance`);
             return res.status(400).json({
                 success: false,
-                message: `Insufficient wallet balance. Available: AED ${walletBalance.toFixed(2)}, Required: AED ${amount.toFixed(2)}`,
-                wallet_balance: walletBalance,
+                message: `Insufficient wallet balance. Available: AED ${wallet_balance.toFixed(2)}, Required: AED ${amount.toFixed(2)}`,
+                wallet_balance: wallet_balance,
                 required_amount: amount,
                 insufficient: true
             });
         }
 
         console.log(`✅ Individual wallet balance sufficient: ${wallet_balance} >= ${amount}`);
+    }
+
+    // Cheque and Invoice payment methods don't require wallet validation
+    // Cheque: Customer provides physical cheque on delivery day
+    // Invoice: Payment due at end of month, products delivered normally
+    if (normalizedMethod === 'cheque' || normalizedMethod === 'invoice') {
+        console.log(`✅ ${normalizedMethod === 'cheque' ? 'Cheque' : 'Invoice'} payment method validated - no wallet check required`);
+        return res.status(200).json({
+            success: true,
+            message: `${normalizedMethod === 'cheque' ? 'Cheque' : 'Invoice'} payment method validated successfully`,
+            validated: true,
+            payment_method: normalizedMethod,
+            amount: amount,
+            requires_signature: normalizedMethod === 'invoice', // Invoice may require signature for organizations
+        });
     }
 
     console.log('✅ Payment validation successful');
@@ -897,6 +920,79 @@ app.post('/api/driver/orders/validate-payment', async (req, res) => {
 app.post('/api/driver/orders/confirm-payment', async (req, res) => {
     const { driver_id } = req.query;
     const orderData = req.body;
+
+    // Check if this is an organization credit delivery with signature
+    if (orderData.signature_data && orderData.receiver_name && orderData.order_type === 'site') {
+        // This is an organization credit delivery - handle it accordingly
+        const customerId = orderData.customer_id;
+        const customerType = 'organization'; // organization orders are always 'site' type
+        const wallet = customerId ? getCustomerWallet(customerId) : null;
+        const previousBalance = wallet?.balance ?? 0;
+        
+        // Update wallet balance (subtract the amount, making it more negative if needed)
+        let newBalance = updateWalletBalance(customerId, orderData.total_amount, true);
+        if (newBalance === null) {
+            newBalance = previousBalance - orderData.total_amount;
+        }
+
+        // Create credit record
+        const creditRecord = {
+            id: `credit_${Date.now()}`,
+            credit_number: `CR-${Date.now()}`,
+            order_id: orderData.order_id || `order_${Date.now()}`,
+            order_number: orderData.order_number || `ORD-${Date.now()}`,
+            driver_id: driver_id,
+            customer_id: customerId,
+            customer_name: orderData.customer_name,
+            organization_name: orderData.customer_name,
+            amount: orderData.total_amount,
+            items: orderData.products || [],
+            receiver_name: orderData.receiver_name.trim(),
+            receiver_position: orderData.receiver_position?.trim() || '',
+            notes: orderData.notes?.trim() || '',
+            signature_data: orderData.signature_data,
+            previous_balance: previousBalance,
+            new_balance: newBalance,
+            status: 'pending_payment',
+            delivery_date: new Date().toISOString(),
+            created_at: new Date().toISOString()
+        };
+
+        // Store credit record
+        organizationCredits.push(creditRecord);
+
+        // Generate invoice number for credit deliveries
+        const invoiceNumber = `INV-${Date.now()}`;
+        const paymentMethod = orderData.payment_method || 'credit_sale';
+
+        const order = {
+            id: creditRecord.order_id,
+            order_number: creditRecord.order_number,
+            invoice_number: invoiceNumber,
+            created_at: creditRecord.created_at,
+            total_amount: orderData.total_amount,
+            payment_method: paymentMethod,
+            status: 'delivered',
+            payment_status: 'due'
+        };
+
+        return res.status(201).json({
+            success: true,
+            message: `Order ${creditRecord.order_number} has been confirmed. Payment will be collected at end of month.`,
+            order: order,
+            invoice_number: invoiceNumber, // Also include at top level for convenience
+            credit_record: {
+                id: creditRecord.id,
+                credit_number: creditRecord.credit_number,
+                organization_name: creditRecord.organization_name,
+                amount: creditRecord.amount,
+                receiver_name: creditRecord.receiver_name,
+                previous_balance: previousBalance,
+                new_balance: newBalance,
+                delivery_date: creditRecord.delivery_date
+            }
+        });
+    }
 
     // Check if this is a Stripe credit card payment that needs webhook confirmation
     if (orderData.payment_method === 'credit_card' && orderData.checkout_session_id) {
@@ -921,19 +1017,46 @@ app.post('/api/driver/orders/confirm-payment', async (req, res) => {
         }
     }
 
+    // Use order_id from request if provided, otherwise generate new one
+    const orderId = orderData.order_id || `order_${Date.now()}`;
+    const orderNumber = orderData.order_number || `ORD-${Date.now()}`;
+    
+    // Generate invoice number based on payment method
+    // Invoice numbers are generated for credit_sale, credit_invoice, and invoice methods
+    let invoiceNumber = null;
+    const paymentMethod = orderData.payment_method || 'cash';
+    if (paymentMethod === 'credit_sale' || paymentMethod === 'credit_invoice' || paymentMethod === 'invoice') {
+        invoiceNumber = `INV-${Date.now()}`;
+    }
+    
+    // Determine payment status based on payment method
+    let paymentStatus = 'paid';
+    let paymentMessage = `Order ${orderNumber} has been confirmed and payment received.`;
+    
+    if (paymentMethod === 'cheque') {
+        paymentStatus = 'pending'; // Cheque needs to be processed
+        paymentMessage = `Order ${orderNumber} has been confirmed. Cheque received and will be processed.`;
+    } else if (paymentMethod === 'invoice' || paymentMethod === 'credit_sale' || paymentMethod === 'credit_invoice') {
+        paymentStatus = 'due'; // Payment due at end of month
+        paymentMessage = `Order ${orderNumber} has been confirmed. Payment will be collected at end of month.`;
+    }
+
     const order = {
-        id: `order_${Date.now()}`,
-        order_number: `ORD-${Date.now()}`,
+        id: orderId,
+        order_number: orderNumber,
+        invoice_number: invoiceNumber,
         created_at: new Date().toISOString(),
         total_amount: orderData.total_amount,
-        payment_method: orderData.payment_method,
-        status: 'pending'
+        payment_method: paymentMethod,
+        status: 'completed',
+        payment_status: paymentStatus
     };
 
     res.status(201).json({
         success: true,
-        message: `Order ${order.order_number} has been created successfully.`,
-        order: order
+        message: paymentMessage,
+        order: order,
+        invoice_number: invoiceNumber // Also include at top level for convenience
     });
 });
 
@@ -1079,6 +1202,89 @@ app.get('/api/driver/organization-credits', async (req, res) => {
     });
 });
 
+// GET /api/customers/check
+app.get('/api/customers/check', async (req, res) => {
+    const { phone } = req.query;
+
+    console.log('\n🔍 Customer Check Request');
+    console.log('Phone:', phone);
+
+    if (!phone) {
+        return res.status(400).json({
+            success: false,
+            message: 'Phone number is required'
+        });
+    }
+
+    // Dummy customer database (in production, query actual database)
+    const customers = [
+        {
+            phone: '+971501111111',
+            customer_id: 'cust_001',
+            customer_name: 'Mohammed Ali',
+            customer_email: 'mohammed@example.com',
+            customer_address: '123 Sheikh Zayed Road, Dubai',
+            customer_type: 'individual'
+        },
+        {
+            phone: '+971502222222',
+            customer_id: 'cust_002',
+            customer_name: 'Fatima Hassan',
+            customer_email: 'fatima@example.com',
+            customer_address: '456 Jumeirah Beach Road, Dubai',
+            customer_type: 'individual'
+        },
+        {
+            phone: '+971503333333',
+            customer_id: 'cust_003',
+            customer_name: 'Omar Khalid',
+            customer_email: 'omar@example.com',
+            customer_address: '789 Business Bay, Dubai',
+            customer_type: 'individual'
+        },
+        {
+            phone: '+971501111111',
+            customer_id: 'cust_004',
+            customer_name: 'South School',
+            customer_email: 'southschool@example.com',
+            customer_address: '123 Sheikh Zayed Road, Dubai',
+            customer_type: 'organization'
+        },
+        {
+            phone: '+971509999999',
+            customer_id: 'cust_005',
+            customer_name: 'UAE University',
+            customer_email: 'procurement@uaeu.ac.ae',
+            customer_address: 'UAE University Campus, Al Ain',
+            customer_type: 'organization'
+        }
+    ];
+
+    // Find customer by phone number
+    const customer = customers.find(c => c.phone === phone);
+
+    if (customer) {
+        console.log('✅ Customer found:', customer.customer_name);
+        return res.status(200).json({
+            success: true,
+            is_customer: true,
+            customer: {
+                customer_id: customer.customer_id,
+                customer_name: customer.customer_name,
+                customer_email: customer.customer_email,
+                customer_address: customer.customer_address,
+                customer_type: customer.customer_type
+            }
+        });
+    } else {
+        console.log('❌ Customer not found');
+        return res.status(200).json({
+            success: true,
+            is_customer: false
+        });
+    }
+});
+
 // POST /api/driver/direct-sales
 app.post('/api/driver/direct-sales', async (req, res) => {
     const saleData = req.body;
@@ -1089,6 +1295,7 @@ app.post('/api/driver/direct-sales', async (req, res) => {
     console.log('Phone:', saleData.customer_phone);
     console.log('Location:', saleData.latitude, saleData.longitude);
     console.log('Products:', saleData.products);
+    console.log('Payment Method:', saleData.payment_method);
     console.log('Total Amount:', saleData.total_amount);
 
     // Validate required fields
@@ -1134,18 +1341,60 @@ app.post('/api/driver/direct-sales', async (req, res) => {
         });
     }
 
-    // Create sale record
-    const sale = {
-        id: `sale_${Date.now()}`,
-        sale_number: `DS-${Date.now()}`,
+    // Generate order ID and order number
+    const orderId = `direct_sale_${Date.now()}`;
+    const orderNumber = `DS-${Date.now()}`;
+    
+    // Generate invoice number based on payment method
+    // Invoice numbers are generated for credit_sale, credit_invoice, and invoice methods
+    let invoiceNumber = null;
+    const paymentMethod = saleData.payment_method || 'cash';
+    if (paymentMethod === 'credit_sale' || paymentMethod === 'credit_invoice' || paymentMethod === 'invoice') {
+        invoiceNumber = `INV-${Date.now()}`;
+    }
+    
+    // Determine payment status based on payment method
+    let paymentStatus = 'paid';
+    let orderStatus = 'completed';
+    let paymentMessage = `Direct sale ${orderNumber} has been confirmed and payment received.`;
+    
+    if (paymentMethod === 'credit_sale' || paymentMethod === 'credit_invoice') {
+        paymentStatus = 'due'; // Payment due at end of month
+        orderStatus = 'delivered';
+        paymentMessage = `Direct sale ${orderNumber} has been confirmed. Payment will be collected at end of month.`;
+    } else if (paymentMethod === 'wallet') {
+        // Wallet payment - assume paid
+        paymentStatus = 'paid';
+        orderStatus = 'completed';
+    } else if (paymentMethod === 'credit_card') {
+        // Credit card - assume paid (Stripe handles it)
+        paymentStatus = 'paid';
+        orderStatus = 'completed';
+    }
+
+    // Create order object matching the format expected by frontend
+    const order = {
+        id: orderId,
+        order_number: orderNumber,
+        invoice_number: invoiceNumber,
+        created_at: new Date().toISOString(),
+        total_amount: saleData.total_amount,
+        payment_method: paymentMethod,
+        status: orderStatus,
+        payment_status: paymentStatus
     };
 
-    console.log('✅ Direct sale created:', sale.sale_number);
+    console.log('✅ Direct sale created:', orderNumber);
+    if (invoiceNumber) {
+        console.log('Invoice Number:', invoiceNumber);
+    }
 
+    // Return response matching the format expected by frontend (same as confirm-payment)
     res.status(201).json({
-            success: true,
-        message: `Direct sale ${sale.sale_number} has been recorded successfully.`,
-        sale_number: sale.sale_number
+        success: true,
+        message: paymentMessage,
+        order: order,
+        invoice_number: invoiceNumber // Also include at top level for convenience
     });
 });
 
@@ -1200,10 +1449,15 @@ app.get('/api/drivers/loaded-items/request', async (req, res) => {
         }
     ];
         
+    // Determine if confirmation is required
+    // In production, this would be based on business logic (e.g., first load of the day, discrepancies, etc.)
+    const requires_confirm = false; // Set to false to show table view without confirmation
+        
     res.status(200).json({
         success: true,
         message: 'Items retrieved successfully',
         data: items,
+        requires_confirm: requires_confirm,
     });
 });
 
