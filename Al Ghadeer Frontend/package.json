@@ -11,8 +11,10 @@
     "web": "expo start --web",
     "lint": "expo lint",
     "prebuild": "expo prebuild",
+    "prebuild:clean": "expo prebuild --clean",
     "build:android": "cd android && .\\gradlew.bat assembleRelease",
-    "build:android:apk": "npm run prebuild && cd android && .\\gradlew.bat assembleRelease"
+    "build:android:apk": "npm run prebuild && cd android && .\\gradlew.bat assembleRelease",
+    "build:android:clean": "npm run prebuild:clean && cd android && .\\gradlew.bat assembleRelease"
   },
   "dependencies": {
     "@clerk/clerk-expo": "^2.14.9",

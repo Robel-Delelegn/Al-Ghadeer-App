@@ -1,6 +1,8 @@
+import ApiErrorText from '@/components/ApiErrorText';
 import { useOrderStore } from '@/store/index';
 import { Order } from '@/types/order';
 import { authenticatedFetch } from '@/store/auth';
+import { parseApiResponse, parseApiResponseWithSoftError } from '@/utils/api';
 import { Ionicons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
 import React, { useEffect, useState, useMemo } from 'react';
@@ -48,6 +50,7 @@ const StripeQRPayment: React.FC = () => {
   const [checkoutUrl, setCheckoutUrl] = useState<string | null>(null);
   const [checkoutSessionId, setCheckoutSessionId] = useState<string | null>(null);
   const [paymentStatus, setPaymentStatus] = useState<'pending' | 'paid' | 'failed'>('pending');
+  const [apiError, setApiError] = useState<string | null>(null);
   
   const { 
     selectedOrder, 
@@ -94,7 +97,7 @@ const StripeQRPayment: React.FC = () => {
       }
 
       setIsLoading(true);
-      
+      setApiError(null);
       try {
         const orderId = orderDetail.id || orderDetail.order_number || `order_${Date.now()}`;
         
@@ -107,18 +110,21 @@ const StripeQRPayment: React.FC = () => {
           }),
         });
 
-        if (!response.ok) {
-          throw new Error('Failed to create checkout session');
+        const parseResult = await parseApiResponseWithSoftError<{ checkoutUrl: string; checkoutSessionId: string } | { checkoutUrl?: string; checkoutSessionId?: string }>(response);
+        if (!parseResult.ok) {
+          setApiError(parseResult.error);
+          return;
+        }
+        const result = parseResult.data;
+        const checkoutUrlVal = result.checkoutUrl ?? (result as { checkoutUrl?: string }).checkoutUrl;
+        const checkoutSessionIdVal = result.checkoutSessionId ?? (result as { checkoutSessionId?: string }).checkoutSessionId;
+        if (!checkoutUrlVal || !checkoutSessionIdVal) {
+          setApiError('Invalid response from payment server.');
+          return;
         }
 
-        const result: CheckoutSessionResponse = await response.json();
-
-        if (!result.success || !result.checkoutUrl || !result.checkoutSessionId) {
-          throw new Error('Invalid response from server');
-        }
-
-        setCheckoutUrl(result.checkoutUrl);
-        setCheckoutSessionId(result.checkoutSessionId);
+        setCheckoutUrl(checkoutUrlVal);
+        setCheckoutSessionId(checkoutSessionIdVal);
         
         // Capture order ID at this point to avoid closure issues
         // orderDetail is already checked above, so this should always exist
@@ -129,15 +135,10 @@ const StripeQRPayment: React.FC = () => {
         
         pollInterval = setInterval(async () => {
           try {
-            const statusResponse = await authenticatedFetch(`${IP_ADDRESS}/payments/status/${result.checkoutSessionId}`);
-            
-            if (!statusResponse.ok) {
-              throw new Error('Failed to check payment status');
-            }
+            const statusResponse = await authenticatedFetch(`${IP_ADDRESS}/payments/status/${checkoutSessionIdVal}`);
+            const statusResult = await parseApiResponse<{ paymentStatus?: { payment_status?: string } }>(statusResponse);
 
-            const statusResult: PaymentStatusResponse = await statusResponse.json();
-
-            if (statusResult.success && statusResult.paymentStatus) {
+            if (statusResult.paymentStatus) {
               const status = statusResult.paymentStatus.payment_status;
               
               if (status === 'paid') {
@@ -166,11 +167,7 @@ const StripeQRPayment: React.FC = () => {
 
       } catch (error) {
         console.error('Error creating checkout session:', error);
-        showErrorAlert(
-          'Payment Error',
-          error instanceof Error ? error.message : 'Failed to initialize payment. Please try again.'
-        );
-        router.back();
+        setApiError(error instanceof Error ? error.message : 'Failed to initialize payment.');
       } finally {
         setIsLoading(false);
       }
@@ -202,13 +199,16 @@ const StripeQRPayment: React.FC = () => {
   if (!checkoutUrl || !checkoutSessionId) {
     return (
       <View style={[styles.container, { paddingTop: insets.top }]}>
+        <View style={styles.header}>
+          <TouchableOpacity style={styles.backButton} onPress={() => router.back()}>
+            <Ionicons name="chevron-back" size={20} color="#0F172A" />
+          </TouchableOpacity>
+          <Text style={styles.headerTitle}>Card Payment</Text>
+          <View style={styles.headerRight} />
+        </View>
+        <ApiErrorText error={apiError || 'Failed to generate payment QR code'} />
         <View style={styles.errorContainer}>
-          <Ionicons name="alert-circle" size={64} color="#DC2626" />
-          <Text style={styles.errorText}>Failed to generate payment QR code</Text>
-          <TouchableOpacity
-            style={styles.retryButton}
-            onPress={() => router.back()}
-          >
+          <TouchableOpacity style={styles.retryButton} onPress={() => router.back()}>
             <Text style={styles.retryButtonText}>Go Back</Text>
           </TouchableOpacity>
         </View>
@@ -231,6 +231,7 @@ const StripeQRPayment: React.FC = () => {
         <View style={styles.headerRight} />
       </View>
 
+      <ApiErrorText error={apiError} />
       <ScrollView 
         style={styles.content}
         contentContainerStyle={styles.contentContainer}

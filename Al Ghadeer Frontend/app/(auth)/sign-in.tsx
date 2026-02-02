@@ -95,7 +95,7 @@ const SignIn = () => {
 
     const result = await requestOtp(phone);
 
-    if (result.success && result.requiresOtp && result.tempToken) {
+    if (result.success && result.tempToken) {
       setTempToken(result.tempToken);
       setShowOtpModal(true);
       setCountdown(60);
@@ -108,6 +108,7 @@ const SignIn = () => {
           return prev - 1;
         });
       }, 1000);
+      showSuccessAlert('OTP Sent', result.message || 'Enter the 6-digit code sent to your phone.');
     } else {
       showErrorAlert('Error', result.message || 'Failed to send OTP. Please try again.');
     }

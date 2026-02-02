@@ -1,6 +1,8 @@
+import ApiErrorText from '@/components/ApiErrorText';
 import { useOrderStore } from '@/store/index';
 import { Order } from '@/types/order';
 import { authenticatedFetch } from '@/store/auth';
+import { parseApiResponseWithSoftError } from '@/utils/api';
 import { Ionicons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
 import * as Location from 'expo-location';
@@ -52,78 +54,49 @@ const PAYMENT_METHODS = [
   { id: 'cash', label: 'Cash', icon: 'cash-outline' as const },
   { id: 'wallet', label: 'Wallet', icon: 'wallet-outline' as const },
   { id: 'credit_card', label: 'Card', icon: 'card-outline' as const },
-  { id: 'credit_sale', label: 'Credit Sale', icon: 'receipt-outline' as const },
-  { id: 'credit_invoice', label: 'Credit Invoice', icon: 'document-text-outline' as const },
+  { id: 'credit', label: 'Credit', icon: 'receipt-outline' as const },
 ];
 
+// Response structure for direct sales API
 interface DirectSaleApiResponse {
-  success: boolean;
   message: string;
-  order: {
-    id: string;
-    order_number: string;
-    invoice_number?: string;
-    created_at: string;
-    total_amount: number;
-    payment_method: string;
-    status: string;
-  };
+  sale_id: string;
   invoice_number?: string;
 }
 
 const DirectSales: React.FC = () => {
   const insets = useSafeAreaInsets();
   const router = useRouter();
-  const { currentDriver, selectOrder, setPaymentMethod, clearCart } = useOrderStore();
+  const { currentDriver, selectOrder, setPaymentMethod: setGlobalPaymentMethod, setLastConfirmPaymentResponse, clearCart } = useOrderStore();
   const [products, setProducts] = useState<ServerProduct[]>([]);
   const [loading, setLoading] = useState(true);
   const [quantities, setQuantities] = useState<Record<string, number>>({});
   const [customerName, setCustomerName] = useState('');
   const [customerPhone, setCustomerPhone] = useState('');
-  const [paymentMethod, setPaymentMethod] = useState<'cash' | 'wallet' | 'credit_card' | 'credit_sale' | 'credit_invoice'>('cash');
+  const [paymentMethod, setPaymentMethod] = useState<'cash' | 'wallet' | 'credit_card' | 'credit'>('cash');
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [location, setLocation] = useState<{ latitude: number; longitude: number; address: string } | null>(null);
   const [locationLoading, setLocationLoading] = useState(false);
   const [isCheckingCustomer, setIsCheckingCustomer] = useState(false);
   const [isExistingCustomer, setIsExistingCustomer] = useState(false);
   const [customerChecked, setCustomerChecked] = useState(false);
+  const [apiError, setApiError] = useState<string | null>(null);
 
   const fetchProducts = useCallback(async () => {
     try {
       setLoading(true);
+      setApiError(null);
       const driverId = currentDriver?.id;
       const url = `${IP_ADDRESS}/products?driver_id=${driverId}`;
-      console.log('Fetching products from:', url);
       
       const response = await authenticatedFetch(url);
-      if (!response.ok) throw new Error(`HTTP error! Status: ${response.status}`);
-      
-      const rawResponse = await response.json();
-      console.log('Products API response:', rawResponse);
-      
-      // Handle both response formats: {success: true, data: {...}} or direct {...}
-      let productsData: { [category: string]: ServerProduct[] };
-      
-      // Check if it's wrapped format
-      if (typeof rawResponse === 'object' && rawResponse !== null && 'success' in rawResponse) {
-        const wrappedResponse = rawResponse as { success: boolean; data?: { [category: string]: ServerProduct[] } };
-        if (!wrappedResponse.success || !wrappedResponse.data) {
-          throw new Error('Invalid API response format');
-        }
-        productsData = wrappedResponse.data;
-      } else if (typeof rawResponse === 'object' && rawResponse !== null && !Array.isArray(rawResponse)) {
-        // Direct format - response is the data object itself
-        // Verify it has category-like structure (values are arrays)
-        const directData = rawResponse as Record<string, unknown>;
-        const isValid = Object.values(directData).every(val => Array.isArray(val));
-        if (isValid) {
-          productsData = directData as { [category: string]: ServerProduct[] };
-        } else {
-          throw new Error('Invalid API response format');
-        }
-      } else {
-        throw new Error('Invalid API response format');
+      const result = await parseApiResponseWithSoftError<{ [category: string]: ServerProduct[] }>(response);
+      if (!result.ok) {
+        setProducts([]);
+        setApiError(result.error);
+        return;
       }
+      const productsData = result.data;
       
       // Flatten the category-based object into a single array
       const flattenedProducts: ServerProduct[] = [];
@@ -147,7 +120,6 @@ const DirectSales: React.FC = () => {
       setProducts(flattenedProducts);
     } catch (err) {
       console.error('Error fetching products:', err);
-      showErrorAlert('Error', 'Failed to load products.');
     } finally {
       setLoading(false);
     }
@@ -168,30 +140,30 @@ const DirectSales: React.FC = () => {
     setCustomerChecked(false);
 
     try {
+      setApiError(null);
       const url = `${IP_ADDRESS}/customers/check?phone=${encodeURIComponent(customerPhone.trim())}`;
       const response = await authenticatedFetch(url);
+      const parseResult = await parseApiResponseWithSoftError<{ is_customer?: boolean; customer?: { customer_name?: string } }>(response);
 
-      if (!response.ok) {
-        throw new Error(`HTTP error! Status: ${response.status}`);
+      if (!parseResult.ok) {
+        setApiError(parseResult.error);
+        setIsExistingCustomer(false);
+        setCustomerChecked(true);
+        return;
       }
-
-      const result = await response.json();
-
-      if (result.success && result.is_customer === true && result.customer) {
-        // Customer exists - update name field
-        setCustomerName(result.customer.customer_name || '');
+      const data = parseResult.data;
+      if (data.is_customer === true && data.customer) {
+        setCustomerName(data.customer.customer_name || '');
         setIsExistingCustomer(true);
         setCustomerChecked(true);
-        console.log('Customer found:', result.customer);
+        console.log('Customer found:', data.customer);
       } else {
-        // Customer is new
         setIsExistingCustomer(false);
         setCustomerChecked(true);
         console.log('Customer is new');
       }
     } catch (error) {
       console.error('Error checking customer:', error);
-      showErrorAlert('Error', 'Failed to check customer. Please try again.');
       setIsExistingCustomer(false);
       setCustomerChecked(false);
     } finally {
@@ -266,6 +238,7 @@ const DirectSales: React.FC = () => {
     }
 
     setIsSubmitting(true);
+    setApiError(null);
     try {
       const saleData = {
         driver_id: currentDriver?.id ,
@@ -293,8 +266,12 @@ const DirectSales: React.FC = () => {
         body: JSON.stringify(saleData),
       });
 
-      const result: DirectSaleApiResponse = await response.json();
-      if (!response.ok || !result.success) throw new Error(result.message || 'Failed to submit');
+      const parseResult = await parseApiResponseWithSoftError<DirectSaleApiResponse>(response);
+      if (!parseResult.ok) {
+        setApiError(parseResult.error);
+        return;
+      }
+      const data = parseResult.data;
 
       // Prepare cart items from selected products for receipt display
       clearCart();
@@ -309,10 +286,13 @@ const DirectSales: React.FC = () => {
       }));
 
       // Create order object for receipt page
-      const invoiceNumber = result.invoice_number || result.order.invoice_number;
+      const saleId = data.sale_id;
+      const invoiceNumber = data.invoice_number;
+      const orderNumber = `SALE-${saleId}`;
+      
       const newOrder: Order = {
-        id: result.order.id || `direct_sale_${Date.now()}`,
-        order_number: result.order.order_number,
+        id: saleId,
+        order_number: orderNumber,
         invoice_number: invoiceNumber,
         status: 'delivered',
         customer_name: customerName.trim(),
@@ -337,16 +317,21 @@ const DirectSales: React.FC = () => {
 
       // Set selected order and payment method for receipt page
       selectOrder(newOrder.id);
-      setPaymentMethod(paymentMethod);
+      setGlobalPaymentMethod(paymentMethod);
+      setLastConfirmPaymentResponse({
+        orderId: saleId,
+        invoice_number: invoiceNumber,
+        order_number: orderNumber,
+      });
 
-      // Determine document type based on payment method
-      const isDeliveryNote = paymentMethod === 'credit_invoice';
-      const documentType = isDeliveryNote ? 'Delivery Note' : 'Invoice';
+      // Document type from response: invoice_number present → Invoice, absent → Delivery Note
+      const hasInvoice = !!invoiceNumber;
+      const documentType = hasInvoice ? 'Invoice' : 'Delivery Note';
 
       // Show success alert with option to view invoice/receipt
       showSuccessAlert(
         'Sale Confirmed', 
-        result.message || `Sale of AED ${totalAmount.toFixed(2)} confirmed successfully.`,
+        data.message || `Sale of AED ${totalAmount.toFixed(2)} confirmed successfully.`,
         [
           { 
             text: 'Done', 
@@ -368,7 +353,7 @@ const DirectSales: React.FC = () => {
         ]
       );
     } catch (error) {
-      showErrorAlert('Error', error instanceof Error ? error.message : 'Failed to confirm sale.');
+      setApiError(error instanceof Error ? error.message : 'Failed to confirm sale.');
     } finally {
       setIsSubmitting(false);
     }
@@ -376,6 +361,7 @@ const DirectSales: React.FC = () => {
 
   return (
     <View style={[styles.container, { paddingTop: insets.top }]}>
+      <ApiErrorText error={apiError} />
       {/* Header */}
       <View style={styles.header}>
         <TouchableOpacity style={styles.backButton} onPress={() => router.back()}>
@@ -521,7 +507,7 @@ const DirectSales: React.FC = () => {
               
               {/* Bottom Row: Credit Sale, Credit Invoice */}
               <View style={[styles.paymentRow, styles.paymentRowBottom]}>
-                {PAYMENT_METHODS.filter(m => ['credit_sale', 'credit_invoice'].includes(m.id)).map((method) => {
+                {PAYMENT_METHODS.filter(m => m.id === 'credit').map((method) => {
                   const isDisabled = false;
                   return (
                     <TouchableOpacity 

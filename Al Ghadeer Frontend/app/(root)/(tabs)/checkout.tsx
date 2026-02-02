@@ -19,7 +19,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 const { width } = Dimensions.get('window');
 
-type PaymentMethod = 'cash' | 'wallet' | 'credit_card' | 'invoice' | 'credit_sale' | 'credit_invoice';
+type PaymentMethod = 'cash' | 'wallet' | 'credit_card' | 'credit';
 
 interface PaymentOption {
   id: PaymentMethod;
@@ -32,8 +32,7 @@ const paymentOptions: PaymentOption[] = [
   { id: 'cash', label: 'Cash', icon: 'cash-outline', description: 'Pay with cash on delivery' },
   { id: 'wallet', label: 'Wallet', icon: 'wallet-outline', description: 'Use customer wallet balance' },
   { id: 'credit_card', label: 'Card', icon: 'card-outline', description: 'Pay with credit/debit card' },
-  { id: 'credit_sale', label: 'Credit Sale', icon: 'receipt-outline', description: 'Payment due with invoice at end of month' },
-  { id: 'credit_invoice', label: 'Credit Invoice', icon: 'document-text-outline', description: 'Delivery note with payment due at end of month' },
+  { id: 'credit', label: 'Credit', icon: 'receipt-outline', description: 'Payment due at end of month (invoice or delivery note per confirmation)' },
 ];
 
 const Checkout: React.FC = () => {
@@ -53,7 +52,7 @@ const Checkout: React.FC = () => {
   useEffect(() => {
     if (orderDetail) {
       if (orderDetail.requires_signature === true) {
-        setPaymentMethod('credit_sale');
+        setPaymentMethod('credit');
       } else {
         setPaymentMethod('cash');
       }
@@ -116,14 +115,8 @@ const Checkout: React.FC = () => {
       return;
     }
 
-    // Handle Credit Sale - redirect to signature page (generates invoice)
-    if (selectedPaymentMethod === 'credit_sale') {
-      router.push('/(root)/(tabs)/organization-signature');
-      return;
-    }
-
-    // Handle Credit Invoice - redirect to signature page (generates delivery note)
-    if (selectedPaymentMethod === 'credit_invoice') {
+    // Handle Credit - redirect to signature page (invoice or delivery note per API response)
+    if (selectedPaymentMethod === 'credit') {
       router.push('/(root)/(tabs)/organization-signature');
       return;
     }
@@ -346,9 +339,9 @@ const Checkout: React.FC = () => {
               })}
             </View>
             
-            {/* Bottom Row: Credit Sale, Credit Invoice */}
+            {/* Bottom Row: Credit (invoice or delivery note per API response) */}
             <View style={[styles.paymentRow, styles.paymentRowBottom]}>
-              {paymentOptions.filter(opt => ['credit_sale', 'credit_invoice'].includes(opt.id)).map((option) => {
+              {paymentOptions.filter(opt => opt.id === 'credit').map((option) => {
                 const isSelected = selectedPaymentMethod === option.id;
                 
                 return (

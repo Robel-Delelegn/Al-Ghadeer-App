@@ -1,5 +1,7 @@
+import ApiErrorText from '@/components/ApiErrorText';
 import { useOrderStore } from '@/store/index';
 import { useAuthStore, authenticatedFetch } from '@/store/auth';
+import { parseApiResponseWithSoftError } from '@/utils/api';
 import { Product } from '@/types/order';
 import { getProductQuantity, getProductCategory } from '@/utils/orderUtils';
 import { Ionicons } from '@expo/vector-icons';
@@ -170,16 +172,16 @@ const ProductList: React.FC = () => {
   
   const [products, setProducts] = useState<ServerProduct[]>([]);
   const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
+  const [apiError, setApiError] = useState<string | null>(null);
   const [refreshTrigger, setRefreshTrigger] = useState(0);
 
   const fetchProducts = useCallback(async () => {
     try {
       setLoading(true);
+      setApiError(null);
       let url = `${IP_ADDRESS}/products`;
       url += `?driver_id=${user?.id}`;
       
-      // Get latest assignedOrders from store to avoid stale closure
       const store = useOrderStore.getState();
       const currentOrder = store.assignedOrders.find(order => order.id === selectedOrder);
       const customerSiteId = currentOrder?.customer_site_id;
@@ -189,36 +191,13 @@ const ProductList: React.FC = () => {
       }
       
       const response = await authenticatedFetch(url);
-      
-      if (!response.ok) {
-        throw new Error(`HTTP error! Status: ${response.status}`);
+      const parseResult = await parseApiResponseWithSoftError<{ [category: string]: ServerProduct[] }>(response);
+      if (!parseResult.ok) {
+        setProducts([]);
+        setApiError(parseResult.error);
+        return;
       }
-      
-      const rawResponse = await response.json();
-      
-      // Handle both response formats: {success: true, data: {...}} or direct {...}
-      let productsData: { [category: string]: ServerProduct[] };
-      
-      // Check if it's wrapped format
-      if (typeof rawResponse === 'object' && rawResponse !== null && 'success' in rawResponse) {
-        const wrappedResponse = rawResponse as { success: boolean; data?: { [category: string]: ServerProduct[] } };
-        if (!wrappedResponse.success || !wrappedResponse.data) {
-          throw new Error('Invalid API response format');
-        }
-        productsData = wrappedResponse.data;
-      } else if (typeof rawResponse === 'object' && rawResponse !== null && !Array.isArray(rawResponse)) {
-        // Direct format - response is the data object itself
-        // Verify it has category-like structure (values are arrays)
-        const directData = rawResponse as Record<string, unknown>;
-        const isValid = Object.values(directData).every(val => Array.isArray(val));
-        if (isValid) {
-          productsData = directData as { [category: string]: ServerProduct[] };
-        } else {
-          throw new Error('Invalid API response format');
-        }
-      } else {
-        throw new Error('Invalid API response format');
-      }
+      const productsData = parseResult.data;
       
       // Flatten the category-based object into a single array
       const flattenedProducts: ServerProduct[] = [];
@@ -253,11 +232,8 @@ const ProductList: React.FC = () => {
       }));
       // Use the store's setProducts function to update products with loaded_quantity
       setStoreProducts(storeProducts);
-      
-      setError(null);
     } catch (err) {
       console.error('Error fetching products:', err);
-      setError('Failed to load products. Please try again.');
     } finally {
       setLoading(false);
     }
@@ -425,24 +401,6 @@ const ProductList: React.FC = () => {
     );
   }
 
-  if (error) {
-    return (
-      <View style={[styles.container, styles.centerContent, { paddingTop: insets.top }]}>
-        <View style={styles.errorBox}>
-          <Ionicons name="alert-circle" size={36} color="#DC2626" />
-        </View>
-        <Text style={styles.errorTitle}>{error}</Text>
-          <TouchableOpacity 
-          style={styles.retryButton}
-          onPress={() => setRefreshTrigger(prev => prev + 1)}
-          activeOpacity={0.7}
-          >
-          <Text style={styles.retryButtonText}>Retry</Text>
-          </TouchableOpacity>
-      </View>
-    );
-  }
-
   return (
     <View style={[styles.container, { paddingTop: insets.top }]}>
       {/* Header */}
@@ -465,6 +423,7 @@ const ProductList: React.FC = () => {
             </View>
       </View>
 
+      <ApiErrorText error={apiError} />
       {/* Summary Bar */}
       <View style={styles.summaryBar}>
         <View style={styles.summaryItem}>

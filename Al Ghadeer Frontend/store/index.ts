@@ -81,8 +81,9 @@ interface OrderStore {
   cartItems: CartItem[];
   
   // Payment management
-  selectedPaymentMethod: 'cash' | 'wallet' | 'credit_card' | 'invoice' | 'credit_sale' | 'credit_invoice';
-  
+  selectedPaymentMethod: 'cash' | 'wallet' | 'credit_card' | 'credit';
+  lastConfirmPaymentResponse: { orderId: string; invoice_number?: string; order_number: string } | null;
+
   // Order actions
   selectOrder: (id: string) => void;
   updateOrderStatus: (id: string, status: Order['status'], failureReason?: string, failureNote?: string) => void;
@@ -97,7 +98,7 @@ interface OrderStore {
     vehicle_name: string;
     vehicle_id: string;
     vehicle_plate: string;
-    zone: string;
+    zones: string[];  // Array of zone names
     status: 'online' | 'offline';
     phone: string;
   }) => void;
@@ -111,8 +112,9 @@ interface OrderStore {
   getAvailableStock: (productId: string) => number; // Get available stock for a product (loaded_quantity - cart quantity)
   
   // Payment actions
-  setPaymentMethod: (method: 'cash' | 'wallet' | 'credit_card' | 'invoice' | 'credit_sale' | 'credit_invoice') => void;
-  
+  setPaymentMethod: (method: 'cash' | 'wallet' | 'credit_card' | 'credit') => void;
+  setLastConfirmPaymentResponse: (data: { orderId: string; invoice_number?: string; order_number: string } | null) => void;
+
   // Utility actions
   getOrderHistory: () => Order[];
   getDriverMetrics: () => Driver['metrics'] | null;
@@ -133,9 +135,9 @@ export const useOrderStore = create<OrderStore>()(persist(
     cartItems: [],
     
     // Payment management state
-    selectedPaymentMethod: 'cash' as 'cash' | 'wallet' | 'credit_card' | 'invoice' | 'credit_sale' | 'credit_invoice',
+    selectedPaymentMethod: 'cash' as 'cash' | 'wallet' | 'credit_card' | 'credit',
+    lastConfirmPaymentResponse: null,
 
-    
     // Order management actions
     setAssignedOrders: (orders) => set(() => ({ assignedOrders: orders })),
     
@@ -202,7 +204,7 @@ export const useOrderStore = create<OrderStore>()(persist(
             address: '',
             updated_at: new Date().toISOString()
           },
-          zone: info.zone || undefined
+          zones: Array.isArray(info.zones) && info.zones.length > 0 ? info.zones : undefined
         };
         
         return { currentDriver: updatedDriver };
@@ -327,8 +329,11 @@ export const useOrderStore = create<OrderStore>()(persist(
     },
     
     // Payment management actions
-    setPaymentMethod: (method: 'cash' | 'wallet' | 'credit_card' | 'invoice' | 'credit_sale' | 'credit_invoice') => {
+    setPaymentMethod: (method: 'cash' | 'wallet' | 'credit_card' | 'credit') => {
       set({ selectedPaymentMethod: method });
+    },
+    setLastConfirmPaymentResponse: (data) => {
+      set({ lastConfirmPaymentResponse: data });
     },
     
     // Utility actions

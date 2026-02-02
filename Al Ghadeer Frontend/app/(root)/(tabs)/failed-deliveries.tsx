@@ -1,5 +1,7 @@
+import ApiErrorText from '@/components/ApiErrorText';
 import { useOrderStore } from '@/store/index';
 import { authenticatedFetch } from '@/store/auth';
+import { parseApiResponseWithSoftError } from '@/utils/api';
 import { Ionicons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
 import React, { useState, useCallback, useMemo } from 'react';
@@ -33,6 +35,7 @@ const FailedDeliveries = () => {
   const [additionalNotes, setAdditionalNotes] = useState<string>('');
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [showReasonModal, setShowReasonModal] = useState(false);
+  const [apiError, setApiError] = useState<string | null>(null);
 
   const order = assignedOrders.find(item => selectedOrder === item.id);
 
@@ -52,6 +55,7 @@ const FailedDeliveries = () => {
     }
 
     setIsSubmitting(true);
+    setApiError(null);
     try {
       // Prepare failure details
       const failureDetails = {
@@ -71,29 +75,21 @@ const FailedDeliveries = () => {
         body: JSON.stringify(failureDetails)
       });
 
-      const result = await response.json();
-      
-      if (result.success) {
-        // Update order status to failed with detailed reason
-        updateOrderStatus(order.id, 'failed', selectedReason, JSON.stringify(failureDetails));
-        
-        // Show success message
-        showSuccessAlert(
-          'Failed Delivery Reported',
-          result.message || 'Your failed delivery report has been submitted successfully.',
-          [
-            {
-              text: 'OK',
-              onPress: () => router.push('/(root)/(tabs)/home')
-            }
-          ]
-        );
-      } else {
-        showErrorAlert('Error', result.message || 'Failed to submit report. Please try again.');
+      const parseResult = await parseApiResponseWithSoftError<{ message?: string }>(response);
+      if (!parseResult.ok) {
+        setApiError(parseResult.error);
+        return;
       }
+      const data = parseResult.data;
+      updateOrderStatus(order.id, 'failed', selectedReason, JSON.stringify(failureDetails));
+      showSuccessAlert(
+        'Failed Delivery Reported',
+        data.message || 'Your failed delivery report has been submitted successfully.',
+        [{ text: 'OK', onPress: () => router.push('/(root)/(tabs)/home') }]
+      );
     } catch (error) {
       console.error('Error submitting failed delivery report:', error);
-      showErrorAlert('Error', 'Failed to submit report. Please try again.');
+      setApiError('Failed to submit report. Please try again.');
     } finally {
       setIsSubmitting(false);
     }
@@ -178,6 +174,8 @@ const FailedDeliveries = () => {
           <View style={{ width: 40 }} />
         </View>
       </View>
+
+      <ApiErrorText error={apiError} />
 
       <ScrollView 
         style={{ flex: 1 }}

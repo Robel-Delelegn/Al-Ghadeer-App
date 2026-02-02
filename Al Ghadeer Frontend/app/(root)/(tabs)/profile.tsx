@@ -46,7 +46,8 @@ const Profile = () => {
   const phone = currentDriver?.phone || user?.phone || '—';
   const vehicleType = currentDriver?.vehicle?.type || user?.vehicle_type || '—';
   const vehiclePlate = currentDriver?.vehicle?.plate_number || user?.vehicle_number || '—';
-  const zone = (currentDriver as any)?.zone || user?.zone || '—';
+  // Zones is an array of strings
+  const zones = currentDriver?.zones;
   const status = currentDriver?.status || 'online';
 
   const stats = useMemo(() => {
@@ -77,6 +78,29 @@ const Profile = () => {
       <View style={styles.infoContent}>
         <Text style={styles.infoLabel}>{label}</Text>
         <Text style={styles.infoValue}>{value}</Text>
+      </View>
+    </View>
+  );
+
+  // Zone display component - shows tags for multiple zones
+  const ZoneDisplay = ({ zones }: { zones: string[] }) => (
+    <View style={styles.infoItem}>
+      <View style={styles.infoIcon}>
+        <Ionicons name="location-outline" size={18} color="#64748B" />
+      </View>
+      <View style={styles.infoContent}>
+        <Text style={styles.infoLabel}>{zones.length === 1 ? 'Zone' : 'Zones'}</Text>
+        {zones.length === 1 ? (
+          <Text style={styles.infoValue}>{zones[0]}</Text>
+        ) : (
+          <View style={styles.zonesContainer}>
+            {zones.map((zoneName, index) => (
+              <View key={index} style={styles.zoneTag}>
+                <Text style={styles.zoneTagText}>{zoneName}</Text>
+              </View>
+            ))}
+          </View>
+        )}
       </View>
     </View>
   );
@@ -147,10 +171,10 @@ const Profile = () => {
             <InfoItem icon="car-outline" label="Vehicle" value={vehicleType} />
             <View style={styles.infoDivider} />
             <InfoItem icon="document-text-outline" label="Plate" value={vehiclePlate} />
-            {zone !== '—' && (
+            {zones && zones.length > 0 && (
               <>
                 <View style={styles.infoDivider} />
-                <InfoItem icon="location-outline" label="Zone" value={zone} />
+                <ZoneDisplay zones={zones} />
               </>
             )}
           </View>
@@ -321,6 +345,23 @@ const styles = StyleSheet.create({
     fontSize: 16,
     fontWeight: '600',
     color: '#0F172A',
+  },
+  zonesContainer: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 8,
+    marginTop: 4,
+  },
+  zoneTag: {
+    backgroundColor: '#E0F2FE',
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    borderRadius: 12,
+  },
+  zoneTagText: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: '#0369A1',
   },
   infoDivider: {
     height: 1,

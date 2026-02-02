@@ -11,7 +11,7 @@ import { showSuccessAlert, showErrorAlert } from '@/store/utils/alert';
 
 const PaymentReceipt: React.FC = () => {
   const router = useRouter();
-  const { selectedOrder, assignedOrders, completedOrders, cartItems, selectedPaymentMethod } = useOrderStore();
+  const { selectedOrder, assignedOrders, completedOrders, cartItems, selectedPaymentMethod, lastConfirmPaymentResponse } = useOrderStore();
   // Check both assignedOrders and completedOrders since order might have been marked as delivered
   const orderDetail = assignedOrders.find(item => selectedOrder === item.id) || 
                       completedOrders.find(item => selectedOrder === item.id) as Order | undefined;
@@ -24,22 +24,19 @@ const PaymentReceipt: React.FC = () => {
   const [isPrinting, setIsPrinting] = useState(false);
   const [isNavigating, setIsNavigating] = useState(false);
 
-  // Calculate data from current state with safe property access
+  // customer_id = customer.id from OrdersResponse (customer dictionary)
   const shippingDetails = orderDetail ? {
     name: orderDetail.customer_name || 'N/A',
     address: orderDetail.customer_address || 'N/A',
     contact: orderDetail.customer_phone || 'N/A',
-    customerId: orderDetail.customer_id || 'N/A'
-  } : { name: 'N/A', address: 'N/A', contact: 'N/A', customerId: 'N/A' };
+    customerId: orderDetail.customer_id ?? '',  // from customer.id - no dummy
+  } : { name: 'N/A', address: 'N/A', contact: 'N/A', customerId: '' };
+  const customerIdDisplay = shippingDetails.customerId || '—';
   const paymentMethodDisplay = selectedPaymentMethod === 'credit_card' ? 'Credit Card' : 
                                 selectedPaymentMethod === 'wallet' ? 'Wallet' : 
-                                selectedPaymentMethod === 'invoice' ? 'Invoice' :
-                                selectedPaymentMethod === 'credit_sale' ? 'Credit Sale' :
-                                selectedPaymentMethod === 'credit_invoice' ? 'Credit Invoice' :
+                                selectedPaymentMethod === 'credit' ? 'Credit' :
+                                ['invoice', 'credit_invoice'].includes(selectedPaymentMethod ?? '') ? 'Credit' :
                                 'Cash';
-  
-  // Determine if this should show delivery note (Credit Invoice) or invoice
-  const isDeliveryNote = selectedPaymentMethod === 'credit_invoice';
   // Debug logging
   console.log('Payment Receipt - orderDetail:', orderDetail);
   console.log('Payment Receipt - cartItems:', cartItems);
@@ -58,7 +55,25 @@ const PaymentReceipt: React.FC = () => {
   // Rent items are not included in receipt totals
   const totalWithVat = (Number(subtotal) + Number(vat)).toFixed(2);
   const orderId = orderDetail?.order_number || 'N/A';
-  const invoiceNumber = orderDetail?.invoice_number || orderId;
+  // Use invoice_number from ConfirmPaymentResponse - if we have a matching confirm response, use ONLY that
+  // Don't fall back to orderDetail.invoice_number when confirm response explicitly has no invoice_number
+  const matchesConfirmOrder = orderDetail && lastConfirmPaymentResponse && (
+    lastConfirmPaymentResponse.orderId === orderDetail.id ||
+    lastConfirmPaymentResponse.order_number === orderDetail.order_number
+  );
+  // If confirm response matches, use its invoice_number (may be undefined = no invoice = delivery note)
+  // Only fall back to orderDetail.invoice_number if no matching confirm response
+  const invoiceNumber = matchesConfirmOrder 
+    ? (lastConfirmPaymentResponse?.invoice_number || '')
+    : (orderDetail?.invoice_number ?? '');
+  const invoiceDisplay = invoiceNumber || '—';
+  // For credit flow: invoice_number present → Invoice, absent → Delivery Note
+  const isCreditFlow = ['credit', 'invoice', 'credit_invoice'].includes(selectedPaymentMethod ?? '');
+  const hasInvoiceNumber = !!invoiceNumber;
+  const isDeliveryNote = isCreditFlow ? !hasInvoiceNumber : false;
+  
+  // Debug: log delivery note determination
+  console.log('Payment Receipt - isDeliveryNote:', isDeliveryNote, 'isCreditFlow:', isCreditFlow, 'hasInvoiceNumber:', hasInvoiceNumber, 'invoiceNumber:', invoiceNumber, 'matchesConfirmOrder:', matchesConfirmOrder, 'selectedPaymentMethod:', selectedPaymentMethod);
   const paymentDate = new Date().toLocaleDateString('en-GB', {
     day: '2-digit',
     month: '2-digit',
@@ -68,24 +83,19 @@ const PaymentReceipt: React.FC = () => {
   });
 
   const generateDeliveryNoteHTML = useCallback(() => {
-    // Map cart items to delivery note format with item numbers
+    // Delivery note: simple list of items delivered, no invoice number, no payment, no amounts
     const itemsWithNumbers = cartItems
       .filter(item => item?.name)
-      .map((item, index) => {
-        const itemNumber = String(index + 1).padStart(3, '0');
-        return {
-          itemNo: itemNumber,
-          name: item.name,
-          quantity: item.quantity,
-        };
-      });
+      .map((item, index) => ({
+        itemNo: String(index + 1).padStart(2, '0'),
+        name: item.name,
+        quantity: item.quantity,
+      }));
 
     const itemsHTML = itemsWithNumbers.map(item => {
-      // Create checkbox squares for quantity
-      const checkboxHTML = Array.from({ length: item.quantity }, (_, i) => 
+      const checkboxHTML = Array.from({ length: item.quantity }, () => 
         '<span style="display: inline-block; width: 12px; height: 12px; border: 1px solid #000; margin: 2px;"></span>'
       ).join('');
-      
       return `
         <tr style="border-bottom: 1px solid #e5e7eb;">
           <td style="padding: 6px; text-align: center; font-size: 11px;">${item.itemNo}</td>
@@ -102,14 +112,13 @@ const PaymentReceipt: React.FC = () => {
       month: '2-digit',
       year: 'numeric'
     });
-    const deliveryNoteNumber = invoiceNumber || orderId;
 
     return `
       <!DOCTYPE html>
       <html>
         <head>
           <meta charset="utf-8">
-          <title>Delivery Note - ${deliveryNoteNumber}</title>
+          <title>Delivery Note - ${orderId}</title>
           <style>
             body { 
               font-family: Arial, sans-serif; 
@@ -152,11 +161,6 @@ const PaymentReceipt: React.FC = () => {
               margin: 15px 0;
               font-size: 14px;
               font-weight: bold;
-            }
-            .delivery-note-number {
-              text-align: center;
-              margin-bottom: 10px;
-              font-size: 11px;
             }
             .info-section {
               margin: 8px 0;
@@ -238,9 +242,6 @@ const PaymentReceipt: React.FC = () => {
               <div>Delivery Note</div>
               <div style="font-size: 12px; margin-top: 3px;">سند تسليم</div>
             </div>
-            <div class="delivery-note-number">
-              No. ${deliveryNoteNumber}
-            </div>
 
             <div class="info-section">
               <div class="info-row">
@@ -248,12 +249,29 @@ const PaymentReceipt: React.FC = () => {
                 <span>${dateStr}</span>
               </div>
               <div class="info-row">
-                <span class="info-label">Mr./M/s:</span>
+                <span class="info-label">Order Ref:</span>
+                <span>${orderId}</span>
+              </div>
+              <div class="info-row">
+                <span class="info-label">Delivered to:</span>
                 <span>${shippingDetails.name || ''}</span>
               </div>
               <div class="info-row">
                 <span class="info-label">Address:</span>
                 <span>${shippingDetails.address || ''}</span>
+              </div>
+              <div class="info-row">
+                <span class="info-label">Contact:</span>
+                <span>${shippingDetails.contact || ''}</span>
+              </div>
+              ${orderDetail?.delivery_instructions ? `
+              <div class="info-row">
+                <span class="info-label">Instructions:</span>
+                <span>${orderDetail.delivery_instructions}</span>
+              </div>
+              ` : ''}
+              <div class="info-row" style="margin-top: 8px;">
+                <span class="info-label" style="color: #6b7280; font-style: italic;">Payment due (not paid)</span>
               </div>
             </div>
 
@@ -299,7 +317,7 @@ const PaymentReceipt: React.FC = () => {
         </body>
       </html>
     `;
-  }, [cartItems, shippingDetails, orderId, invoiceNumber]);
+  }, [cartItems, shippingDetails, orderId, orderDetail]);
 
   const generateReceiptHTML = useCallback(() => {
     const itemsHTML = cartItems.map(item => {
@@ -461,7 +479,7 @@ const PaymentReceipt: React.FC = () => {
               </div>
               <div class="info-row">
                 <span class="info-label">Invoice No:</span>
-                <span>${invoiceNumber}</span>
+                <span>${invoiceDisplay}</span>
               </div>
               <div class="info-row">
                 <span class="info-label">Customer:</span>
@@ -484,8 +502,8 @@ const PaymentReceipt: React.FC = () => {
             </div>
               <div class="info-row">
                 <span class="info-label">Customer ID:</span>
-                <span>${shippingDetails.customerId}</span>
-            </div>
+                <span>${customerIdDisplay}</span>
+              </div>
           </div>
 
             <table class="items-table">
@@ -528,7 +546,7 @@ const PaymentReceipt: React.FC = () => {
         </body>
       </html>
     `;
-  }, [cartItems, shippingDetails, selectedPaymentMethod, subtotal, vat, totalWithVat, orderId, invoiceNumber, orderDetail]);
+  }, [cartItems, shippingDetails, selectedPaymentMethod, subtotal, vat, totalWithVat, orderId, invoiceDisplay, orderDetail]);
 
   const handleDownloadInvoice = useCallback(async () => {
     if (isDownloading) return; // Prevent multiple simultaneous downloads
@@ -697,25 +715,25 @@ const PaymentReceipt: React.FC = () => {
     
         {orderDetail && (
           <View style={{ 
-            backgroundColor: '#E8F5E8', 
+            backgroundColor: isDeliveryNote ? '#FFF8E6' : '#E8F5E8', 
             borderRadius: 8, 
             padding: 12,
             borderWidth: 1,
-            borderColor: '#C8E6C9'
+            borderColor: isDeliveryNote ? '#FFE082' : '#C8E6C9'
           }}>
             <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 4 }}>
-              <Ionicons name="checkmark-circle" size={16} color="#28A745" />
-              <Text style={{ color: '#28A745', fontSize: 14, fontWeight: '600', marginLeft: 6 }}>
+              <Ionicons name={isDeliveryNote ? 'document-text' : 'checkmark-circle'} size={16} color={isDeliveryNote ? '#F57C00' : '#28A745'} />
+              <Text style={{ color: isDeliveryNote ? '#E65100' : '#28A745', fontSize: 14, fontWeight: '600', marginLeft: 6 }}>
                 Order #{orderDetail.order_number}
               </Text>
-                  </View>
+            </View>
             <View style={{ flexDirection: 'row', alignItems: 'center' }}>
-              <Ionicons name="time" size={14} color="#28A745" />
-              <Text style={{ color: '#28A745', fontSize: 12, marginLeft: 6 }}>
-                Payment completed successfully
+              <Ionicons name="time" size={14} color={isDeliveryNote ? '#F57C00' : '#28A745'} />
+              <Text style={{ color: isDeliveryNote ? '#E65100' : '#28A745', fontSize: 12, marginLeft: 6 }}>
+                {isDeliveryNote ? 'Items delivered – Payment due' : 'Payment completed successfully'}
               </Text>
-                  </View>
-                </View>
+            </View>
+          </View>
         )}
               </View>
     
@@ -752,12 +770,68 @@ const PaymentReceipt: React.FC = () => {
             <Text style={{ color: '#212529', fontSize: 14, fontWeight: '600' }}>
               {isDeliveryNote ? 'Delivery Note' : 'Tax Invoice'}
             </Text>
-            <Text style={{ color: '#6C757D', fontSize: 10 }}>
-              TRN: 100234134300003
-            </Text>
-              </View>
+            {!isDeliveryNote && (
+              <Text style={{ color: '#6C757D', fontSize: 10 }}>
+                TRN: 100234134300003
+              </Text>
+            )}
+          </View>
     
-          {/* Transaction Details */}
+          {isDeliveryNote ? (
+            /* Delivery Note: simple summary - items only, no invoice/amounts/payment */
+            <>
+              <View style={{ marginBottom: 16 }}>
+                <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginBottom: 4 }}>
+                  <Text style={{ color: '#6C757D', fontSize: 11, fontWeight: '600' }}>Date:</Text>
+                  <Text style={{ color: '#212529', fontSize: 11 }}>{new Date().toISOString().split('T')[0]}</Text>
+                </View>
+                <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginBottom: 4 }}>
+                  <Text style={{ color: '#6C757D', fontSize: 11, fontWeight: '600' }}>Order Ref:</Text>
+                  <Text style={{ color: '#212529', fontSize: 11 }}>{orderId}</Text>
+                </View>
+                <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginBottom: 4 }}>
+                  <Text style={{ color: '#6C757D', fontSize: 11, fontWeight: '600' }}>Delivered to:</Text>
+                  <Text style={{ color: '#212529', fontSize: 11 }}>{shippingDetails.name || 'N/A'}</Text>
+                </View>
+                <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginBottom: 4 }}>
+                  <Text style={{ color: '#6C757D', fontSize: 11, fontWeight: '600' }}>Address:</Text>
+                  <Text style={{ color: '#212529', fontSize: 11, flex: 1, textAlign: 'right' }}>{shippingDetails.address || 'N/A'}</Text>
+                </View>
+                <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginBottom: 4 }}>
+                  <Text style={{ color: '#6C757D', fontSize: 11, fontWeight: '600' }}>Contact:</Text>
+                  <Text style={{ color: '#212529', fontSize: 11 }}>{shippingDetails.contact || '—'}</Text>
+                </View>
+                {orderDetail?.delivery_instructions ? (
+                  <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginBottom: 4 }}>
+                    <Text style={{ color: '#6C757D', fontSize: 11, fontWeight: '600' }}>Instructions:</Text>
+                    <Text style={{ color: '#212529', fontSize: 11, flex: 1, textAlign: 'right' }}>{orderDetail.delivery_instructions}</Text>
+                  </View>
+                ) : null}
+                <View style={{ marginTop: 8, paddingTop: 8, borderTopWidth: 1, borderTopColor: '#F1F3F4' }}>
+                  <Text style={{ color: '#6b7280', fontSize: 11, fontStyle: 'italic' }}>
+                    Payment due (not paid)
+                  </Text>
+                </View>
+              </View>
+              <View style={{ marginBottom: 16 }}>
+                <View style={{ flexDirection: 'row', borderBottomWidth: 1, borderBottomColor: '#E9ECEF', paddingBottom: 6, marginBottom: 8 }}>
+                  <Text style={{ flex: 1, color: '#6C757D', fontSize: 10, fontWeight: '600', textTransform: 'uppercase' }}>Item</Text>
+                  <Text style={{ width: 50, color: '#6C757D', fontSize: 10, fontWeight: '600', textAlign: 'center', textTransform: 'uppercase' }}>Qty</Text>
+                </View>
+                {cartItems.map((item, index) => {
+                  if (!item || !item.name) return null;
+                  return (
+                    <View key={item.id} style={{ flexDirection: 'row', marginBottom: 6 }}>
+                      <Text style={{ flex: 1, color: '#212529', fontSize: 11 }}>{item.name}</Text>
+                      <Text style={{ width: 50, color: '#212529', fontSize: 11, textAlign: 'center' }}>{item.quantity}</Text>
+                    </View>
+                  );
+                })}
+              </View>
+            </>
+          ) : (
+            /* Invoice: full receipt with amounts */
+            <>
           <View style={{ marginBottom: 16 }}>
             <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginBottom: 4 }}>
               <Text style={{ color: '#6C757D', fontSize: 11, fontWeight: '600' }}>Date:</Text>
@@ -768,25 +842,15 @@ const PaymentReceipt: React.FC = () => {
               <Text style={{ color: '#212529', fontSize: 11 }}>{new Date().toTimeString().split(' ')[0]}</Text>
             </View>
             <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginBottom: 4 }}>
-              <Text style={{ color: '#6C757D', fontSize: 11, fontWeight: '600' }}>User:</Text>
-              <Text style={{ color: '#212529', fontSize: 11 }}>Driver</Text>
-            </View>
-            <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginBottom: 4 }}>
               <Text style={{ color: '#6C757D', fontSize: 11, fontWeight: '600' }}>Invoice No:</Text>
-              <Text style={{ color: '#212529', fontSize: 11 }}>{invoiceNumber}</Text>
+              <Text style={{ color: '#212529', fontSize: 11 }}>{invoiceDisplay}</Text>
             </View>
             <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginBottom: 4 }}>
               <Text style={{ color: '#6C757D', fontSize: 11, fontWeight: '600' }}>Customer:</Text>
               <Text style={{ color: '#212529', fontSize: 11 }}>{shippingDetails.name || 'N/A'}</Text>
-                  </View>
-                </View>
-    
-          {/* Order Details */}
-          <View style={{ marginBottom: 16 }}>
-            <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginBottom: 4 }}>
-              <Text style={{ color: '#6C757D', fontSize: 11, fontWeight: '600' }}>Customer TRN:</Text>
-              <Text style={{ color: '#212529', fontSize: 11 }}></Text>
             </View>
+          </View>
+          <View style={{ marginBottom: 16 }}>
             <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginBottom: 4 }}>
               <Text style={{ color: '#6C757D', fontSize: 11, fontWeight: '600' }}>Order No.:</Text>
               <Text style={{ color: '#212529', fontSize: 11 }}>{orderId}</Text>
@@ -794,44 +858,28 @@ const PaymentReceipt: React.FC = () => {
             <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginBottom: 4 }}>
               <Text style={{ color: '#6C757D', fontSize: 11, fontWeight: '600' }}>Payment Mode:</Text>
               <Text style={{ color: '#212529', fontSize: 11 }}>{paymentMethodDisplay}</Text>
-                  </View>
+            </View>
             <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginBottom: 4 }}>
               <Text style={{ color: '#6C757D', fontSize: 11, fontWeight: '600' }}>Customer ID:</Text>
-              <Text style={{ color: '#212529', fontSize: 11 }}>DB-{orderId}</Text>
-                </View>
-              </View>
-    
-          {/* Items Table */}
+              <Text style={{ color: '#212529', fontSize: 11 }}>{customerIdDisplay}</Text>
+            </View>
+          </View>
           <View style={{ marginBottom: 16 }}>
-            <View style={{ 
-              flexDirection: 'row', 
-              borderBottomWidth: 1, 
-              borderBottomColor: '#E9ECEF', 
-              paddingBottom: 6, 
-              marginBottom: 8 
-            }}>
+            <View style={{ flexDirection: 'row', borderBottomWidth: 1, borderBottomColor: '#E9ECEF', paddingBottom: 6, marginBottom: 8 }}>
               <Text style={{ flex: 1, color: '#6C757D', fontSize: 10, fontWeight: '600', textTransform: 'uppercase' }}>Product</Text>
               <Text style={{ width: 35, color: '#6C757D', fontSize: 10, fontWeight: '600', textAlign: 'center', textTransform: 'uppercase' }}>Qty</Text>
               <Text style={{ width: 65, color: '#6C757D', fontSize: 10, fontWeight: '600', textAlign: 'right', textTransform: 'uppercase' }}>Price (ex VAT)</Text>
               <Text style={{ width: 60, color: '#6C757D', fontSize: 10, fontWeight: '600', textAlign: 'right', textTransform: 'uppercase' }}>VAT</Text>
               <Text style={{ width: 65, color: '#6C757D', fontSize: 10, fontWeight: '600', textAlign: 'right', textTransform: 'uppercase' }}>Total</Text>
             </View>
-    
             {cartItems.map((item, index) => {
               if (!item || !item.name) return null;
               const priceExVat = item.price;
               const vatAmount = priceExVat * 0.05;
               const itemVatTotal = vatAmount * item.quantity;
               const itemTotal = (priceExVat + vatAmount) * item.quantity;
-              
               return (
-                <View key={item.id} style={{ 
-                  flexDirection: 'row', 
-                  marginBottom: 6,
-                  borderBottomWidth: index !== cartItems.length - 1 ? 1 : 0,
-                  borderBottomColor: '#F1F3F4',
-                  paddingBottom: index !== cartItems.length - 1 ? 6 : 0
-                }}>
+                <View key={item.id} style={{ flexDirection: 'row', marginBottom: 6, borderBottomWidth: index !== cartItems.length - 1 ? 1 : 0, borderBottomColor: '#F1F3F4', paddingBottom: index !== cartItems.length - 1 ? 6 : 0 }}>
                   <Text style={{ flex: 1, color: '#212529', fontSize: 11 }}>{item.name}</Text>
                   <Text style={{ width: 35, color: '#212529', fontSize: 11, textAlign: 'center' }}>{item.quantity}</Text>
                   <Text style={{ width: 65, color: '#212529', fontSize: 11, textAlign: 'right' }}>AED {priceExVat.toFixed(2)}</Text>
@@ -840,10 +888,8 @@ const PaymentReceipt: React.FC = () => {
                 </View>
               );
             })}
-            
           </View>
-    
-          {/* Totals - Professional Invoice Format */}
+          {/* Totals - Invoice only */}
           <View style={{ borderTopWidth: 1, borderTopColor: '#E9ECEF', paddingTop: 12 }}>
             <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginBottom: 4 }}>
               <Text style={{ color: '#6C757D', fontSize: 11 }}>Subtotal (Excluding VAT):</Text>
@@ -866,18 +912,14 @@ const PaymentReceipt: React.FC = () => {
             </View>
           </View>
 
-          {/* Contact Info */}
-          <View style={{ 
-            marginTop: 20, 
-            borderTopWidth: 1, 
-            borderTopColor: '#E9ECEF', 
-            paddingTop: 12, 
-            alignItems: 'center' 
-          }}>
+          {/* Contact Info - Invoice only */}
+          <View style={{ marginTop: 20, borderTopWidth: 1, borderTopColor: '#E9ECEF', paddingTop: 12, alignItems: 'center' }}>
             <Text style={{ color: '#6C757D', fontSize: 10, marginBottom: 2 }}>Tel: +97137211353</Text>
             <Text style={{ color: '#6C757D', fontSize: 10, marginBottom: 2 }}>Website: www.alghadeerwater.com</Text>
             <Text style={{ color: '#6C757D', fontSize: 10 }}>Email: Info@alghadeerwater.com</Text>
-                </View>
+          </View>
+            </>
+          )}
               </View>
     
         {/* Action Buttons */}
