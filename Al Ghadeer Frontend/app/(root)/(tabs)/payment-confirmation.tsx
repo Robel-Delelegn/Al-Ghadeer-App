@@ -192,14 +192,19 @@ const PaymentConfirmation: React.FC = () => {
         return;
       }
       const result = parseResult.data;
+      
+      // Log full response to debug sale_id
+      console.log('Confirm Payment - Full server response:', JSON.stringify(result, null, 2));
+      console.log('Confirm Payment - sale_id from server:', result.sale_id);
 
       // Mark order as delivered and store confirm payment response for receipt
       if (orderDetail) {
         const invoiceNumber = result.invoice_number;
         
-        // Store confirm response so receipt can display invoice_number from API
+        // Store confirm response - use sale_id from server for invoice generation
         setLastConfirmPaymentResponse({
           orderId: orderDetail.id,
+          sale_id: result.sale_id,
           invoice_number: invoiceNumber,
           order_number: result.order_number,
         });

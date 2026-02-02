@@ -245,11 +245,17 @@ const OrganizationSignature: React.FC = () => {
         return;
       }
       const result = parseResult.data;
+      
+      // Log full response to debug sale_id
+      console.log('Organization Signature - Full server response:', JSON.stringify(result, null, 2));
+      console.log('Organization Signature - sale_id from server:', result.sale_id);
 
       // Mark order as delivered and store confirm payment response for receipt
       if (orderDetail) {
+        // Store confirm response - use sale_id from server for invoice generation
         setLastConfirmPaymentResponse({
           orderId: orderDetail.id,
+          sale_id: result.sale_id,
           invoice_number: result.invoice_number,
           order_number: result.order_number,
         });

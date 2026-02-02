@@ -82,7 +82,7 @@ interface OrderStore {
   
   // Payment management
   selectedPaymentMethod: 'cash' | 'wallet' | 'credit_card' | 'credit';
-  lastConfirmPaymentResponse: { orderId: string; invoice_number?: string; order_number: string } | null;
+  lastConfirmPaymentResponse: { orderId: string; sale_id?: string; invoice_number?: string; order_number: string } | null;
 
   // Order actions
   selectOrder: (id: string) => void;
@@ -113,7 +113,7 @@ interface OrderStore {
   
   // Payment actions
   setPaymentMethod: (method: 'cash' | 'wallet' | 'credit_card' | 'credit') => void;
-  setLastConfirmPaymentResponse: (data: { orderId: string; invoice_number?: string; order_number: string } | null) => void;
+  setLastConfirmPaymentResponse: (data: { orderId: string; sale_id?: string; invoice_number?: string; order_number: string } | null) => void;
 
   // Utility actions
   getOrderHistory: () => Order[];

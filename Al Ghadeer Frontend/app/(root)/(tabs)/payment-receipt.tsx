@@ -1,5 +1,7 @@
 import { useOrderStore } from '@/store/index';
 import { Order } from '@/types/order';
+import { authenticatedFetch } from '@/store/auth';
+import { parseApiResponseWithSoftError } from '@/utils/api';
 import { Ionicons } from '@expo/vector-icons';
 import * as FileSystem from 'expo-file-system';
 import * as Print from 'expo-print';
@@ -8,6 +10,18 @@ import * as Sharing from 'expo-sharing';
 import React, { useCallback, useState, useEffect } from 'react';
 import { ActivityIndicator, ScrollView, Text, TouchableOpacity, View } from 'react-native';
 import { showSuccessAlert, showErrorAlert } from '@/store/utils/alert';
+
+const IP_ADDRESS = process.env.EXPO_PUBLIC_IP_ADDRESS;
+
+// Response structure for generate invoice API
+interface GenerateInvoiceResponse {
+  invoice_id: string;
+  invoice_number: string;
+  total_amount: number;
+  customer_id: string;
+  customer_name: string;
+  created_at: string;
+}
 
 const PaymentReceipt: React.FC = () => {
   const router = useRouter();
@@ -23,6 +37,8 @@ const PaymentReceipt: React.FC = () => {
   const [isDownloading, setIsDownloading] = useState(false);
   const [isPrinting, setIsPrinting] = useState(false);
   const [isNavigating, setIsNavigating] = useState(false);
+  const [isGeneratingInvoice, setIsGeneratingInvoice] = useState(false);
+  const [generatedInvoiceNumber, setGeneratedInvoiceNumber] = useState<string | null>(null);
 
   // customer_id = customer.id from OrdersResponse (customer dictionary)
   const shippingDetails = orderDetail ? {
@@ -63,16 +79,23 @@ const PaymentReceipt: React.FC = () => {
   );
   // If confirm response matches, use its invoice_number (may be undefined = no invoice = delivery note)
   // Only fall back to orderDetail.invoice_number if no matching confirm response
-  const invoiceNumber = matchesConfirmOrder 
+  // Also check for dynamically generated invoice number
+  const baseInvoiceNumber = matchesConfirmOrder 
     ? (lastConfirmPaymentResponse?.invoice_number || '')
     : (orderDetail?.invoice_number ?? '');
+  const invoiceNumber = generatedInvoiceNumber || baseInvoiceNumber;
   const invoiceDisplay = invoiceNumber || '—';
   // For credit flow: invoice_number present → Invoice, absent → Delivery Note
   const isCreditFlow = ['credit', 'invoice', 'credit_invoice'].includes(selectedPaymentMethod ?? '');
   const hasInvoiceNumber = !!invoiceNumber;
   const isDeliveryNote = isCreditFlow ? !hasInvoiceNumber : false;
   
-  // Debug: log delivery note determination
+  // Get sale ID for invoice generation - use sale_id from lastConfirmPaymentResponse (delivery_report_id from normal sales, sale_id from direct sales)
+  const saleId = lastConfirmPaymentResponse?.sale_id || '';
+  
+  // Debug: log delivery note determination and sale_id
+  console.log('Payment Receipt - lastConfirmPaymentResponse:', JSON.stringify(lastConfirmPaymentResponse, null, 2));
+  console.log('Payment Receipt - saleId for invoice generation:', saleId);
   console.log('Payment Receipt - isDeliveryNote:', isDeliveryNote, 'isCreditFlow:', isCreditFlow, 'hasInvoiceNumber:', hasInvoiceNumber, 'invoiceNumber:', invoiceNumber, 'matchesConfirmOrder:', matchesConfirmOrder, 'selectedPaymentMethod:', selectedPaymentMethod);
   const paymentDate = new Date().toLocaleDateString('en-GB', {
     day: '2-digit',
@@ -548,6 +571,62 @@ const PaymentReceipt: React.FC = () => {
     `;
   }, [cartItems, shippingDetails, selectedPaymentMethod, subtotal, vat, totalWithVat, orderId, invoiceDisplay, orderDetail]);
 
+  // Handle generating invoice from delivery note
+  const handleGenerateInvoice = useCallback(async () => {
+    console.log('Generate Invoice clicked - saleId:', saleId, 'isGeneratingInvoice:', isGeneratingInvoice);
+    console.log('Generate Invoice - lastConfirmPaymentResponse:', JSON.stringify(lastConfirmPaymentResponse, null, 2));
+    
+    if (isGeneratingInvoice || !saleId) {
+      console.log('Generate Invoice aborted - isGeneratingInvoice:', isGeneratingInvoice, 'saleId empty:', !saleId);
+      return;
+    }
+    
+    setIsGeneratingInvoice(true);
+    try {
+      const requestBody = { sale_id: saleId };
+      console.log('Generating invoice - URL:', `${IP_ADDRESS}/driver/invoices/generate`);
+      console.log('Generating invoice - Request body:', JSON.stringify(requestBody));
+      
+      const url = `${IP_ADDRESS}/driver/invoices/generate`;
+      const response = await authenticatedFetch(url, {
+        method: 'POST',
+        body: JSON.stringify(requestBody),
+      });
+      
+      const result = await parseApiResponseWithSoftError<GenerateInvoiceResponse>(response);
+      
+      if (!result.ok) {
+        showErrorAlert('Error', result.error || 'Failed to generate invoice. Please try again.');
+        return;
+      }
+      
+      const data = result.data;
+      console.log('Invoice generated:', data);
+      
+      // Update the invoice number state
+      setGeneratedInvoiceNumber(data.invoice_number);
+      
+      // Also update the store if needed
+      const { setLastConfirmPaymentResponse } = useOrderStore.getState();
+      if (lastConfirmPaymentResponse) {
+        setLastConfirmPaymentResponse({
+          ...lastConfirmPaymentResponse,
+          invoice_number: data.invoice_number,
+        });
+      }
+      
+      showSuccessAlert(
+        'Invoice Generated',
+        `Invoice ${data.invoice_number} has been generated successfully.`
+      );
+    } catch (error) {
+      console.error('Error generating invoice:', error);
+      showErrorAlert('Error', 'Failed to generate invoice. Please try again.');
+    } finally {
+      setIsGeneratingInvoice(false);
+    }
+  }, [saleId, isGeneratingInvoice, lastConfirmPaymentResponse]);
+
   const handleDownloadInvoice = useCallback(async () => {
     if (isDownloading) return; // Prevent multiple simultaneous downloads
     
@@ -924,7 +1003,47 @@ const PaymentReceipt: React.FC = () => {
     
         {/* Action Buttons */}
         <View style={{ gap: 12 }}>
-              <TouchableOpacity
+          {/* Generate Invoice Button - Only for Delivery Notes */}
+          {isDeliveryNote && saleId && (
+            <TouchableOpacity
+              style={{ 
+                backgroundColor: isGeneratingInvoice ? '#E9ECEF' : '#FF9800',
+                paddingVertical: 16, 
+                paddingHorizontal: 24, 
+                borderRadius: 8,
+                flexDirection: 'row',
+                alignItems: 'center',
+                justifyContent: 'center',
+                borderWidth: 1,
+                borderColor: isGeneratingInvoice ? '#E9ECEF' : '#FF9800',
+                shadowColor: '#FF9800',
+                shadowOffset: { width: 0, height: 2 },
+                shadowOpacity: isGeneratingInvoice ? 0.05 : 0.15,
+                shadowRadius: 8,
+                elevation: isGeneratingInvoice ? 2 : 4
+              }}
+              onPress={handleGenerateInvoice}
+              disabled={isGeneratingInvoice}
+            >
+              {isGeneratingInvoice ? (
+                <>
+                  <ActivityIndicator color="#6C757D" size="small" />
+                  <Text style={{ color: '#6C757D', fontSize: 16, fontWeight: '600', marginLeft: 8 }}>
+                    Generating...
+                  </Text>
+                </>
+              ) : (
+                <>
+                  <Ionicons name="receipt" size={20} color="white" />
+                  <Text style={{ color: 'white', fontSize: 16, fontWeight: '600', marginLeft: 8 }}>
+                    Generate Invoice
+                  </Text>
+                </>
+              )}
+            </TouchableOpacity>
+          )}
+
+          <TouchableOpacity
             style={{ 
               backgroundColor: isDownloading ? '#E9ECEF' : '#1976D2',
               paddingVertical: 16, 
@@ -941,7 +1060,7 @@ const PaymentReceipt: React.FC = () => {
               shadowRadius: 8,
               elevation: isDownloading ? 2 : 4
             }}
-                onPress={handleDownloadInvoice}
+            onPress={handleDownloadInvoice}
             disabled={isDownloading}
           >
             {isDownloading ? (

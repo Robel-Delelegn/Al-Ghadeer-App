@@ -45,6 +45,7 @@ export interface ConfirmPaymentResponse {
     delivery_report_id: string;
     created_at: string;
     invoice_number?: string;
+    sale_id: string;  // Use this for invoice generation
     delivery_info?: {
       signature_resource_id?: string;
       receiver_name?: string;
