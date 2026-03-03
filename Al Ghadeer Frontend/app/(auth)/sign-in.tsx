@@ -108,7 +108,7 @@ const SignIn = () => {
           return prev - 1;
         });
       }, 1000);
-      showSuccessAlert('OTP Sent', result.message || 'Enter the 6-digit code sent to your phone.');
+      // No success popup - user knows OTP was sent when they see the OTP input modal
     } else {
       showErrorAlert('Error', result.message || 'Failed to send OTP. Please try again.');
     }
