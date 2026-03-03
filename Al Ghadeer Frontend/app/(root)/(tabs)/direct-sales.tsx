@@ -1,6 +1,8 @@
+import ApiErrorText from '@/components/ApiErrorText';
 import { useOrderStore } from '@/store/index';
 import { Order } from '@/types/order';
 import { authenticatedFetch } from '@/store/auth';
+import { parseApiResponseWithSoftError } from '@/utils/api';
 import { Ionicons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
 import * as Location from 'expo-location';
@@ -52,78 +54,68 @@ const PAYMENT_METHODS = [
   { id: 'cash', label: 'Cash', icon: 'cash-outline' as const },
   { id: 'wallet', label: 'Wallet', icon: 'wallet-outline' as const },
   { id: 'credit_card', label: 'Card', icon: 'card-outline' as const },
-  { id: 'credit_sale', label: 'Credit Sale', icon: 'receipt-outline' as const },
-  { id: 'credit_invoice', label: 'Credit Invoice', icon: 'document-text-outline' as const },
+  { id: 'credit', label: 'Credit', icon: 'receipt-outline' as const },
 ];
 
+// Response structure for direct sales API
 interface DirectSaleApiResponse {
-  success: boolean;
   message: string;
-  order: {
-    id: string;
-    order_number: string;
-    invoice_number?: string;
-    created_at: string;
-    total_amount: number;
-    payment_method: string;
-    status: string;
-  };
+  sale_id: string;
   invoice_number?: string;
+}
+
+// Customer lookup response structures
+interface CustomerSite {
+  id: string;
+  name: string | null;
+  address: string | null;
+  latitude: number | null;
+  longitude: number | null;
+}
+
+interface CustomerData {
+  id: string;
+  name: string;
+  email: string | null;
+  type: 'individual' | 'organization';
+  sites: CustomerSite[];
 }
 
 const DirectSales: React.FC = () => {
   const insets = useSafeAreaInsets();
   const router = useRouter();
-  const { currentDriver, selectOrder, setPaymentMethod, clearCart } = useOrderStore();
+  const { currentDriver, selectOrder, setPaymentMethod: setGlobalPaymentMethod, setLastConfirmPaymentResponse, clearCart } = useOrderStore();
   const [products, setProducts] = useState<ServerProduct[]>([]);
   const [loading, setLoading] = useState(true);
   const [quantities, setQuantities] = useState<Record<string, number>>({});
   const [customerName, setCustomerName] = useState('');
   const [customerPhone, setCustomerPhone] = useState('');
-  const [paymentMethod, setPaymentMethod] = useState<'cash' | 'wallet' | 'credit_card' | 'credit_sale' | 'credit_invoice'>('cash');
+  const [paymentMethod, setPaymentMethod] = useState<'cash' | 'wallet' | 'credit_card' | 'credit'>('cash');
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [location, setLocation] = useState<{ latitude: number; longitude: number; address: string } | null>(null);
   const [locationLoading, setLocationLoading] = useState(false);
   const [isCheckingCustomer, setIsCheckingCustomer] = useState(false);
   const [isExistingCustomer, setIsExistingCustomer] = useState(false);
   const [customerChecked, setCustomerChecked] = useState(false);
+  const [apiError, setApiError] = useState<string | null>(null);
+  const [customerData, setCustomerData] = useState<CustomerData | null>(null);
+  const [selectedSite, setSelectedSite] = useState<CustomerSite | null>(null);
 
   const fetchProducts = useCallback(async () => {
     try {
       setLoading(true);
+      setApiError(null);
       const driverId = currentDriver?.id;
       const url = `${IP_ADDRESS}/products?driver_id=${driverId}`;
-      console.log('Fetching products from:', url);
       
       const response = await authenticatedFetch(url);
-      if (!response.ok) throw new Error(`HTTP error! Status: ${response.status}`);
-      
-      const rawResponse = await response.json();
-      console.log('Products API response:', rawResponse);
-      
-      // Handle both response formats: {success: true, data: {...}} or direct {...}
-      let productsData: { [category: string]: ServerProduct[] };
-      
-      // Check if it's wrapped format
-      if (typeof rawResponse === 'object' && rawResponse !== null && 'success' in rawResponse) {
-        const wrappedResponse = rawResponse as { success: boolean; data?: { [category: string]: ServerProduct[] } };
-        if (!wrappedResponse.success || !wrappedResponse.data) {
-          throw new Error('Invalid API response format');
-        }
-        productsData = wrappedResponse.data;
-      } else if (typeof rawResponse === 'object' && rawResponse !== null && !Array.isArray(rawResponse)) {
-        // Direct format - response is the data object itself
-        // Verify it has category-like structure (values are arrays)
-        const directData = rawResponse as Record<string, unknown>;
-        const isValid = Object.values(directData).every(val => Array.isArray(val));
-        if (isValid) {
-          productsData = directData as { [category: string]: ServerProduct[] };
-        } else {
-          throw new Error('Invalid API response format');
-        }
-      } else {
-        throw new Error('Invalid API response format');
+      const result = await parseApiResponseWithSoftError<{ [category: string]: ServerProduct[] }>(response);
+      if (!result.ok) {
+        setProducts([]);
+        setApiError(result.error);
+        return;
       }
+      const productsData = result.data;
       
       // Flatten the category-based object into a single array
       const flattenedProducts: ServerProduct[] = [];
@@ -147,7 +139,6 @@ const DirectSales: React.FC = () => {
       setProducts(flattenedProducts);
     } catch (err) {
       console.error('Error fetching products:', err);
-      showErrorAlert('Error', 'Failed to load products.');
     } finally {
       setLoading(false);
     }
@@ -166,32 +157,51 @@ const DirectSales: React.FC = () => {
     setIsCheckingCustomer(true);
     setIsExistingCustomer(false);
     setCustomerChecked(false);
+    setCustomerData(null);
+    setSelectedSite(null);
 
     try {
+      setApiError(null);
       const url = `${IP_ADDRESS}/customers/check?phone=${encodeURIComponent(customerPhone.trim())}`;
       const response = await authenticatedFetch(url);
+      const parseResult = await parseApiResponseWithSoftError<CustomerData | null>(response);
 
-      if (!response.ok) {
-        throw new Error(`HTTP error! Status: ${response.status}`);
+      if (!parseResult.ok) {
+        setApiError(parseResult.error);
+        setIsExistingCustomer(false);
+        setCustomerChecked(true);
+        return;
       }
-
-      const result = await response.json();
-
-      if (result.success && result.is_customer === true && result.customer) {
-        // Customer exists - update name field
-        setCustomerName(result.customer.customer_name || '');
+      
+      const data = parseResult.data;
+      if (data && data.id) {
+        // Existing customer found
+        setCustomerData(data);
+        setCustomerName(data.name || '');
         setIsExistingCustomer(true);
         setCustomerChecked(true);
-        console.log('Customer found:', result.customer);
+        
+        // Auto-select first site if available
+        if (data.sites && data.sites.length > 0) {
+          setSelectedSite(data.sites[0]);
+          // Update location from site if available
+          if (data.sites[0].latitude && data.sites[0].longitude) {
+            setLocation({
+              latitude: data.sites[0].latitude,
+              longitude: data.sites[0].longitude,
+              address: data.sites[0].address || data.sites[0].name || ''
+            });
+          }
+        }
+        console.log('Customer found:', data);
       } else {
-        // Customer is new
+        // New customer
         setIsExistingCustomer(false);
         setCustomerChecked(true);
         console.log('Customer is new');
       }
     } catch (error) {
       console.error('Error checking customer:', error);
-      showErrorAlert('Error', 'Failed to check customer. Please try again.');
       setIsExistingCustomer(false);
       setCustomerChecked(false);
     } finally {
@@ -266,11 +276,15 @@ const DirectSales: React.FC = () => {
     }
 
     setIsSubmitting(true);
+    setApiError(null);
     try {
       const saleData = {
-        driver_id: currentDriver?.id ,
+        driver_id: currentDriver?.id,
+        customer_id: customerData?.id || null,  // Include customer ID if existing customer
+        customer_site_id: selectedSite?.id || null,  // Include site ID if selected
         customer_name: customerName.trim(),
         customer_phone: customerPhone.trim(),
+        customer_type: customerData?.type || 'individual',  // Include customer type
         latitude: location.latitude,
         longitude: location.longitude,
         address: location.address,
@@ -293,8 +307,15 @@ const DirectSales: React.FC = () => {
         body: JSON.stringify(saleData),
       });
 
-      const result: DirectSaleApiResponse = await response.json();
-      if (!response.ok || !result.success) throw new Error(result.message || 'Failed to submit');
+      const parseResult = await parseApiResponseWithSoftError<DirectSaleApiResponse>(response);
+      if (!parseResult.ok) {
+        setApiError(parseResult.error);
+        return;
+      }
+      const data = parseResult.data;
+      
+      // Log full response to debug sale_id
+      console.log('Direct Sales - Full server response:', JSON.stringify(data, null, 2));
 
       // Prepare cart items from selected products for receipt display
       clearCart();
@@ -308,11 +329,16 @@ const DirectSales: React.FC = () => {
         category: product.category || '',
       }));
 
-      // Create order object for receipt page
-      const invoiceNumber = result.invoice_number || result.order.invoice_number;
+      // Create order object for receipt page - use sale_id from server response
+      const saleId = data.sale_id;
+      const invoiceNumber = data.invoice_number;
+      
+      console.log('Direct Sales - Storing sale_id:', saleId);
+      const orderNumber = `SALE-${saleId}`;
+      
       const newOrder: Order = {
-        id: result.order.id || `direct_sale_${Date.now()}`,
-        order_number: result.order.order_number,
+        id: saleId,
+        order_number: orderNumber,
         invoice_number: invoiceNumber,
         status: 'delivered',
         customer_name: customerName.trim(),
@@ -337,16 +363,22 @@ const DirectSales: React.FC = () => {
 
       // Set selected order and payment method for receipt page
       selectOrder(newOrder.id);
-      setPaymentMethod(paymentMethod);
+      setGlobalPaymentMethod(paymentMethod);
+      setLastConfirmPaymentResponse({
+        orderId: saleId,
+        sale_id: saleId,  // Use the sale_id from API response for invoice generation
+        invoice_number: invoiceNumber,
+        order_number: orderNumber,
+      });
 
-      // Determine document type based on payment method
-      const isDeliveryNote = paymentMethod === 'credit_invoice';
-      const documentType = isDeliveryNote ? 'Delivery Note' : 'Invoice';
+      // Document type from response: invoice_number present → Invoice, absent → Delivery Note
+      const hasInvoice = !!invoiceNumber;
+      const documentType = hasInvoice ? 'Invoice' : 'Delivery Note';
 
       // Show success alert with option to view invoice/receipt
       showSuccessAlert(
         'Sale Confirmed', 
-        result.message || `Sale of AED ${totalAmount.toFixed(2)} confirmed successfully.`,
+        data.message || `Sale of AED ${totalAmount.toFixed(2)} confirmed successfully.`,
         [
           { 
             text: 'Done', 
@@ -368,7 +400,7 @@ const DirectSales: React.FC = () => {
         ]
       );
     } catch (error) {
-      showErrorAlert('Error', error instanceof Error ? error.message : 'Failed to confirm sale.');
+      setApiError(error instanceof Error ? error.message : 'Failed to confirm sale.');
     } finally {
       setIsSubmitting(false);
     }
@@ -376,6 +408,7 @@ const DirectSales: React.FC = () => {
 
   return (
     <View style={[styles.container, { paddingTop: insets.top }]}>
+      <ApiErrorText error={apiError} />
       {/* Header */}
       <View style={styles.header}>
         <TouchableOpacity style={styles.backButton} onPress={() => router.back()}>
@@ -431,6 +464,8 @@ const DirectSales: React.FC = () => {
                   setCustomerPhone(text);
                   setIsExistingCustomer(false); // Reset when phone changes
                   setCustomerChecked(false); // Reset check status when phone changes
+                  setCustomerData(null); // Clear customer data
+                  setSelectedSite(null); // Clear selected site
                 }}
                 keyboardType="phone-pad"
               />
@@ -455,8 +490,54 @@ const DirectSales: React.FC = () => {
                   color={isExistingCustomer ? "#10B981" : "#3B82F6"} 
                 />
                 <Text style={[styles.customerNoteText, isExistingCustomer ? styles.customerNoteTextExisting : styles.customerNoteTextNew]}>
-                  {isExistingCustomer ? "Existing customer" : "Customer is new"}
+                  {isExistingCustomer 
+                    ? `Existing ${customerData?.type === 'organization' ? 'organization' : 'customer'}` 
+                    : "Customer is new"}
                 </Text>
+              </View>
+            )}
+            
+            {/* Site Selection for existing customers with multiple sites */}
+            {isExistingCustomer && customerData && customerData.sites.length > 1 && (
+              <View style={styles.sitesContainer}>
+                <Text style={styles.sitesLabel}>Select Delivery Site</Text>
+                <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.sitesScroll}>
+                  {customerData.sites.map((site) => (
+                    <TouchableOpacity
+                      key={site.id}
+                      style={[
+                        styles.siteOption,
+                        selectedSite?.id === site.id && styles.siteOptionActive
+                      ]}
+                      onPress={() => {
+                        setSelectedSite(site);
+                        if (site.latitude && site.longitude) {
+                          setLocation({
+                            latitude: site.latitude,
+                            longitude: site.longitude,
+                            address: site.address || site.name || ''
+                          });
+                        }
+                      }}
+                      activeOpacity={0.7}
+                    >
+                      <Ionicons 
+                        name="location" 
+                        size={14} 
+                        color={selectedSite?.id === site.id ? "#FFFFFF" : "#64748B"} 
+                      />
+                      <Text 
+                        style={[
+                          styles.siteOptionText,
+                          selectedSite?.id === site.id && styles.siteOptionTextActive
+                        ]}
+                        numberOfLines={1}
+                      >
+                        {site.name || site.address || `Site ${site.id.slice(0, 6)}`}
+                      </Text>
+                    </TouchableOpacity>
+                  ))}
+                </ScrollView>
               </View>
             )}
                   </View>
@@ -521,7 +602,7 @@ const DirectSales: React.FC = () => {
               
               {/* Bottom Row: Credit Sale, Credit Invoice */}
               <View style={[styles.paymentRow, styles.paymentRowBottom]}>
-                {PAYMENT_METHODS.filter(m => ['credit_sale', 'credit_invoice'].includes(m.id)).map((method) => {
+                {PAYMENT_METHODS.filter(m => m.id === 'credit').map((method) => {
                   const isDisabled = false;
                   return (
                     <TouchableOpacity 
@@ -824,6 +905,43 @@ const styles = StyleSheet.create({
   },
   customerNoteTextNew: {
     color: '#3B82F6',
+  },
+  sitesContainer: {
+    marginTop: 12,
+  },
+  sitesLabel: {
+    fontSize: 12,
+    fontWeight: '600',
+    color: '#64748B',
+    marginBottom: 8,
+  },
+  sitesScroll: {
+    flexGrow: 0,
+  },
+  siteOption: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#F1F5F9',
+    paddingHorizontal: 14,
+    paddingVertical: 10,
+    borderRadius: 12,
+    marginRight: 10,
+    gap: 6,
+    borderWidth: 1,
+    borderColor: 'transparent',
+  },
+  siteOptionActive: {
+    backgroundColor: '#1E40AF',
+    borderColor: '#1E40AF',
+  },
+  siteOptionText: {
+    fontSize: 13,
+    fontWeight: '500',
+    color: '#64748B',
+    maxWidth: 150,
+  },
+  siteOptionTextActive: {
+    color: '#FFFFFF',
   },
   paymentContainer: {
     gap: 12,

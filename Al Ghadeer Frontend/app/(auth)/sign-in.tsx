@@ -95,7 +95,7 @@ const SignIn = () => {
 
     const result = await requestOtp(phone);
 
-    if (result.success && result.requiresOtp && result.tempToken) {
+    if (result.success && result.tempToken) {
       setTempToken(result.tempToken);
       setShowOtpModal(true);
       setCountdown(60);
@@ -108,6 +108,7 @@ const SignIn = () => {
           return prev - 1;
         });
       }, 1000);
+      // No success popup - user knows OTP was sent when they see the OTP input modal
     } else {
       showErrorAlert('Error', result.message || 'Failed to send OTP. Please try again.');
     }

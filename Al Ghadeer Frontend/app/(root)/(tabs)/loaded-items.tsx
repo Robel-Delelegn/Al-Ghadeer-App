@@ -1,5 +1,7 @@
+import ApiErrorText from '@/components/ApiErrorText';
 import { useOrderStore } from '@/store/index';
 import { authenticatedFetch } from '@/store/auth';
+import { parseApiResponse, parseApiResponseWithSoftError } from '@/utils/api';
 import { Ionicons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
 import React, { useState, useCallback, useEffect } from 'react';
@@ -55,34 +57,37 @@ const LoadedItems = () => {
   const [requiresConfirm, setRequiresConfirm] = useState(true);
   const [step, setStep] = useState<'request' | 'review' | 'done' | 'view'>('request');
   const [isCorrect, setIsCorrect] = useState<boolean | null>(null);
+  const [apiError, setApiError] = useState<string | null>(null);
+  const [verificationId, setVerificationId] = useState<string | null>(null);
 
   const totalQuantity = items.reduce((sum, item) => sum + item.quantity, 0);
 
   const fetchItems = useCallback(async () => {
-    if (!currentDriver) {
-      showErrorAlert('Error', 'Driver information not found.');
-      return;
-    }
+    if (!currentDriver) return;
 
     setIsLoading(true);
-    
+    setApiError(null);
     try {
       const endpoint = `${API_BASE_URL}/drivers/loaded-items/request/?driver_id=${currentDriver.id}`;
       const response = await authenticatedFetch(endpoint, {
         method: 'GET',
       });
 
-      const data: ItemsResponse = await response.json();
-
-      if (!response.ok || !data.success) {
-        throw new Error(data.message || 'Failed to fetch items');
+      const result = await parseApiResponseWithSoftError<{ items?: Item[]; data?: Item[]; message?: string; requires_confirm?: boolean; verification_id?: string } | Item[]>(response);
+      if (!result.ok) {
+        setItems([]);
+        setApiError(result.error);
+        return;
       }
-
-      setItems(Array.isArray(data.data) ? data.data : []);
-      const needsConfirm = data.requires_confirm !== false; // Default to true if not specified
+      const data = result.data;
+      const itemsList = Array.isArray(data) ? data : (data?.items ?? data?.data ?? []);
+      const needsConfirm = Array.isArray(data) ? true : (data?.requires_confirm !== false);
+      const verification = Array.isArray(data) ? null : (data?.verification_id ?? null);
+      setItems(itemsList);
       setRequiresConfirm(needsConfirm);
+      setVerificationId(verification);
       
-      if (data.data?.length > 0) {
+      if (itemsList.length > 0) {
         setStep(needsConfirm ? 'review' : 'view');
       } else {
         setStep('request');
@@ -90,7 +95,6 @@ const LoadedItems = () => {
       setIsCorrect(null);
     } catch (error) {
       console.error('Error fetching items:', error);
-      showErrorAlert('Error', error instanceof Error ? error.message : 'Failed to fetch items.');
     } finally {
       setIsLoading(false);
     }
@@ -101,13 +105,14 @@ const LoadedItems = () => {
     setStep('request');
     setIsCorrect(null);
     setRequiresConfirm(true);
+    setVerificationId(null);
   }, []);
 
   const handleConfirm = useCallback(async () => {
     if (!currentDriver || items.length === 0 || isCorrect === null) return;
 
     setIsConfirming(true);
-    
+    setApiError(null);
     try {
       const endpoint = `${API_BASE_URL}/drivers/loaded-items/confirm/?driver_id=${currentDriver.id}`;
       const response = await authenticatedFetch(endpoint, {
@@ -121,14 +126,15 @@ const LoadedItems = () => {
           category: item.category,
         })),
         is_correct: isCorrect,
-        confirmed_at: new Date().toISOString()
+        confirmed_at: new Date().toISOString(),
+        ...(verificationId && { verification_id: verificationId }),
         })
       });
 
-      const data: ConfirmationResponse = await response.json();
-
-      if (!response.ok || !data.success) {
-        throw new Error(data.message || 'Failed to confirm items');
+      const confirmResult = await parseApiResponseWithSoftError<unknown>(response);
+      if (!confirmResult.ok) {
+        setApiError(confirmResult.error);
+        return;
       }
 
       showSuccessAlert(
@@ -139,11 +145,11 @@ const LoadedItems = () => {
         [{ text: 'Done', onPress: () => resetProcess() }]
         );
     } catch (error) {
-      showErrorAlert('Error', error instanceof Error ? error.message : 'Failed to confirm.');
+      setApiError(error instanceof Error ? error.message : 'Failed to confirm.');
     } finally {
       setIsConfirming(false);
     }
-  }, [currentDriver, items, isCorrect, resetProcess]);
+  }, [currentDriver, items, isCorrect, verificationId, resetProcess]);
 
   const handleRefresh = useCallback(async () => {
     setIsRefreshing(true);
@@ -166,6 +172,8 @@ const LoadedItems = () => {
         <Text style={styles.headerTitle}>Load Items</Text>
         <View style={styles.headerRight} />
       </View>
+
+      <ApiErrorText error={apiError} />
 
       <ScrollView 
         style={styles.content}

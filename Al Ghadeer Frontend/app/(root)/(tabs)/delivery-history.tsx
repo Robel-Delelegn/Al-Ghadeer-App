@@ -1,5 +1,7 @@
+import ApiErrorText from '@/components/ApiErrorText';
 import { Order } from '@/types/order';
 import { useAuthStore, authenticatedFetch } from '@/store/auth';
+import { parseApiResponseWithSoftError } from '@/utils/api';
 import { getTotalItemsCount } from '@/utils/orderUtils';
 import { Ionicons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
@@ -21,9 +23,36 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 const { width } = Dimensions.get('window');
 const IP_ADDRESS = process.env.EXPO_PUBLIC_IP_ADDRESS || 'http://localhost:3000/api';
 
-interface ApiResponse {
-  success: boolean;
-  data: Order[];
+// API response structure for delivery history
+interface HistoryItem {
+  id: string;
+  delivery_report_id: string;
+  order_number: string;
+  status: string;
+  completed_at: string;
+  customer_id: string;
+  customer_name: string;
+  customer_phone: string;
+  customer_email: string;
+  customer_address: string;
+  latitude: number;
+  longitude: number;
+  payment_method: string;
+  payment_status: string;
+  total_amount: number;
+  products: Array<{
+    id: string;
+    name: string;
+    quantity: number;
+    price: number;
+    category: string;
+  }>;
+}
+
+interface HistoryResponse {
+  count: number;
+  date: string;
+  history: HistoryItem[];
 }
 
 type StatusFilter = 'all' | 'delivered' | 'failed';
@@ -40,47 +69,53 @@ const DeliveryHistory = () => {
   const [search, setSearch] = useState('');
   const [statusFilter, setStatusFilter] = useState<StatusFilter>('all');
   const [history, setHistory] = useState<Order[]>([]);
+  const [historyDate, setHistoryDate] = useState<string>('');
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
-  const { user } = useAuthStore()
+  const [apiError, setApiError] = useState<string | null>(null);
+  const { user } = useAuthStore();
 
   const fetchHistory = useCallback(async () => {
     try {
       setLoading(true);
+      setApiError(null);
       const url = `${IP_ADDRESS}/driver/history?driver_id=${user?.id}`;
       const response = await authenticatedFetch(url);
+      const result = await parseApiResponseWithSoftError<HistoryResponse>(response);
 
-      if (!response.ok) {
-        throw new Error(`HTTP error! Status: ${response.status}`);
+      if (!result.ok) {
+        setHistory([]);
+        setApiError(result.error);
+        return;
       }
 
-      const responseData = await response.json();
-      let orders: Order[] = [];
+      // Response structure: { count, date, history: HistoryItem[] }
+      const historyItems = result.data?.history ?? [];
+      const responseDate = result.data?.date ?? '';
+      setHistoryDate(responseDate);
       
-      if (responseData.success && responseData.data) {
-        orders = responseData.data;
-      } else if (Array.isArray(responseData)) {
-        orders = responseData;
-      } else {
-        throw new Error('Invalid API response format');
-      }
-
-        // Normalize orders - handle both array and Record formats for products
-        const transformedHistory: Order[] = orders.map(order => ({
-          ...order,
-          // Keep products as-is (can be array or Record)
-          products: order.products || (Array.isArray(order.products) ? [] : {}),
-          customer: {
-            id: order.customer_id || '',
-            site_id: order.customer_site_id,
-            name: order.customer_name || '',
-            phone: order.customer_phone || '',
-            email: order.customer_email,
-            address: order.customer_address || '',
-            latitude: order.latitude || 0,
-            longitude: order.longitude || 0,
-          }
-        }));
+      const transformedHistory: Order[] = historyItems.map((item): Order => ({
+        id: item.id,
+        order_number: item.order_number,
+        status: item.status as Order['status'],
+        customer_id: item.customer_id,
+        customer_name: item.customer_name,
+        customer_phone: item.customer_phone,
+        customer_email: item.customer_email || undefined,
+        customer_address: item.customer_address,
+        latitude: item.latitude,
+        longitude: item.longitude,
+        payment_method: item.payment_method as Order['payment_method'],
+        payment_status: item.payment_status as Order['payment_status'],
+        total_amount: item.total_amount,
+        completed_at: item.completed_at,
+        products: item.products.map(p => ({
+          id: p.id,
+          name: p.name,
+          quantity: p.quantity,
+          category: p.category,
+        })),
+      }));
 
       setHistory(transformedHistory);
     } catch (err) {
@@ -142,9 +177,11 @@ const DeliveryHistory = () => {
     const customerName = item.customer_name || 'Unknown';
     const customerAddress = item.customer_address || '';
     const totalAmount = item.total_amount || 0;
-    const config = statusConfig[item.status as StatusFilter] ;
+    const config = statusConfig[item.status as StatusFilter] || statusConfig.delivered;
     
     const totalItems = getTotalItemsCount(item);
+    // Extract date from completed_at (format: "2026-02-02 20:59:32.009156+04")
+    const completedDate = item.completed_at ? item.completed_at.split(' ')[0] : '';
 
     return (
       <TouchableOpacity 
@@ -160,6 +197,11 @@ const DeliveryHistory = () => {
           <View style={styles.cardTopRow}>
             <View style={styles.orderIdContainer}>
               <Text style={styles.orderId}>{item.order_number}</Text>
+              {completedDate ? (
+                <View style={styles.dateBadge}>
+                  <Text style={styles.dateText}>{completedDate}</Text>
+                </View>
+              ) : null}
             </View>
             <View style={[styles.statusChip, { backgroundColor: config.bgColor }]}>
               <View style={[styles.statusDot, { backgroundColor: config.color }]} />
@@ -223,10 +265,14 @@ const DeliveryHistory = () => {
         </TouchableOpacity>
         <View style={styles.headerTitleContainer}>
           <Text style={styles.headerTitle}>History</Text>
+          {historyDate ? (
+            <Text style={styles.headerDate}>{historyDate}</Text>
+          ) : null}
         </View>
         <View style={styles.headerRight} />
       </View>
 
+      <ApiErrorText error={apiError} />
       {/* Stats Overview */}
       <View style={styles.statsContainer}>
         <View style={styles.statsCard}>
@@ -367,6 +413,12 @@ const styles = StyleSheet.create({
     fontWeight: '600',
     color: '#1E40AF',
     letterSpacing: -0.4,
+  },
+  headerDate: {
+    fontSize: 12,
+    fontWeight: '500',
+    color: '#6B7280',
+    marginTop: 2,
   },
   headerRight: {
     width: 36,

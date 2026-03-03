@@ -1,5 +1,7 @@
+import ApiErrorText from '@/components/ApiErrorText';
 import { useExpenseStore, useOrderStore } from '@/store/index';
 import { authenticatedFetch } from '@/store/auth';
+import { parseApiResponseWithSoftError } from '@/utils/api';
 import { Ionicons } from '@expo/vector-icons';
 import * as ImagePicker from 'expo-image-picker';
 import * as FileSystem from 'expo-file-system';
@@ -76,6 +78,7 @@ const Expenses = () => {
   const [expenseHistory, setExpenseHistory] = useState<ServerExpense[]>([]);
   const [loadingHistory, setLoadingHistory] = useState(false);
   const [activeTab, setActiveTab] = useState<'pending' | 'all'>('pending');
+  const [apiError, setApiError] = useState<string | null>(null);
 
   const formattedAmount = useMemo(() => amount.replace(/[^0-9.]/g, ''), [amount]);
   const isFormValid = selectedType && formattedAmount && Number(formattedAmount) > 0;
@@ -93,47 +96,38 @@ const Expenses = () => {
   };
 
   const fetchExpenseHistory = useCallback(async (status?: string) => {
-    if (!currentDriver?.id) {
-      showErrorAlert('Error', 'Driver information not available.');
-      return;
-    }
+    if (!currentDriver?.id) return;
 
     try {
       setLoadingHistory(true);
+      setApiError(null);
       let url = `${IP_ADDRESS}/expenses?driver_id=${currentDriver.id}`;
       if (status) url += `&status=${status}`;
 
       const response = await authenticatedFetch(url);
-      if (!response.ok) throw new Error(`HTTP error! Status: ${response.status}`);
-
-      const data = await response.json();
-      
-      // Handle different response formats
+      const result = await parseApiResponseWithSoftError<ServerExpense[] | { data?: ServerExpense[]; expenses?: ServerExpense[] }>(response);
+      if (!result.ok) {
+        setExpenseHistory([]);
+        setApiError(result.error);
+        return;
+      }
+      const data = result.data;
       let expenses: ServerExpense[] = [];
-      
       if (Array.isArray(data)) {
-        // Direct array response
         expenses = data.filter((item: unknown): item is ServerExpense => 
           item !== null && item !== undefined && typeof item === 'object' && 'id' in item
         );
       } else if (data && typeof data === 'object') {
-        // Wrapped response format
-        if (Array.isArray(data.data)) {
-          expenses = data.data.filter((item: unknown): item is ServerExpense => 
-            item !== null && item !== undefined && typeof item === 'object' && 'id' in item
-          );
-        } else if (Array.isArray(data.expenses)) {
-          expenses = data.expenses.filter((item: unknown): item is ServerExpense => 
-            item !== null && item !== undefined && typeof item === 'object' && 'id' in item
-          );
-        }
+        const arr = (data as { data?: ServerExpense[]; expenses?: ServerExpense[] }).data ?? (data as { expenses?: ServerExpense[] }).expenses ?? [];
+        expenses = Array.isArray(arr) ? arr.filter((item: unknown): item is ServerExpense => 
+          item !== null && item !== undefined && typeof item === 'object' && 'id' in item
+        ) : [];
       }
       
       setExpenseHistory(expenses);
     } catch (error) {
       console.error('Error fetching expense history:', error);
-      showErrorAlert('Error', 'Failed to load expense history.');
-      setExpenseHistory([]); // Set empty array on error
+      setExpenseHistory([]);
     } finally {
       setLoadingHistory(false);
     }
@@ -215,13 +209,11 @@ const Expenses = () => {
         body: JSON.stringify(expenseData),
       });
 
-      if (!response.ok) {
-        const errorData = await response.json();
-        throw new Error(errorData.error || `HTTP error! Status: ${response.status}`);
+      const submitResult = await parseApiResponseWithSoftError<unknown>(response);
+      if (!submitResult.ok) {
+        setApiError(submitResult.error);
+        return;
       }
-
-      const result: SubmitExpenseResponse = await response.json();
-      if (!result.success) throw new Error(result.message || 'Failed to submit expense');
 
       addExpense({ 
         type: selectedType, 
@@ -234,7 +226,7 @@ const Expenses = () => {
         { text: 'OK', onPress: resetForm }
       ]);
     } catch (error) {
-      showErrorAlert('Error', error instanceof Error ? error.message : 'Could not submit expense.');
+      setApiError(error instanceof Error ? error.message : 'Could not submit expense.');
     } finally {
       setSubmitting(false);
     }
@@ -250,6 +242,7 @@ const Expenses = () => {
 
   return (
     <View style={[styles.container, { paddingTop: insets.top }]}>
+      <ApiErrorText error={apiError} />
       {/* Header */}
       <View style={styles.header}>
         <View>

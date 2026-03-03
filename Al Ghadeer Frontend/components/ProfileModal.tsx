@@ -38,7 +38,9 @@ const ProfileModal: React.FC<ProfileModalProps> = ({ visible, onClose }) => {
   const phone = currentDriver?.phone || user?.phone || '—';
   const vehicleType = currentDriver?.vehicle?.type || '—';
   const vehiclePlate = currentDriver?.vehicle?.plate_number || '—';
-  const zone = (currentDriver as any)?.zone || '—';
+  // Zones is an array of strings
+  const zones = currentDriver?.zones;
+  const hasZones = Array.isArray(zones) && zones.length > 0;
   const helperName = currentDriver?.helper_name || '—';
   const helperPhone = (currentDriver as any)?.helper_phone || '—';
   const profileImage = currentDriver?.profile_image || icons.person;
@@ -47,7 +49,6 @@ const ProfileModal: React.FC<ProfileModalProps> = ({ visible, onClose }) => {
     { icon: 'call-outline' as const, label: 'Phone', value: phone },
     { icon: 'car-outline' as const, label: 'Vehicle', value: vehicleType },
     { icon: 'document-text-outline' as const, label: 'Plate Number', value: vehiclePlate },
-    { icon: 'location-outline' as const, label: 'Zone', value: zone },
   ].filter(item => item.value !== '—');
 
   return (
@@ -92,6 +93,29 @@ const ProfileModal: React.FC<ProfileModalProps> = ({ visible, onClose }) => {
                 value={item.value}
               />
             ))}
+
+            {/* Zones Section */}
+            {hasZones && zones && (
+              <View style={styles.infoItem}>
+                <View style={styles.iconContainer}>
+                  <Ionicons name="location-outline" size={20} color="#0EA5E9" />
+                </View>
+                <View style={styles.infoContent}>
+                  <Text style={styles.infoLabel}>{zones.length === 1 ? 'Zone' : 'Zones'}</Text>
+                  {zones.length === 1 ? (
+                    <Text style={styles.infoValue}>{zones[0]}</Text>
+                  ) : (
+                    <View style={styles.zonesContainer}>
+                      {zones.map((zoneName, index) => (
+                        <View key={index} style={styles.zoneTag}>
+                          <Text style={styles.zoneTagText}>{zoneName}</Text>
+                        </View>
+                      ))}
+                    </View>
+                  )}
+                </View>
+              </View>
+            )}
 
             {/* Helper Section */}
             {helperName !== '—' && (
@@ -222,6 +246,23 @@ const styles = StyleSheet.create({
     color: '#64748B',
     marginTop: 4,
     fontFamily: 'JakartaMedium',
+  },
+  zonesContainer: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 8,
+    marginTop: 4,
+  },
+  zoneTag: {
+    backgroundColor: '#E0F2FE',
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    borderRadius: 12,
+  },
+  zoneTagText: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: '#0369A1',
   },
 });
 

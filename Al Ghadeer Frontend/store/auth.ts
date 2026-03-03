@@ -2,6 +2,7 @@ import * as SecureStore from 'expo-secure-store';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { create } from 'zustand';
 import { createJSONStorage, persist } from 'zustand/middleware';
+import { parseApiResponse } from '@/utils/api';
 
 interface User {
   id: string;
@@ -48,11 +49,10 @@ export const useAuthStore = create<AuthStore>()(
       requestOtp: async (phone: string) => {
         set({ isLoading: true });
         try {
-          console.log('Requesting OTP for phone:', phone);
-          // Ensure API_BASE_URL ends with /api, then append /auth/request-otp
+          console.log('[requestOtp] Input:', { phone, API_BASE_URL });
           const baseUrl = API_BASE_URL?.endsWith('/api') ? API_BASE_URL : `${API_BASE_URL}/api`;
           const url = `${baseUrl}/auth/request-otp`;
-          console.log(`🌐 API Request: POST ${url}`);
+          console.log('[requestOtp] Request:', { method: 'POST', url, body: { phone } });
 
           const response = await fetch(url, {
             method: 'POST',
@@ -64,45 +64,47 @@ export const useAuthStore = create<AuthStore>()(
             }),
           });
 
-          if (!response.ok) {
-            // maybe try to parse server error message
-            const text = await response.text();
-            throw new Error(text || `HTTP ${response.status}`);
-          }
-          
-          const data = await response.json();
-        
-
-
-          console.log('Checking response data:', {
-            success: data.success,
-            temp_token: data.temp_token,
-            requires_otp: data.requires_otp
+          console.log('[requestOtp] Response metadata:', {
+            ok: response.ok,
+            status: response.status,
+            statusText: response.statusText,
+            headers: Object.fromEntries(response.headers.entries()),
           });
+          const responseBody = await response.clone().json();
+          console.log('[requestOtp] Response body:', responseBody);
 
-          if (data.success && data.temp_token) {
-            console.log('✅ OTP request successful, returning result');
-            set({ isLoading: false });
-            return {
-              success: true,
-              message: data.message || 'OTP sent to your phone number',
-              tempToken: data.temp_token,
-              requiresOtp: data.requires_otp || true,
-            };
+          const data = await parseApiResponse<{
+            message?: string;
+            tempToken?: string;
+            temp_token?: string;
+            requiresOtp?: boolean;
+            requires_otp?: boolean;
+          }>(response);
+          console.log('[requestOtp] Parsed data:', data);
+          set({ isLoading: false });
+          const token = data.tempToken ?? data.temp_token;
+          if (!token) {
+            throw new Error('Invalid response: missing temp token');
           }
-
-          console.error('Response missing required fields:', data);
-          throw new Error(data?.message || 'Failed to send OTP');
+          const requiresOtp = data.requiresOtp ?? data.requires_otp ?? true;
+          const result = {
+            success: true,
+            message: data.message || 'OTP sent to your phone number',
+            tempToken: token,
+            requiresOtp,
+          };
+          console.log('[requestOtp] Return:', result);
+          return result;
         } catch (error) {
-          console.error('OTP request error caught:', error);
+          console.error('[requestOtp] Error caught:', error);
           set({ isLoading: false });
           let errorMessage = 'Failed to send OTP. Please try again.';
           
           if (error instanceof Error) {
-            console.error('Error details:', {
+            console.error('[requestOtp] Error details:', {
               name: error.name,
               message: error.message,
-              stack: error.stack
+              stack: error.stack,
             });
             
             if (error.message.includes('Network request failed') || 
@@ -115,11 +117,9 @@ export const useAuthStore = create<AuthStore>()(
             }
           }
           
-          console.error('Returning error result:', { success: false, message: errorMessage });
-          return {
-            success: false,
-            message: errorMessage,
-          };
+          const result = { success: false, message: errorMessage };
+          console.error('[requestOtp] Return (error):', result);
+          return result;
         }
       },
 
@@ -141,32 +141,20 @@ export const useAuthStore = create<AuthStore>()(
             }),
           });
 
-          const data = await response.json();
-
-          if (!response.ok) {
-            throw new Error(data.message || 'OTP verification failed');
+          const data = await parseApiResponse<{ token: string; refresh_token?: string; user?: User; message?: string }>(response);
+          await SecureStore.setItemAsync('auth_token', data.token);
+          if (data.refresh_token) {
+            await SecureStore.setItemAsync('refresh_token', data.refresh_token);
           }
-
-          if (data.success && data.token) {
-            // Store permanent token securely
-            await SecureStore.setItemAsync('auth_token', data.token);
-            if (data.refresh_token) {
-              await SecureStore.setItemAsync('refresh_token', data.refresh_token);
-            }
-
-            set({
-              isAuthenticated: true,
-              isLoading: false,
-              user: data.user || null,
-            });
-
-            return {
-              success: true,
-              message: data.message || 'Phone number verified successfully',
-            };
-          }
-
-          throw new Error(data.message || 'OTP verification failed');
+          set({
+            isAuthenticated: true,
+            isLoading: false,
+            user: data.user || null,
+          });
+          return {
+            success: true,
+            message: data.message || 'Phone number verified successfully',
+          };
         } catch (error) {
           set({ isLoading: false });
           const errorMessage = error instanceof Error ? error.message : 'Invalid OTP. Please try again.';
@@ -198,15 +186,10 @@ export const useAuthStore = create<AuthStore>()(
             }),
           });
 
-          const data = await response.json();
-
-          if (!response.ok) {
-            throw new Error(data.message || 'Failed to resend OTP');
-          }
-
+          const data = await parseApiResponse<{ message?: string }>(response);
           set({ isLoading: false });
           return {
-            success: data.success || false,
+            success: true,
             message: data.message || 'OTP resent to your phone number',
           };
         } catch (error) {
@@ -272,7 +255,7 @@ export const useAuthStore = create<AuthStore>()(
         set({ isLoading: true });
         try {
           const token = await SecureStore.getItemAsync('auth_token');
-          console.log("Checking Authentication using token:", token);
+          console.log("Checking Authentication using token:", token ? 'exists' : 'null');
           console.log("API Base URL:", API_BASE_URL);
           
           if (!token) {
@@ -296,24 +279,32 @@ export const useAuthStore = create<AuthStore>()(
             },
           });
 
-          if (!response.ok) {
-            // Token invalid or expired, clear auth
+          // Only clear token on explicit auth rejection (401/403)
+          if (response.status === 401 || response.status === 403) {
+            console.log('Token rejected by server (401/403), clearing auth');
             await SecureStore.deleteItemAsync('auth_token');
             await SecureStore.deleteItemAsync('refresh_token');
-            set({
-              isAuthenticated: false,
-              user: null,
-              isLoading: false,
-            });
+            set({ isAuthenticated: false, user: null, isLoading: false });
             return false;
           }
 
-          const data = await response.json();
+          if (!response.ok) {
+            // Server error (5xx) or other error - keep token, stay authenticated if we have persisted user
+            console.log('Server error during auth check, keeping token');
+            const currentState = get();
+            if (currentState.user) {
+              set({ isAuthenticated: true, isLoading: false });
+              return true;
+            }
+            set({ isAuthenticated: false, user: null, isLoading: false });
+            return false;
+          }
 
-          if (data.success && data.user) {
-            // Check if user is approved
+          const data = await parseApiResponse<{ user: User }>(response);
+          if (data.user) {
             if (data.user.status !== 'approved') {
               // User not approved, sign them out
+              console.log('User not approved, clearing auth');
               await SecureStore.deleteItemAsync('auth_token');
               await SecureStore.deleteItemAsync('refresh_token');
               set({
@@ -333,7 +324,12 @@ export const useAuthStore = create<AuthStore>()(
             return true;
           }
 
-          // Invalid response format
+          // Invalid response format - keep existing state if we have user
+          const currentState = get();
+          if (currentState.user) {
+            set({ isAuthenticated: true, isLoading: false });
+            return true;
+          }
           set({
             isAuthenticated: false,
             user: null,
@@ -341,9 +337,18 @@ export const useAuthStore = create<AuthStore>()(
           });
           return false;
         } catch (error) {
-          console.error('Auth check error:', error);
-          // On network error, keep token but mark as not authenticated
-          // This allows offline usage if needed, or you can clear token here
+          console.error('Auth check error (network issue?):', error);
+          // On network error, keep the user logged in if we have persisted user data
+          // This allows the app to work when server is temporarily unreachable
+          const token = await SecureStore.getItemAsync('auth_token');
+          const currentState = get();
+          
+          if (token && currentState.user) {
+            console.log('Network error but token and user exist, staying authenticated');
+            set({ isAuthenticated: true, isLoading: false });
+            return true;
+          }
+          
           set({
             isAuthenticated: false,
             user: null,

@@ -1,6 +1,7 @@
+import ApiErrorText from '@/components/ApiErrorText';
 import { useOrderStore } from '@/store/index';
 import { useAuthStore, authenticatedFetch } from '@/store/auth';
-import { Order } from '@/types/order';
+import { ConfirmPaymentRequest, ConfirmPaymentResponse, Order } from '@/types/order';
 import { Ionicons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
 import React, { useCallback, useRef, useState, useMemo } from 'react';
@@ -19,6 +20,7 @@ import {
   Image,
 } from 'react-native';
 import { showWarningAlert, showErrorAlert, showSuccessAlert } from '@/store/utils/alert';
+import { parseApiResponseWithSoftError } from '@/utils/api';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import SignatureScreen, { SignatureViewRef } from 'react-native-signature-canvas';
 
@@ -38,6 +40,7 @@ const OrganizationSignature: React.FC = () => {
   const [signatureData, setSignatureData] = useState<string | null>(null);
   const [showSignatureModal, setShowSignatureModal] = useState(false);
   const [hasDrawnSignature, setHasDrawnSignature] = useState(false);
+  const [apiError, setApiError] = useState<string | null>(null);
   
   const { 
     selectedOrder, 
@@ -45,7 +48,8 @@ const OrganizationSignature: React.FC = () => {
     cartItems,
     currentDriver,
     selectedPaymentMethod,
-    updateOrderStatus
+    updateOrderStatus,
+    setLastConfirmPaymentResponse,
   } = useOrderStore();
   const { user } = useAuthStore();
   
@@ -157,7 +161,7 @@ const OrganizationSignature: React.FC = () => {
     }
 
     setIsProcessing(true);
-
+    setApiError(null);
     try {
       // Calculate subtotal, VAT, and total
       const sub = cartItems.reduce((sum, item) => {
@@ -169,28 +173,54 @@ const OrganizationSignature: React.FC = () => {
       const vatAmount = sub * 0.05;
       const total = sub + vatAmount;
 
-      const requestData = {
+      const reasonsList = orderDetail?.reasons ?? [];
+      const rentItems = (orderDetail?.rent_items || []).filter(item => item.in_truck === true);
+
+      const mapProductCategory = (cat?: string): 'bulk_item' | 'asset' | 'refill' => {
+        if (cat === 'refill') return 'refill';
+        if (cat === 'assets') return 'asset';
+        return 'bulk_item';
+      };
+
+      type OtherActionType = NonNullable<ConfirmPaymentRequest['other_actions']>[0]['type'];
+      const mapRentItemType = (category: string, inTruck: boolean): OtherActionType => {
+        if (category === 'deposit') return inTruck ? 'deposit' : 'deposit-refund';
+        if (category === 'borrow') return inTruck ? 'asset-movement-to-customer' : 'asset-movement-from-customer';
+        return 'asset-movement-to-customer';
+      };
+
+      const requestData: ConfirmPaymentRequest = {
         customer_site_id: orderDetail.customer_site_id || '',
         customer_id: orderDetail.customer_id || '',
         customer_name: orderDetail.customer_name || 'N/A',
         customer_phone: orderDetail.customer_phone || 'N/A',
         products: cartItems.filter(item => item?.name).map(item => ({
+          id: item.id,
           name: item.name,
           quantity: item.quantity,
           price: item.price,
-          id: item.id,
-          category: item.category || '',
+          category: mapProductCategory(item.category),
         })),
         subtotal: sub,
         vat: vatAmount,
         total_amount: total,
         payment_method: selectedPaymentMethod || 'cash',
         order_type: 'site',
-        reasons: orderDetail?.reasons || [],
+        reasons: reasonsList,
         signature_data: signatureData,
         receiver_name: receiverName.trim(),
         receiver_position: receiverPosition.trim() || undefined,
-        notes: notes.trim() || undefined,
+        remark: notes.trim() || undefined,
+        ...(rentItems.length > 0 && {
+          other_actions: rentItems.map(item => ({
+            id: item.id,
+            name: item.name,
+            type: mapRentItemType(item.category, item.in_truck ?? true),
+            price: item.price,
+            quantity: item.quantity,
+            item_type: 'asset' as const,
+          })),
+        }),
       };
 
       let url = `${IP_ADDRESS}/driver/orders/confirm-payment`;
@@ -209,36 +239,52 @@ const OrganizationSignature: React.FC = () => {
         }
       );
 
-      const result = await response.json();
-
-      if (!response.ok || !result.success) {
-        throw new Error(result.message || 'Failed to confirm payment');
+      const parseResult = await parseApiResponseWithSoftError<ConfirmPaymentResponse['data']>(response);
+      if (!parseResult.ok) {
+        setApiError(parseResult.error);
+        return;
       }
+      const result = parseResult.data;
+      
+      // Log full response to debug sale_id
+      console.log('Organization Signature - Full server response:', JSON.stringify(result, null, 2));
+      console.log('Organization Signature - sale_id from server:', result.sale_id);
 
-      // Mark order as delivered and remove from assigned orders
+      // Mark order as delivered and store confirm payment response for receipt
       if (orderDetail) {
+        // Store confirm response - use sale_id from server for invoice generation
+        setLastConfirmPaymentResponse({
+          orderId: orderDetail.id,
+          sale_id: result.sale_id,
+          invoice_number: result.invoice_number,
+          order_number: result.order_number,
+        });
         updateOrderStatus(orderDetail.id, 'delivered');
+        if (result.invoice_number) {
+          const store = useOrderStore.getState();
+          const updatedCompletedOrders = store.completedOrders.map(o =>
+            o.id === orderDetail.id ? { ...o, invoice_number: result.invoice_number } : o
+          );
+          useOrderStore.setState({ completedOrders: updatedCompletedOrders });
+        }
       }
 
-      // Determine document type based on payment method
-      const isDeliveryNote = selectedPaymentMethod === 'credit_invoice';
-      const documentType = isDeliveryNote ? 'Delivery Note' : 'Invoice';
+      // Document type from response: invoice_number present → Invoice, absent → Delivery Note
+      const hasInvoice = !!result.invoice_number;
+      const documentType = hasInvoice ? 'Invoice' : 'Delivery Note';
       
       showSuccessAlert(
         'Payment Successful',
-        result.message || `Order ${result.order?.order_number || orderDetail?.order_number} confirmed.`,
+        result.message || `Order ${result.order_number} confirmed.`,
         [{ text: `View ${documentType}`, onPress: () => router.push('/(root)/(tabs)/payment-receipt') }]
       );
 
     } catch (error) {
-      showErrorAlert(
-        'Error',
-        error instanceof Error ? error.message : 'Failed to process delivery.'
-      );
+      setApiError(error instanceof Error ? error.message : 'Failed to process delivery.');
     } finally {
       setIsProcessing(false);
     }
-  }, [receiverName, receiverPosition, notes, hasSignature, signatureData, orderDetail, cartItems, totalWithVat, currentDriver, organizationName, router, updateOrderStatus, selectedPaymentMethod]);
+  }, [receiverName, receiverPosition, notes, hasSignature, signatureData, orderDetail, cartItems, totalWithVat, currentDriver, organizationName, router, updateOrderStatus, setLastConfirmPaymentResponse, selectedPaymentMethod]);
 
   const signatureStyle = `.m-signature-pad {
     box-shadow: none;
@@ -321,6 +367,8 @@ const OrganizationSignature: React.FC = () => {
         </View>
         <View style={styles.headerRight} />
       </View>
+
+      <ApiErrorText error={apiError} />
 
       <KeyboardAvoidingView 
         style={{ flex: 1 }} 

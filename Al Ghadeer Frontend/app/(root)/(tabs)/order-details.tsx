@@ -1,5 +1,7 @@
+import ApiErrorText from '@/components/ApiErrorText';
 import { useLocationStore, useOrderStore } from '@/store/index';
 import { authenticatedFetch } from '@/store/auth';
+import { parseApiResponseWithSoftError } from '@/utils/api';
 import { getTotalItemsCount, normalizeOrderProducts } from '@/utils/orderUtils';
 import { Ionicons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
@@ -33,6 +35,7 @@ const OrderDetails = () => {
   const [distanceInfo, setDistanceInfo] = useState<{distance: string, duration: string} | null>(null);
   const [isCalculatingDistance, setIsCalculatingDistance] = useState(false);
   const [isUpdatingLocation, setIsUpdatingLocation] = useState(false);
+  const [apiError, setApiError] = useState<string | null>(null);
 
   const order = assignedOrders.find((o) => o.id === selectedOrder);
 
@@ -169,6 +172,7 @@ const OrderDetails = () => {
     }
 
     setIsUpdatingLocation(true);
+    setApiError(null);
     try {
       // Request location permission
       const { status } = await Location.requestForegroundPermissionsAsync();
@@ -226,28 +230,19 @@ const OrderDetails = () => {
         body: JSON.stringify(locationUpdateData),
       });
 
-      if (!response.ok) {
-        const errorData = await response.json();
-        throw new Error(errorData.message || `HTTP error! Status: ${response.status}`);
+      const apiResult = await parseApiResponseWithSoftError<unknown>(response);
+      if (!apiResult.ok) {
+        setApiError(apiResult.error);
+        return;
       }
-
-      const resultData = await response.json();
-      
-      if (resultData.success) {
-        showSuccessAlert(
-          'Location Updated',
-          'Customer location has been updated successfully.',
-          [{ text: 'OK' }]
-        );
-      } else {
-        throw new Error(resultData.message || 'Failed to update location');
-      }
+      showSuccessAlert(
+        'Location Updated',
+        'Customer location has been updated successfully.',
+        [{ text: 'OK' }]
+      );
     } catch (error) {
       console.error('Error updating customer location:', error);
-      showErrorAlert(
-        'Update Failed',
-        error instanceof Error ? error.message : 'Failed to update customer location. Please try again.'
-      );
+      setApiError(error instanceof Error ? error.message : 'Failed to update customer location.');
     } finally {
       setIsUpdatingLocation(false);
     }
@@ -308,6 +303,8 @@ const OrderDetails = () => {
         </View>
         <View style={styles.headerRight} />
       </View>
+
+      <ApiErrorText error={apiError} />
 
       <ScrollView 
         style={styles.content}
@@ -413,7 +410,7 @@ const OrderDetails = () => {
             <Text style={styles.detailLabel}>Payment</Text>
             <Text style={styles.detailValue}>
                 {order.payment_method === 'credit_card' ? 'Card' :
-                 order.payment_method === 'credit_sale' ? 'Credit Sale' :
+                 ['invoice', 'credit_invoice', 'credit_sale', 'credit'].includes(order.payment_method ?? '') ? 'Credit' :
                  order.payment_method === 'credit_invoice' ? 'Credit Invoice' :
                  (order.payment_method || 'Cash').charAt(0).toUpperCase() + (order.payment_method || 'cash').slice(1)}
               </Text>

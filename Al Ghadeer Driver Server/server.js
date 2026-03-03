@@ -156,7 +156,8 @@ app.post('/api/auth/request-otp', async (req, res) => {
         console.log('❌ Missing phone number');
         return res.status(400).json({
             success: false,
-            message: 'Phone number is required'
+            error: 'Phone number is required',
+            data: null
         });
     }
 
@@ -190,9 +191,12 @@ app.post('/api/auth/request-otp', async (req, res) => {
     console.log('✅ Sending response...');
     res.status(200).json({
         success: true,
-        message: 'OTP sent to your phone number',
-        temp_token: tempToken,
-        requires_otp: true
+        data: {
+            message: 'OTP sent to your phone number',
+            tempToken: tempToken,
+            requiresOtp: true
+        },
+        error: null
     });
     console.log('✅ Response sent successfully');
 });
@@ -206,14 +210,16 @@ app.post('/api/auth/verify-otp', async (req, res) => {
     if (!tempToken) {
         return res.status(401).json({
             success: false,
-            message: 'Invalid temporary token'
+            error: 'Invalid temporary token',
+            data: null
         });
     }
 
     if (!phone || !otp) {
         return res.status(400).json({
             success: false,
-            message: 'Phone and OTP are required'
+            error: 'Phone and OTP are required',
+            data: null
         });
     }
 
@@ -251,10 +257,13 @@ app.post('/api/auth/verify-otp', async (req, res) => {
 
     res.status(200).json({
         success: true,
-        message: 'Phone number verified successfully',
-        token: permanentToken,
-        refresh_token: `refresh_${Date.now()}`,
-        user: user
+        data: {
+            message: 'Phone number verified successfully',
+            token: permanentToken,
+            refresh_token: `refresh_${Date.now()}`,
+            user: user
+        },
+        error: null
     });
 });
 
@@ -267,14 +276,16 @@ app.post('/api/auth/resend-otp', async (req, res) => {
     if (!tempToken) {
         return res.status(401).json({
             success: false,
-            message: 'Invalid temporary token'
+            error: 'Invalid temporary token',
+            data: null
         });
     }
 
     if (!phone) {
         return res.status(400).json({
             success: false,
-            message: 'Phone number is required'
+            error: 'Phone number is required',
+            data: null
         });
     }
 
@@ -287,7 +298,8 @@ app.post('/api/auth/resend-otp', async (req, res) => {
     if (!existingData || existingData.tempToken !== tempToken) {
         return res.status(401).json({
             success: false,
-            message: 'Invalid temporary token'
+            error: 'Invalid temporary token',
+            data: null
         });
     }
 
@@ -313,7 +325,10 @@ app.post('/api/auth/resend-otp', async (req, res) => {
 
     res.status(200).json({ 
         success: true,
-        message: 'OTP resent to your phone number'
+        data: {
+            message: 'OTP resent to your phone number'
+        },
+        error: null
     });
 });
 
@@ -325,7 +340,8 @@ app.get('/api/auth/me', async (req, res) => {
     if (!token || !token.startsWith('perm_')) {
         return res.status(401).json({
             success: false,
-            message: 'Invalid or expired token'
+            error: 'Invalid or expired token',
+            data: null
         });
     }
 
@@ -340,7 +356,8 @@ app.get('/api/auth/me', async (req, res) => {
 
     res.status(200).json({
         success: true,
-        user: user
+        data: { user },
+        error: null
     });
 });
 
@@ -348,7 +365,8 @@ app.get('/api/auth/me', async (req, res) => {
 app.post('/api/auth/logout', async (req, res) => {
     res.status(200).json({
         success: true,
-        message: 'Logged out successfully'
+        data: { message: 'Logged out successfully' },
+        error: null
     });
 });
 
@@ -564,7 +582,8 @@ app.get('/api/driver/orders', async (req, res) => {
 
     res.status(200).json({
         success: true,
-        data: orders
+        data: orders,
+        error: null
     });
 });
 
@@ -581,7 +600,8 @@ app.get('/api/driver/info', async (req, res) => {
     if (!driver) {
         return res.status(404).json({
             success: false,
-            message: 'Driver not found'
+            error: 'Driver not found',
+            data: null
         });
     }
 
@@ -602,7 +622,8 @@ app.get('/api/driver/info', async (req, res) => {
 
     res.status(200).json({
         success: true,
-        data: driverInfo
+        data: driverInfo,
+        error: null
     });
 });
 
@@ -710,7 +731,8 @@ app.get('/api/driver/history', async (req, res) => {
 
     res.status(200).json({
         success: true,
-        data: history
+        data: history,
+        error: null
     });
 });
 
@@ -743,7 +765,11 @@ app.get('/api/driver/failed-deliveries', async (req, res) => {
         }
     ];
 
-    res.status(200).json(failedDeliveries);
+    res.status(200).json({
+        success: true,
+        data: failedDeliveries,
+        error: null
+    });
 });
 
 // POST /api/failed-deliveries/submit
@@ -753,8 +779,11 @@ app.post('/api/failed-deliveries/submit', async (req, res) => {
 
         res.status(200).json({ 
         success: true,
-        message: 'Failed delivery report submitted successfully',
-        failure_id: `FAIL-${Date.now()}`
+        data: {
+            message: 'Failed delivery report submitted successfully',
+            failure_id: `FAIL-${Date.now()}`
+        },
+        error: null
     });
 });
 
@@ -818,19 +847,21 @@ app.post('/api/driver/orders/validate-payment', async (req, res) => {
     if (!payment_method) {
         return res.status(400).json({
             success: false,
-            message: 'Payment method is required'
+            error: 'Payment method is required',
+            data: null
         });
     }
 
     if (!amount || typeof amount !== 'number' || amount <= 0) {
         return res.status(400).json({
             success: false,
-            message: 'Valid amount is required'
+            error: 'Valid amount is required',
+            data: null
         });
     }
 
     // Validate payment method
-    const validMethods = ['cash', 'wallet', 'credit_card', 'cheque', 'invoice'];
+    const validMethods = ['cash', 'wallet', 'credit_card', 'cheque', 'invoice', 'credit_invoice', 'credit'];
     const normalizedMethod = payment_method.toLowerCase();
     console.log(`🔍 Validating payment method: "${normalizedMethod}" against valid methods: [${validMethods.join(', ')}]`);
     
@@ -838,7 +869,8 @@ app.post('/api/driver/orders/validate-payment', async (req, res) => {
         console.log(`❌ Invalid payment method: "${normalizedMethod}"`);
         return res.status(400).json({
             success: false,
-            message: 'Invalid payment method. Must be "cash", "wallet", "credit_card", "cheque", or "invoice"'
+            error: 'Invalid payment method. Must be "cash", "wallet", "credit_card", "cheque", "invoice", "credit_invoice", or "credit"',
+            data: null
         });
     }
     
@@ -848,7 +880,8 @@ app.post('/api/driver/orders/validate-payment', async (req, res) => {
     if (amount < 0.01) {
         return res.status(400).json({
             success: false,
-            message: 'Amount must be greater than 0'
+            error: 'Amount must be greater than 0',
+            data: null
         });
     }
 
@@ -866,12 +899,15 @@ app.post('/api/driver/orders/validate-payment', async (req, res) => {
             console.log(`🏢 Organization customer - wallet payment allowed, signature required`);
             return res.status(200).json({
                 success: true,
-                message: 'Organization wallet payment - signature required',
-                validated: true,
-                payment_method: normalizedMethod,
-                amount: amount,
-                wallet_balance: wallet_balance,
-                requires_signature: true,
+                data: {
+                    message: 'Organization wallet payment - signature required',
+                    validated: true,
+                    payment_method: normalizedMethod,
+                    amount: amount,
+                    wallet_balance: wallet_balance,
+                    requires_signature: true,
+                },
+                error: null
             });
         }
         
@@ -880,10 +916,8 @@ app.post('/api/driver/orders/validate-payment', async (req, res) => {
             console.log(`❌ Individual customer - insufficient wallet balance`);
             return res.status(400).json({
                 success: false,
-                message: `Insufficient wallet balance. Available: AED ${wallet_balance.toFixed(2)}, Required: AED ${amount.toFixed(2)}`,
-                wallet_balance: wallet_balance,
-                required_amount: amount,
-                insufficient: true
+                error: `Insufficient wallet balance. Available: AED ${wallet_balance.toFixed(2)}, Required: AED ${amount.toFixed(2)}`,
+                data: null
             });
         }
 
@@ -893,26 +927,34 @@ app.post('/api/driver/orders/validate-payment', async (req, res) => {
     // Cheque and Invoice payment methods don't require wallet validation
     // Cheque: Customer provides physical cheque on delivery day
     // Invoice: Payment due at end of month, products delivered normally
-    if (normalizedMethod === 'cheque' || normalizedMethod === 'invoice') {
-        console.log(`✅ ${normalizedMethod === 'cheque' ? 'Cheque' : 'Invoice'} payment method validated - no wallet check required`);
+    if (normalizedMethod === 'cheque' || normalizedMethod === 'invoice' || normalizedMethod === 'credit_invoice' || normalizedMethod === 'credit') {
+        const label = normalizedMethod === 'cheque' ? 'Cheque' : normalizedMethod === 'credit' ? 'Credit' : normalizedMethod === 'credit_invoice' ? 'Credit Invoice' : 'Invoice';
+        const needsSig = ['invoice', 'credit_invoice', 'credit'].includes(normalizedMethod);
+        console.log(`✅ ${label} payment method validated - no wallet check required`);
         return res.status(200).json({
             success: true,
-            message: `${normalizedMethod === 'cheque' ? 'Cheque' : 'Invoice'} payment method validated successfully`,
-            validated: true,
-            payment_method: normalizedMethod,
-            amount: amount,
-            requires_signature: normalizedMethod === 'invoice', // Invoice may require signature for organizations
+            data: {
+                message: `${label} payment method validated successfully`,
+                validated: true,
+                payment_method: normalizedMethod,
+                amount: amount,
+                requires_signature: needsSig,
+            },
+            error: null
         });
     }
 
     console.log('✅ Payment validation successful');
     res.status(200).json({
         success: true,
-        message: 'Payment method and amount validated successfully',
-        validated: true,
-        payment_method: normalizedMethod,
-        amount: amount,
-        requires_signature: false,
+        data: {
+            message: 'Payment method and amount validated successfully',
+            validated: true,
+            payment_method: normalizedMethod,
+            amount: amount,
+            requires_signature: false,
+        },
+        error: null
     });
 });
 
@@ -963,7 +1005,7 @@ app.post('/api/driver/orders/confirm-payment', async (req, res) => {
 
         // Generate invoice number for credit deliveries
         const invoiceNumber = `INV-${Date.now()}`;
-        const paymentMethod = orderData.payment_method || 'credit_sale';
+        const paymentMethod = orderData.payment_method || 'credit';
 
         const order = {
             id: creditRecord.order_id,
@@ -978,19 +1020,22 @@ app.post('/api/driver/orders/confirm-payment', async (req, res) => {
 
         return res.status(201).json({
             success: true,
-            message: `Order ${creditRecord.order_number} has been confirmed. Payment will be collected at end of month.`,
-            order: order,
-            invoice_number: invoiceNumber, // Also include at top level for convenience
-            credit_record: {
-                id: creditRecord.id,
-                credit_number: creditRecord.credit_number,
-                organization_name: creditRecord.organization_name,
-                amount: creditRecord.amount,
-                receiver_name: creditRecord.receiver_name,
-                previous_balance: previousBalance,
-                new_balance: newBalance,
-                delivery_date: creditRecord.delivery_date
-            }
+            data: {
+                message: `Order ${creditRecord.order_number} has been confirmed. Payment will be collected at end of month.`,
+                order: order,
+                invoice_number: invoiceNumber,
+                credit_record: {
+                    id: creditRecord.id,
+                    credit_number: creditRecord.credit_number,
+                    organization_name: creditRecord.organization_name,
+                    amount: creditRecord.amount,
+                    receiver_name: creditRecord.receiver_name,
+                    previous_balance: previousBalance,
+                    new_balance: newBalance,
+                    delivery_date: creditRecord.delivery_date
+                }
+            },
+            error: null
         });
     }
 
@@ -1011,8 +1056,11 @@ app.post('/api/driver/orders/confirm-payment', async (req, res) => {
 
             return res.status(201).json({
                 success: true,
-                message: `Order ${order.order_number} has been confirmed and payment received.`,
-                order: order
+                data: {
+                    message: `Order ${order.order_number} has been confirmed and payment received.`,
+                    order: order
+                },
+                error: null
             });
         }
     }
@@ -1022,12 +1070,16 @@ app.post('/api/driver/orders/confirm-payment', async (req, res) => {
     const orderNumber = orderData.order_number || `ORD-${Date.now()}`;
     
     // Generate invoice number based on payment method
-    // Invoice numbers are generated for credit_sale, credit_invoice, and invoice methods
+    // For 'credit' payment: invoice_number is generated only if backend decides to issue an invoice
+    // For testing: 'credit' does NOT auto-generate invoice_number (shows delivery note)
+    // 'invoice' and 'credit_invoice' still generate invoice numbers for backward compatibility
     let invoiceNumber = null;
     const paymentMethod = orderData.payment_method || 'cash';
-    if (paymentMethod === 'credit_sale' || paymentMethod === 'credit_invoice' || paymentMethod === 'invoice') {
+    if (paymentMethod === 'invoice' || paymentMethod === 'credit_invoice') {
+        // These legacy methods always get an invoice number
         invoiceNumber = `INV-${Date.now()}`;
     }
+    // 'credit' payment: invoice_number NOT generated → frontend shows Delivery Note
     
     // Determine payment status based on payment method
     let paymentStatus = 'paid';
@@ -1036,7 +1088,7 @@ app.post('/api/driver/orders/confirm-payment', async (req, res) => {
     if (paymentMethod === 'cheque') {
         paymentStatus = 'pending'; // Cheque needs to be processed
         paymentMessage = `Order ${orderNumber} has been confirmed. Cheque received and will be processed.`;
-    } else if (paymentMethod === 'invoice' || paymentMethod === 'credit_sale' || paymentMethod === 'credit_invoice') {
+    } else if (paymentMethod === 'invoice' || paymentMethod === 'credit_invoice' || paymentMethod === 'credit') {
         paymentStatus = 'due'; // Payment due at end of month
         paymentMessage = `Order ${orderNumber} has been confirmed. Payment will be collected at end of month.`;
     }
@@ -1054,9 +1106,12 @@ app.post('/api/driver/orders/confirm-payment', async (req, res) => {
 
     res.status(201).json({
         success: true,
-        message: paymentMessage,
-        order: order,
-        invoice_number: invoiceNumber // Also include at top level for convenience
+        data: {
+            message: paymentMessage,
+            order: order,
+            invoice_number: invoiceNumber
+        },
+        error: null
     });
 });
 
@@ -1117,7 +1172,8 @@ app.post('/api/driver/orders/organization-credit-delivery', async (req, res) => 
     if (!isOrg) {
         return res.status(400).json({
             success: false,
-            message: 'Credit delivery is only available for organization customers'
+            error: 'Credit delivery is only available for organization customers',
+            data: null
         });
     }
 
@@ -1167,17 +1223,20 @@ app.post('/api/driver/orders/organization-credit-delivery', async (req, res) => 
 
     res.status(201).json({
         success: true,
-        message: `Credit delivery confirmed for ${organization_name || customer_name}. Payment will be collected later.`,
-        credit_record: {
-            id: creditRecord.id,
-            credit_number: creditRecord.credit_number,
-            organization_name: creditRecord.organization_name,
-            amount: creditRecord.amount,
-            receiver_name: creditRecord.receiver_name,
-            previous_balance: previousBalance,
-            new_balance: newBalance,
-            delivery_date: creditRecord.delivery_date
-        }
+        data: {
+            message: `Credit delivery confirmed for ${organization_name || customer_name}. Payment will be collected later.`,
+            credit_record: {
+                id: creditRecord.id,
+                credit_number: creditRecord.credit_number,
+                organization_name: creditRecord.organization_name,
+                amount: creditRecord.amount,
+                receiver_name: creditRecord.receiver_name,
+                previous_balance: previousBalance,
+                new_balance: newBalance,
+                delivery_date: creditRecord.delivery_date
+            }
+        },
+        error: null
     });
 });
 
@@ -1197,8 +1256,8 @@ app.get('/api/driver/organization-credits', async (req, res) => {
 
     res.status(200).json({
         success: true,
-        data: credits,
-        count: credits.length
+        data: { credits, count: credits.length },
+        error: null
     });
 });
 
@@ -1212,7 +1271,8 @@ app.get('/api/customers/check', async (req, res) => {
     if (!phone) {
         return res.status(400).json({
             success: false,
-            message: 'Phone number is required'
+            error: 'Phone number is required',
+            data: null
         });
     }
 
@@ -1267,20 +1327,24 @@ app.get('/api/customers/check', async (req, res) => {
         console.log('✅ Customer found:', customer.customer_name);
         return res.status(200).json({
             success: true,
-            is_customer: true,
-            customer: {
-                customer_id: customer.customer_id,
-                customer_name: customer.customer_name,
-                customer_email: customer.customer_email,
-                customer_address: customer.customer_address,
-                customer_type: customer.customer_type
-            }
+            data: {
+                is_customer: true,
+                customer: {
+                    customer_id: customer.customer_id,
+                    customer_name: customer.customer_name,
+                    customer_email: customer.customer_email,
+                    customer_address: customer.customer_address,
+                    customer_type: customer.customer_type
+                }
+            },
+            error: null
         });
     } else {
         console.log('❌ Customer not found');
         return res.status(200).json({
             success: true,
-            is_customer: false
+            data: { is_customer: false },
+            error: null
         });
     }
 });
@@ -1302,42 +1366,48 @@ app.post('/api/driver/direct-sales', async (req, res) => {
     if (!saleData.driver_id) {
         return res.status(400).json({ 
             success: false,
-            message: 'Driver ID is required'
+            error: 'Driver ID is required',
+            data: null
         });
     }
 
     if (!saleData.customer_name || !saleData.customer_name.trim()) {
         return res.status(400).json({ 
             success: false,
-            message: 'Customer name is required'
+            error: 'Customer name is required',
+            data: null
         });
     }
 
     if (!saleData.customer_phone || !saleData.customer_phone.trim()) {
         return res.status(400).json({ 
             success: false,
-            message: 'Customer phone number is required'
+            error: 'Customer phone number is required',
+            data: null
         });
     }
 
     if (!saleData.latitude || !saleData.longitude) {
         return res.status(400).json({
             success: false,
-            message: 'Location coordinates are required'
+            error: 'Location coordinates are required',
+            data: null
         });
     }
 
     if (!saleData.products || !Array.isArray(saleData.products) || saleData.products.length === 0) {
         return res.status(400).json({
             success: false,
-            message: 'At least one product is required'
+            error: 'At least one product is required',
+            data: null
         });
     }
 
     if (!saleData.total_amount || saleData.total_amount <= 0) {
         return res.status(400).json({
             success: false,
-            message: 'Valid total amount is required'
+            error: 'Valid total amount is required',
+            data: null
         });
     }
 
@@ -1346,19 +1416,21 @@ app.post('/api/driver/direct-sales', async (req, res) => {
     const orderNumber = `DS-${Date.now()}`;
     
     // Generate invoice number based on payment method
-    // Invoice numbers are generated for credit_sale, credit_invoice, and invoice methods
+    // For 'credit' payment: no invoice_number → shows Delivery Note
+    // 'invoice' and 'credit_invoice' still get invoice numbers for backward compatibility
     let invoiceNumber = null;
     const paymentMethod = saleData.payment_method || 'cash';
-    if (paymentMethod === 'credit_sale' || paymentMethod === 'credit_invoice' || paymentMethod === 'invoice') {
+    if (paymentMethod === 'invoice' || paymentMethod === 'credit_invoice') {
         invoiceNumber = `INV-${Date.now()}`;
     }
+    // 'credit' payment: no invoice_number generated → frontend shows Delivery Note
     
     // Determine payment status based on payment method
     let paymentStatus = 'paid';
     let orderStatus = 'completed';
     let paymentMessage = `Direct sale ${orderNumber} has been confirmed and payment received.`;
     
-    if (paymentMethod === 'credit_sale' || paymentMethod === 'credit_invoice') {
+    if (paymentMethod === 'invoice' || paymentMethod === 'credit_invoice' || paymentMethod === 'credit') {
         paymentStatus = 'due'; // Payment due at end of month
         orderStatus = 'delivered';
         paymentMessage = `Direct sale ${orderNumber} has been confirmed. Payment will be collected at end of month.`;
@@ -1392,9 +1464,12 @@ app.post('/api/driver/direct-sales', async (req, res) => {
     // Return response matching the format expected by frontend (same as confirm-payment)
     res.status(201).json({
         success: true,
-        message: paymentMessage,
-        order: order,
-        invoice_number: invoiceNumber // Also include at top level for convenience
+        data: {
+            message: paymentMessage,
+            order: order,
+            invoice_number: invoiceNumber
+        },
+        error: null
     });
 });
 
@@ -1450,14 +1525,18 @@ app.get('/api/drivers/loaded-items/request', async (req, res) => {
     ];
         
     // Determine if confirmation is required
-    // In production, this would be based on business logic (e.g., first load of the day, discrepancies, etc.)
-    const requires_confirm = false; // Set to false to show table view without confirmation
+    const requires_confirm = false;
+    const verification_id = `verification_${Date.now()}`;
         
     res.status(200).json({
         success: true,
-        message: 'Items retrieved successfully',
-        data: items,
-        requires_confirm: requires_confirm,
+        data: {
+            items: items,
+            message: 'Items retrieved successfully',
+            requires_confirm: requires_confirm,
+            verification_id: verification_id,
+        },
+        error: null
     });
 });
 
@@ -1468,12 +1547,15 @@ app.post('/api/drivers/loaded-items/confirm', async (req, res) => {
 
     res.status(200).json({
         success: true,
-        message: 'Loaded items confirmed successfully',
-        agreement: {
-            status: is_correct ? 'agreed' : 'disagreed',
-            notes: is_correct ? 'All items verified' : 'Discrepancy noted',
-            final_items: items
-        }
+        data: {
+            message: 'Loaded items confirmed successfully',
+            agreement: {
+                status: is_correct ? 'agreed' : 'disagreed',
+                notes: is_correct ? 'All items verified' : 'Discrepancy noted',
+                final_items: items
+            }
+        },
+        error: null
     });
 });
         
@@ -1517,10 +1599,12 @@ app.get('/api/drivers/:driver_id/unloaded-items/request', async (req, res) => {
     ];
         
     res.status(200).json({
-            success: true,
-        message: 'Items retrieved successfully',
-        data: items,
-        requested_at: new Date().toISOString()
+        success: true,
+        data: {
+            data: items,
+            requested_at: new Date().toISOString()
+        },
+        error: null
     });
 });
 
@@ -1531,12 +1615,15 @@ app.post('/api/drivers/:driver_id/unloaded-items/confirm', async (req, res) => {
 
     res.status(200).json({
         success: true,
-        message: 'Unloaded items confirmed successfully',
-        agreement: {
-            status: is_correct ? 'agreed' : 'disagreed',
-            notes: is_correct ? 'All items verified' : 'Discrepancy noted',
-            final_items: items
-        }
+        data: {
+            message: 'Unloaded items confirmed successfully',
+            agreement: {
+                status: is_correct ? 'agreed' : 'disagreed',
+                notes: is_correct ? 'All items verified' : 'Discrepancy noted',
+                final_items: items
+            }
+        },
+        error: null
     });
 });
 
@@ -1595,7 +1682,11 @@ app.get('/api/expenses', async (req, res) => {
         filteredExpenses = expenses.filter(exp => exp.status === status);
     }
 
-    res.status(200).json(filteredExpenses);
+    res.status(200).json({
+        success: true,
+        data: filteredExpenses,
+        error: null
+    });
 });
 
 // POST /api/expenses/submit
@@ -1611,9 +1702,12 @@ app.post('/api/expenses/submit', async (req, res) => {
 
         res.status(201).json({
             success: true,
-            message: 'Expense request submitted successfully',
-        expense: expense
-    });
+            data: {
+                message: 'Expense request submitted successfully',
+                expense: expense
+            },
+            error: null
+        });
 });
 
 // ============================================
@@ -1746,7 +1840,8 @@ app.get('/api/products', async (req, res) => {
     res.status(200).json({
         success: true,
         data: products,
-        });
+        error: null
+    });
 });
 
 // GET /api/driver/products (alias for /api/products)
@@ -1836,9 +1931,8 @@ app.get('/api/driver/products', async (req, res) => {
 
     res.status(200).json({
         success: true,
-        message: 'Products retrieved successfully',
         data: products,
-        count: products.length
+        error: null
     });
 });
 
@@ -1861,14 +1955,16 @@ app.post('/api/payments/create-checkout-session', async (req, res) => {
     if (!orderId) {
         return res.status(400).json({
             success: false,
-            message: 'Order ID is required'
+            error: 'Order ID is required',
+            data: null
         });
     }
 
     if (!amount || typeof amount !== 'number' || amount <= 0) {
         return res.status(400).json({
             success: false,
-            message: 'Valid amount is required'
+            error: 'Valid amount is required',
+            data: null
         });
     }
 
@@ -1917,16 +2013,19 @@ app.post('/api/payments/create-checkout-session', async (req, res) => {
 
         res.status(200).json({
             success: true,
-            checkoutUrl: session.url,
-            checkoutSessionId: session.id,
-            orderId: orderId
+            data: {
+                checkoutUrl: session.url,
+                checkoutSessionId: session.id,
+                orderId: orderId
+            },
+            error: null
         });
     } catch (error) {
         console.error('❌ Stripe error:', error.message);
         res.status(500).json({
             success: false,
-            message: 'Failed to create checkout session',
-            error: error.message
+            error: error.message || 'Failed to create checkout session',
+            data: null
         });
     }
 });
@@ -1967,14 +2066,15 @@ app.get('/api/payments/status/:checkoutSessionId', async (req, res) => {
 
         res.status(200).json({
             success: true,
-            paymentStatus: paymentStatus
+            data: { paymentStatus: paymentStatus },
+            error: null
         });
     } catch (error) {
         console.error('❌ Error retrieving payment status:', error.message);
         res.status(500).json({
             success: false,
-            message: 'Failed to retrieve payment status',
-            error: error.message
+            error: error.message || 'Failed to retrieve payment status',
+            data: null
         });
     }
 });

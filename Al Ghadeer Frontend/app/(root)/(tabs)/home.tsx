@@ -3,8 +3,10 @@ import MyMap from '@/components/map';
 import ProfileModal from '@/components/ProfileModal';
 import { icons, images } from '@/constants';
 import { useLocationStore, useOrderStore } from '@/store/index';
-import { Order } from '@/types/order';
+import { OrdersResponse, Order } from '@/types/order';
+import ApiErrorText from '@/components/ApiErrorText';
 import { useAuthStore, authenticatedFetch } from '@/store/auth';
+import { parseApiResponseWithSoftError } from '@/utils/api';
 import * as Location from 'expo-location';
 import { useRouter } from 'expo-router';
 import React, { useEffect, useState, useCallback } from 'react';
@@ -17,12 +19,6 @@ const formatDate = (date: Date) =>
   date.toLocaleDateString(undefined, { weekday: 'long', month: 'short', day: 'numeric' });
 
 const IP_ADDRESS = process.env.EXPO_PUBLIC_IP_ADDRESS;
-
-// API Response interface
-interface ApiResponse {
-  success: boolean;
-  data: Order[];
-}
 
 const Home = () => {
   const { user } = useAuthStore();
@@ -51,6 +47,7 @@ const Home = () => {
   const [isloading, setIsloading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [isProfileModalVisible, setIsProfileModalVisible] = useState(false);
+  const [apiError, setApiError] = useState<string | null>(null);
   
   // Helper function to check if order is currently available
   const isOrderCurrentlyAvailable = (order: Order) => {
@@ -176,27 +173,63 @@ const Home = () => {
     const driverId = user?.id || currentDriver?.id;
     try {
       setIsloading(true);
-      console.log('Fetching deliveries for driver:', driverId);
+      setApiError(null);
       const url = `${IP_ADDRESS}/driver/orders?driver_id=${driverId}`;
       const response = await authenticatedFetch(url);
-      console.log('Deliveries response:', response);
-      if (!response.ok) {
-        throw new Error(`HTTP error! Status: ${response.status}`);
+      const result = await parseApiResponseWithSoftError<OrdersResponse['data']>(response);
+
+      if (!result.ok) {
+        setAssignedOrders([]);
+        setApiError(result.error);
+        return;
       }
-      
-      const apiResponse: ApiResponse = await response.json();
-      
-      if (!apiResponse.success || !apiResponse.data) {
-        throw new Error('Invalid API response format');
-      }
-      
-      // Normalize orders - handle both array and Record formats for products
-      const transformedOrders: Order[] = apiResponse.data.map(order => ({
-        ...order,
-        // Keep products as-is (can be array or Record)
-        products: order.products || (Array.isArray(order.products) ? [] : {}),
-        customer_site_id: order.customer_site_id,
-      }));
+
+      const apiOrders: OrdersResponse['data'] = Array.isArray(result.data) ? result.data : [];
+      const transformedOrders: Order[] = apiOrders.map((api): Order => {
+        const customer = api.customer;
+        const rentItems = (api.other_actions || [])
+          .filter((a) => a.type.includes('asset') || a.type.includes('deposit'))
+          .map((a) => ({
+            id: a.id,
+            name: a.item.label,
+            category: a.type.includes('deposit') ? ('deposit' as const) : ('borrow' as const),
+            price: a.price_per_unit,
+            quantity: a.quantity,
+            image_url: a.item.image_url || '',
+            in_truck: a.direction === 'to_inventory',
+          }));
+        return {
+          id: api.order_number,
+          order_number: api.order_number,
+          status: api.status as Order['status'],
+          customer_address: api.delivery_address,
+          customer_name: customer?.name,
+          customer_phone: customer?.phone,
+          customer_email: customer?.email ?? undefined,
+          customer_id: customer?.id,
+          customer_site_id: customer?.site_id,
+          customer_type: (customer?.customer_type === 'organization' ? 'organization' : 'individual') as Order['customer_type'],
+          latitude: api.latitude,
+          longitude: api.longitude,
+          delivery_instructions: api.delivery_instructions ?? undefined,
+          start_time: api.start_time,
+          end_time: api.end_time,
+          total_amount: api.total_amount,
+          zone: api.delivery_zone ?? undefined,
+          delivery_zone: api.delivery_zone ?? undefined,
+          payment_method: api.payment_method as Order['payment_method'],
+          products: api.products.map((p) => ({
+            id: p.id,
+            name: p.name,
+            quantity: p.quantity,
+            category: p.category,
+            type: p.category,
+          })),
+          rent_items: rentItems.length > 0 ? rentItems : undefined,
+          reasons: api.reasons ?? [],
+          requires_signature: customer?.requires_signature,
+        };
+      });
       
       const sortedOrders = transformedOrders.sort((a, b) => {
         if (!a.start_time && !b.start_time) return 0;
@@ -217,14 +250,11 @@ const Home = () => {
   const fetchDriverInfo = useCallback(async () => {
     const driverId = user?.id || currentDriver?.id;
     try {
-        const url = `${IP_ADDRESS}/driver/info?driver_id=${driverId}`;
-        const response = await authenticatedFetch(url);
-      console.log('Driver info response:', response);
-      if (!response.ok) return;
-      
-      const apiResponse = await response.json();
-      if (apiResponse.success && apiResponse.data) {
-        updateDriverInfo(apiResponse.data);
+      const url = `${IP_ADDRESS}/driver/info?driver_id=${driverId}`;
+      const response = await authenticatedFetch(url);
+      const result = await parseApiResponseWithSoftError<Parameters<typeof updateDriverInfo>[0]>(response);
+      if (result.ok && result.data && typeof result.data === 'object') {
+        updateDriverInfo(result.data);
       }
     } catch (err) {
       // Silently fail - driver info is not critical
@@ -321,6 +351,7 @@ const Home = () => {
 
         {/* Today's Deliveries Section */}
         <View className="flex-1 bg-gray-50">
+          <ApiErrorText error={apiError} className="px-6" />
           <View className="px-6 py-4 flex-row items-center justify-between">
             <Text className="text-xl font-JakartaSemiBold text-gray-900">Today's Deliveries</Text>
             <View className="flex-row items-center gap-2">

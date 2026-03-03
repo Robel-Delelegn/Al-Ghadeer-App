@@ -1,6 +1,7 @@
+import ApiErrorText from '@/components/ApiErrorText';
 import { useOrderStore } from '@/store/index';
 import { useAuthStore, authenticatedFetch } from '@/store/auth';
-import { Order } from '@/types/order';
+import { ConfirmPaymentRequest, ConfirmPaymentResponse, Order } from '@/types/order';
 import { Ionicons } from '@expo/vector-icons';
 import { useRouter, useLocalSearchParams } from 'expo-router';
 import React, { useCallback, useState, useMemo } from 'react';
@@ -17,24 +18,25 @@ import {
 } from 'react-native';
 import { showErrorAlert, showSuccessAlert } from '@/store/utils/alert';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { parseApiResponseWithSoftError } from '@/utils/api';
 
 const { width } = Dimensions.get('window');
 const IP_ADDRESS = process.env.EXPO_PUBLIC_IP_ADDRESS;
 
-interface ApiResponse {
-  success: boolean;
-  message: string;
-  order: {
-    id: number;
-    order_number: string;
-    invoice_number?: string;
-    created_at: string;
-    total_amount: number;
-    payment_method: string;
-    status: string;
-  };
-  invoice_number?: string;
-}
+// Map product category to API expected values
+const mapProductCategory = (cat?: string): 'bulk_item' | 'asset' | 'refill' => {
+  if (cat === 'refill' || cat === 'retail-item') return cat === 'refill' ? 'refill' : 'bulk_item';
+  if (cat === 'assets') return 'asset';
+  return 'bulk_item';
+};
+
+// Map rent_item category to other_actions type
+type OtherActionType = NonNullable<ConfirmPaymentRequest['other_actions']>[0]['type'];
+const mapRentItemToOtherActionType = (category: string, inTruck: boolean): OtherActionType => {
+  if (category === 'deposit') return inTruck ? 'deposit' : 'deposit-refund';
+  if (category === 'borrow') return inTruck ? 'asset-movement-to-customer' : 'asset-movement-from-customer';
+  return 'asset-movement-to-customer';
+};
 
 const PaymentConfirmation: React.FC = () => {
   const insets = useSafeAreaInsets();
@@ -42,12 +44,14 @@ const PaymentConfirmation: React.FC = () => {
   const params = useLocalSearchParams();
   const { user } = useAuthStore();
   const [isProcessing, setIsProcessing] = useState(false);
+  const [apiError, setApiError] = useState<string | null>(null);
   const { 
     selectedOrder, 
     assignedOrders, 
     cartItems,
     selectedPaymentMethod,
-    updateOrderStatus
+    updateOrderStatus,
+    setLastConfirmPaymentResponse,
   } = useOrderStore();
   
   const orderDetail = assignedOrders.find(item => selectedOrder === item.id) as Order | undefined;
@@ -101,9 +105,7 @@ const PaymentConfirmation: React.FC = () => {
     switch (selectedPaymentMethod) {
       case 'wallet': return 'wallet';
       case 'credit_card': return 'card';
-      case 'invoice': return 'receipt';
-      case 'credit_sale': return 'receipt';
-      case 'credit_invoice': return 'document-text';
+      case 'credit': return 'receipt';
       default: return 'cash';
     }
   }, [selectedPaymentMethod]);
@@ -112,9 +114,7 @@ const PaymentConfirmation: React.FC = () => {
     switch (selectedPaymentMethod) {
       case 'wallet': return 'Wallet';
       case 'credit_card': return 'Card';
-      case 'invoice': return 'Invoice';
-      case 'credit_sale': return 'Credit Sale';
-      case 'credit_invoice': return 'Credit Invoice';
+      case 'credit': return 'Credit';
       default: return 'Cash';
     }
   }, [selectedPaymentMethod]);
@@ -132,37 +132,45 @@ const PaymentConfirmation: React.FC = () => {
     }
     
     setIsProcessing(true);
-    
+    setApiError(null);
     try {
-      // Determine order_type based on customer type
-      const orderType = orderDetail?.customer_type === 'organization' ? 'site' : 'individual';
-      
-      const orderData = {
-        customer_site_id: orderDetail.customer_site_id,
-        customer_id: orderDetail.customer_id,
+      const orderType: 'site' | 'external' = orderDetail?.customer_type === 'organization' ? 'site' : 'external';
+      const rentItems = (orderDetail?.rent_items || []).filter(item => item.in_truck === true);
+      const reasonsList = orderDetail?.reasons ?? [];
+
+      const orderData: ConfirmPaymentRequest = {
+        customer_site_id: orderDetail.customer_site_id || '',
+        customer_id: orderDetail.customer_id || '',
         customer_name: orderDetail.customer_name || 'N/A',
         customer_phone: orderDetail.customer_phone || 'N/A',
         products: cartItems.filter(item => item?.name).map(item => ({
+          id: item.id,
           name: item.name,
           quantity: item.quantity,
           price: item.price,
-          id: item.id,
-          category: item.category || '',
+          category: mapProductCategory(item.category),
         })),
         subtotal: parseFloat(subtotal),
         vat: parseFloat(vat),
         total_amount: parseFloat(totalWithVat),
-        rent_items: (orderDetail?.rent_items || []).filter(item => item.in_truck === true),
         payment_method: selectedPaymentMethod === 'credit_card' ? 'credit_card' : selectedPaymentMethod,
         order_type: orderType,
-        reasons: orderDetail?.reasons || [],
-        // Include signature data if available (for organization orders)
+        reasons: reasonsList,
+        ...(rentItems.length > 0 && {
+          other_actions: rentItems.map(item => ({
+            id: item.id,
+            name: item.name,
+            type: mapRentItemToOtherActionType(item.category, item.in_truck ?? true),
+            price: item.price,
+            quantity: item.quantity,
+            item_type: 'asset' as const,
+          })),
+        }),
         ...(signatureData && { signature_data: signatureData }),
         ...(receiverName && { receiver_name: receiverName }),
         ...(receiverPosition && { receiver_position: receiverPosition }),
-        ...(notes && { notes: notes }),
-        // Include checkout session ID if this is a credit card payment
-        ...(checkoutSessionId && selectedPaymentMethod === 'credit_card' && { checkout_session_id: checkoutSessionId })
+        ...(notes && { remark: notes }),
+        ...(checkoutSessionId && selectedPaymentMethod === 'credit_card' && { checkout_session_id: checkoutSessionId }),
       };
 
       let url = `${IP_ADDRESS}/driver/orders/confirm-payment`;
@@ -178,21 +186,28 @@ const PaymentConfirmation: React.FC = () => {
         body: JSON.stringify(orderData),
       });
 
-      if (!response.ok) {
-        const errorData = await response.json();
-        throw new Error(errorData.error || `HTTP error! Status: ${response.status}`);
+      const parseResult = await parseApiResponseWithSoftError<ConfirmPaymentResponse['data']>(response);
+      if (!parseResult.ok) {
+        setApiError(parseResult.error);
+        return;
       }
+      const result = parseResult.data;
+      
+      // Log full response to debug sale_id
+      console.log('Confirm Payment - Full server response:', JSON.stringify(result, null, 2));
+      console.log('Confirm Payment - sale_id from server:', result.sale_id);
 
-      const result: ApiResponse = await response.json();
-
-      if (!result.success) {
-        throw new Error(result.message || 'Payment confirmation failed');
-      }
-
-      // Mark order as delivered and remove from assigned orders
-      // Also update the order with invoice_number if provided
+      // Mark order as delivered and store confirm payment response for receipt
       if (orderDetail) {
-        const invoiceNumber = result.invoice_number || result.order.invoice_number;
+        const invoiceNumber = result.invoice_number;
+        
+        // Store confirm response - use sale_id from server for invoice generation
+        setLastConfirmPaymentResponse({
+          orderId: orderDetail.id,
+          sale_id: result.sale_id,
+          invoice_number: invoiceNumber,
+          order_number: result.order_number,
+        });
         
         // First mark as delivered (this moves it to completedOrders)
         updateOrderStatus(orderDetail.id, 'delivered');
@@ -211,26 +226,23 @@ const PaymentConfirmation: React.FC = () => {
       if (isRentItemsOnly) {
         showSuccessAlert(
           'Delivery Confirmed', 
-          result.message || `Order ${result.order.order_number} confirmed successfully.`,
+          result.message || `Order ${result.order_number} confirmed successfully.`,
           [{ text: 'OK', onPress: () => router.push('/(root)/(tabs)/home') }]
         );
       } else {
         showSuccessAlert(
           'Payment Successful', 
-          result.message || `Order ${result.order.order_number} confirmed.`,
+          result.message || `Order ${result.order_number} confirmed.`,
           [{ text: 'View Receipt', onPress: () => router.push('/(root)/(tabs)/payment-receipt') }]
         );
       }
       
     } catch (error) {
-      showErrorAlert(
-        'Payment Failed', 
-        error instanceof Error ? error.message : 'Please try again.'
-      );
+      setApiError(error instanceof Error ? error.message : 'Please try again.');
     } finally {
       setIsProcessing(false);
     }
-  }, [orderDetail, cartItems, subtotal, vat, totalWithVat, selectedPaymentMethod, router, updateOrderStatus, checkoutSessionId, signatureData, receiverName, receiverPosition, notes, user?.id, hasRentItemsSelected, isRentItemsOnly]);
+  }, [orderDetail, cartItems, subtotal, vat, totalWithVat, selectedPaymentMethod, router, updateOrderStatus, setLastConfirmPaymentResponse, checkoutSessionId, signatureData, receiverName, receiverPosition, notes, user?.id, hasRentItemsSelected, isRentItemsOnly]);
 
   const customerName = orderDetail?.customer_name || 'Customer';
   const customerAddress = orderDetail?.customer_address || '—';
@@ -243,6 +255,7 @@ const PaymentConfirmation: React.FC = () => {
 
   return (
     <View style={[styles.container, { paddingTop: insets.top }]}>
+      <ApiErrorText error={apiError} />
       {/* Header */}
       <View style={styles.header}>
         <TouchableOpacity 
