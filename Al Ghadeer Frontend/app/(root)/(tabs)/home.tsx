@@ -187,17 +187,17 @@ const Home = () => {
       const apiOrders: OrdersResponse['data'] = Array.isArray(result.data) ? result.data : [];
       const transformedOrders: Order[] = apiOrders.map((api): Order => {
         const customer = api.customer;
-        const rentItems = (api.other_actions || [])
-          .filter((a) => a.type.includes('asset') || a.type.includes('deposit'))
-          .map((a) => ({
-            id: a.id,
-            name: a.item.label,
-            category: a.type.includes('deposit') ? ('deposit' as const) : ('borrow' as const),
-            price: a.price_per_unit,
-            quantity: a.quantity,
-            image_url: a.item.image_url || '',
-            in_truck: a.direction === 'to_inventory',
-          }));
+        // Map ALL other_actions into rent_items so the UI can show every extra action,
+        // not only those with asset/deposit types.
+        const rentItems = (api.other_actions || []).map((a) => ({
+          id: a.id,
+          name: a.item.label,
+          category: a.type.includes('deposit') ? ('deposit' as const) : ('borrow' as const),
+          price: a.price_per_unit,
+          quantity: a.quantity,
+          image_url: a.item.image_url || '',
+          in_truck: a.direction === 'to_inventory',
+        }));
         return {
           id: api.order_number,
           order_number: api.order_number,
