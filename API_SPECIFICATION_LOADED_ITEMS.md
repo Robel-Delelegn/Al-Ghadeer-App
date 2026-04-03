@@ -2,14 +2,14 @@
 
 ## Base URL
 ```
-/api/drivers/:driver_id
+/drivers/:driver_id
 ```
 
 ---
 
 ## 1. Request Items (Load)
 
-**Endpoint:** `GET /api/drivers/:driver_id/loaded-items/request`
+**Endpoint:** `GET /drivers/:driver_id/loaded-items/request`
 
 **Response:**
 ```json
@@ -44,7 +44,7 @@
 
 ## 2. Request Items (Unload)
 
-**Endpoint:** `GET /api/drivers/:driver_id/unloaded-items/request`
+**Endpoint:** `GET /drivers/:driver_id/unloaded-items/request`
 
 **Response:**
 ```json
@@ -79,7 +79,7 @@
 
 ## 3. Confirm Items (Load)
 
-**Endpoint:** `POST /api/drivers/:driver_id/loaded-items/confirm`
+**Endpoint:** `POST /drivers/:driver_id/loaded-items/confirm`
 
 **Request Body:**
 ```json
@@ -138,7 +138,7 @@
 
 ## 4. Confirm Items (Unload)
 
-**Endpoint:** `POST /api/drivers/:driver_id/unloaded-items/confirm`
+**Endpoint:** `POST /drivers/:driver_id/unloaded-items/confirm`
 
 **Request Body:**
 ```json

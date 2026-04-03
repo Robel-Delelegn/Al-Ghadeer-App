@@ -2,14 +2,14 @@
 
 ## Base URL
 ```
-/api/auth
+/auth
 ```
 
 ---
 
 ## 1. Request OTP (First Time Login)
 
-**Endpoint:** `POST /api/auth/request-otp`
+**Endpoint:** `POST /auth/request-otp`
 
 **Request Body:**
 ```json
@@ -60,7 +60,7 @@
 
 ## 2. Verify OTP (First Time Login)
 
-**Endpoint:** `POST /api/auth/verify-otp`
+**Endpoint:** `POST /auth/verify-otp`
 
 **Headers:**
 ```
@@ -116,7 +116,7 @@ Authorization: Bearer <temp_token>
 
 ## 3. Resend OTP (First Time Login)
 
-**Endpoint:** `POST /api/auth/resend-otp`
+**Endpoint:** `POST /auth/resend-otp`
 
 **Headers:**
 ```
@@ -157,7 +157,7 @@ Authorization: Bearer <temp_token>
 
 ## 4. Verify Token (Check Auth)
 
-**Endpoint:** `GET /api/auth/me`
+**Endpoint:** `GET /auth/me`
 
 **Headers:**
 ```
@@ -195,7 +195,7 @@ Authorization: Bearer <token>
 
 ## 5. Logout
 
-**Endpoint:** `POST /api/auth/logout`
+**Endpoint:** `POST /auth/logout`
 
 **Headers:**
 ```
@@ -340,14 +340,14 @@ Authorization: Bearer <token>
    
    **First Time / Token Expired:**
    - Step 1: User enters phone number
-   - Step 2: POST /api/auth/request-otp → Server sends OTP via SMS + returns temporary token
-   - Step 3: User enters OTP → POST /api/auth/verify-otp (with temp token) → Server returns permanent token
+   - Step 2: POST /auth/request-otp → Server sends OTP via SMS + returns temporary token
+   - Step 3: User enters OTP → POST /auth/verify-otp (with temp token) → Server returns permanent token
    - Step 4: Permanent token is stored securely on device
    - Step 5: User can access app (if status is "approved")
    
    **Subsequent App Launches (Token Valid):**
    - Step 1: App checks for stored token on launch
-   - Step 2: GET /api/auth/me (with token) → Server validates token
+   - Step 2: GET /auth/me (with token) → Server validates token
    - Step 3: If token valid → User directly accesses app
    - Step 4: If token expired/invalid → User must go through OTP flow again
    

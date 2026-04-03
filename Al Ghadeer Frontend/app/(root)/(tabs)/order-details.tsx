@@ -409,8 +409,7 @@ const OrderDetails = () => {
           <View style={styles.detailRow}>
             <Text style={styles.detailLabel}>Payment</Text>
             <Text style={styles.detailValue}>
-                {order.payment_method === 'credit_card' ? 'Card' :
-                 ['invoice', 'credit_invoice', 'credit_sale', 'credit'].includes(order.payment_method ?? '') ? 'Credit' :
+                {['invoice', 'credit_invoice', 'credit_sale', 'credit'].includes(order.payment_method ?? '') ? 'Credit' :
                  order.payment_method === 'credit_invoice' ? 'Credit Invoice' :
                  (order.payment_method || 'Cash').charAt(0).toUpperCase() + (order.payment_method || 'cash').slice(1)}
               </Text>

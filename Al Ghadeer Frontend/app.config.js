@@ -91,9 +91,7 @@ module.exports = {
       },
       // Make environment variables accessible in the app
       ipAddress: process.env.EXPO_PUBLIC_IP_ADDRESS,
-      googleApiKey: process.env.EXPO_PUBLIC_GOOGLE_API_KEY,
-      geopifyApiKey: process.env.EXPO_PUBLIC_GEOPIFY_API_KEY
+      googleApiKey: process.env.EXPO_PUBLIC_GOOGLE_API_KEY
     }
   }
 };
-

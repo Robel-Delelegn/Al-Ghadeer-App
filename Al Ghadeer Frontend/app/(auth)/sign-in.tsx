@@ -181,7 +181,9 @@ const SignIn = () => {
         
         const user = useAuthStore.getState().user;
 
-        if (user?.status === 'pending') {
+        const normalizedStatus = (user?.status || '').trim().toLowerCase();
+
+        if (normalizedStatus === 'pending') {
           showWarningAlert(
             'Account Pending Approval',
             'Your phone number has been verified. Please wait for approval from the administrator.',
@@ -194,11 +196,12 @@ const SignIn = () => {
               },
             ]
           );
-        } else if (user?.status === 'approved') {
-          router.replace('/(root)/(tabs)/home');
-        } else {
+        } else if (normalizedStatus === 'rejected') {
           showErrorAlert('Account Rejected', 'Your account has been rejected. Please contact the administrator.');
           useAuthStore.getState().signOut();
+        } else {
+          // Treat unknown/empty statuses as allowed login states to avoid false rejections.
+          router.replace('/(root)/(tabs)/home');
         }
       }, 100);
       

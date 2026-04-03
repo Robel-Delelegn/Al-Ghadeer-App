@@ -20,37 +20,37 @@ Server runs on **port 3001** by default (configurable via `PORT` environment var
 ## 📡 API Endpoints
 
 ### Authentication
-- `POST /api/auth/request-otp` - Request OTP for phone verification
-- `POST /api/auth/verify-otp` - Verify OTP and get permanent token
-- `POST /api/auth/resend-otp` - Resend OTP code
-- `GET /api/auth/me` - Verify token and get user info
-- `POST /api/auth/logout` - Logout user
+- `POST /auth/request-otp` - Request OTP for phone verification
+- `POST /auth/verify-otp` - Verify OTP and get permanent token
+- `POST /auth/resend-otp` - Resend OTP code
+- `GET /auth/me` - Verify token and get user info
+- `POST /auth/logout` - Logout user
 
 ### Orders
-- `GET /api/driver/orders?driver_id=xxx` - Get current orders (pending, assigned, in_progress)
-- `GET /api/driver/history?driver_id=xxx` - Get delivery history (delivered, failed, cancelled)
-- `POST /api/driver/orders/confirm-payment?driver_id=xxx` - Confirm payment and create order
+- `GET /driver/orders?driver_id=xxx` - Get current orders (pending, assigned, in_progress)
+- `GET /driver/history?driver_id=xxx` - Get delivery history (delivered, failed, cancelled)
+- `POST /driver/orders/confirm-payment?driver_id=xxx` - Confirm payment and create order
 
 ### Loaded/Unloaded Items
-- `GET /api/drivers/:driver_id/loaded-items/request` - Get items to load
-- `POST /api/drivers/:driver_id/loaded-items/confirm` - Confirm loaded items
-- `GET /api/drivers/:driver_id/unloaded-items/request` - Get items to unload
-- `POST /api/drivers/:driver_id/unloaded-items/confirm` - Confirm unloaded items
+- `GET /drivers/:driver_id/loaded-items/request` - Get items to load
+- `POST /drivers/:driver_id/loaded-items/confirm` - Confirm loaded items
+- `GET /drivers/:driver_id/unloaded-items/request` - Get items to unload
+- `POST /drivers/:driver_id/unloaded-items/confirm` - Confirm unloaded items
 
 ### Failed Deliveries
-- `GET /api/driver/failed-deliveries?driver_id=xxx` - Get failed deliveries
-- `POST /api/failed-deliveries/submit?driver_id=xxx` - Submit failed delivery report
+- `GET /driver/failed-deliveries?driver_id=xxx` - Get failed deliveries
+- `POST /failed-deliveries/submit?driver_id=xxx` - Submit failed delivery report
 
 ### Expenses
-- `GET /api/expenses?driver_id=xxx&status=pending` - Get expense history (optional status filter)
-- `POST /api/expenses/submit?driver_id=xxx` - Submit new expense
+- `GET /expenses?driver_id=xxx&status=pending` - Get expense history (optional status filter)
+- `POST /expenses/submit?driver_id=xxx` - Submit new expense
 
 ### Products
-- `GET /api/products?driver_id=xxx&customer_site_id=xxx` - Get available products
-- `GET /api/driver/products?driver_id=xxx&customer_site_id=xxx` - Get available products (alias)
+- `GET /products?driver_id=xxx&customer_site_id=xxx` - Get available products
+- `GET /driver/products?driver_id=xxx&customer_site_id=xxx` - Get available products (alias)
 
 ### Health Check
-- `GET /api/health` - Server health status
+- `GET /health` - Server health status
 
 ## 📝 Response Formats
 
@@ -107,10 +107,10 @@ PORT=3001
 
 Update your frontend API base URL to:
 ```
-http://yoniash.aa.uaeu.ac.ae:3001/api
+http://yoniash.aa.uaeu.ac.ae:3001
 ```
 
 Or use environment variable:
 ```env
-EXPO_PUBLIC_API_URL=http://yoniash.aa.uaeu.ac.ae:3001/api
+EXPO_PUBLIC_IP_ADDRESS=http://yoniash.aa.uaeu.ac.ae:3001
 ```

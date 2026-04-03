@@ -4,7 +4,7 @@ import { useAuthStore, authenticatedFetch } from '@/store/auth';
 import { ConfirmPaymentRequest, ConfirmPaymentResponse, Order } from '@/types/order';
 import { Ionicons } from '@expo/vector-icons';
 import { useRouter, useLocalSearchParams } from 'expo-router';
-import React, { useCallback, useState, useMemo } from 'react';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { 
   ActivityIndicator, 
   ScrollView, 
@@ -30,9 +30,9 @@ const mapProductCategory = (cat?: string): 'bulk_item' | 'asset' | 'refill' => {
   return 'bulk_item';
 };
 
-// Map rent_item category to other_actions type
+// Fallback type mapping for older locally-cached orders that don't carry original action type
 type OtherActionType = NonNullable<ConfirmPaymentRequest['other_actions']>[0]['type'];
-const mapRentItemToOtherActionType = (category: string, inTruck: boolean): OtherActionType => {
+const getFallbackOtherActionType = (category: string, inTruck: boolean): OtherActionType => {
   if (category === 'deposit') return inTruck ? 'deposit' : 'deposit-refund';
   if (category === 'borrow') return inTruck ? 'asset-movement-to-customer' : 'asset-movement-from-customer';
   return 'asset-movement-to-customer';
@@ -55,7 +55,28 @@ const PaymentConfirmation: React.FC = () => {
   } = useOrderStore();
   
   const orderDetail = assignedOrders.find(item => selectedOrder === item.id) as Order | undefined;
-  const checkoutSessionId = params.checkout_session_id as string | undefined;
+  const editableRentItems = useMemo(
+    () => (orderDetail?.rent_items || []).filter(item => item.in_truck === true),
+    [orderDetail?.rent_items]
+  );
+  const [rentItemQuantities, setRentItemQuantities] = useState<Record<string, number>>({});
+
+  useEffect(() => {
+    const initial: Record<string, number> = {};
+    editableRentItems.forEach((item) => {
+      initial[item.id] = Math.max(0, item.quantity || 0);
+    });
+    setRentItemQuantities(initial);
+  }, [editableRentItems]);
+
+  const handleChangeRentItemQuantity = useCallback((itemId: string, delta: number) => {
+    setRentItemQuantities((prev) => {
+      const current = prev[itemId] ?? 0;
+      const nextQuantity = Math.max(0, current + delta);
+      return { ...prev, [itemId]: nextQuantity };
+    });
+  }, []);
+
   // Get signature data from params if available (for organization orders)
   const signatureData = params.signature_data as string | undefined;
   const receiverName = params.receiver_name as string | undefined;
@@ -72,16 +93,17 @@ const PaymentConfirmation: React.FC = () => {
     }, 0);
     const vatAmount = sub * 0.05;
     
-    // Calculate rent items total (no VAT) - only for items with in_truck === true
-    const rentTotal = orderDetail?.rent_items?.reduce((sum, item) => {
-      if (item.in_truck) {
-        return sum + ((item.price || 0) * (item.quantity || 1));
-      }
-      return sum;
-    }, 0) || 0;
-    
-    // Check if any rent items are selected
-    const hasRentItems = orderDetail?.rent_items?.some(item => item.in_truck === true) || false;
+    // Calculate rent items total (no VAT) from editable quantities
+    const rentTotal = editableRentItems.reduce((sum, item) => {
+      const quantity = Math.max(0, rentItemQuantities[item.id] ?? item.quantity ?? 0);
+      return sum + ((item.price || 0) * quantity);
+    }, 0);
+
+    // Check if any rent items have a positive quantity
+    const hasRentItems = editableRentItems.some((item) => {
+      const quantity = Math.max(0, rentItemQuantities[item.id] ?? item.quantity ?? 0);
+      return quantity > 0;
+    });
     
     // Check if this is rent-items-only (no cart items but rent items selected)
     const isRentOnly = cartItems.length === 0 && hasRentItems;
@@ -99,12 +121,11 @@ const PaymentConfirmation: React.FC = () => {
       hasRentItemsSelected: hasRentItems,
       isRentItemsOnly: isRentOnly
     };
-  }, [cartItems, orderDetail]);
+  }, [cartItems, editableRentItems, rentItemQuantities]);
 
   const paymentIcon = useMemo(() => {
     switch (selectedPaymentMethod) {
       case 'wallet': return 'wallet';
-      case 'credit_card': return 'card';
       case 'credit': return 'receipt';
       default: return 'cash';
     }
@@ -113,7 +134,6 @@ const PaymentConfirmation: React.FC = () => {
   const paymentLabel = useMemo(() => {
     switch (selectedPaymentMethod) {
       case 'wallet': return 'Wallet';
-      case 'credit_card': return 'Card';
       case 'credit': return 'Credit';
       default: return 'Cash';
     }
@@ -135,7 +155,13 @@ const PaymentConfirmation: React.FC = () => {
     setApiError(null);
     try {
       const orderType: 'site' | 'external' = orderDetail?.customer_type === 'organization' ? 'site' : 'external';
-      const rentItems = (orderDetail?.rent_items || []).filter(item => item.in_truck === true);
+      const rentItems = (orderDetail?.rent_items || [])
+        .filter(item => item.in_truck === true)
+        .map(item => ({
+          ...item,
+          quantity: Math.max(0, rentItemQuantities[item.id] ?? item.quantity ?? 0),
+        }))
+        .filter(item => item.quantity > 0);
       const reasonsList = orderDetail?.reasons ?? [];
 
       const orderData: ConfirmPaymentRequest = {
@@ -153,24 +179,26 @@ const PaymentConfirmation: React.FC = () => {
         subtotal: parseFloat(subtotal),
         vat: parseFloat(vat),
         total_amount: parseFloat(totalWithVat),
-        payment_method: selectedPaymentMethod === 'credit_card' ? 'credit_card' : selectedPaymentMethod,
+        payment_method: selectedPaymentMethod,
         order_type: orderType,
         reasons: reasonsList,
         ...(rentItems.length > 0 && {
-          other_actions: rentItems.map(item => ({
-            id: item.id,
-            name: item.name,
-            type: mapRentItemToOtherActionType(item.category, item.in_truck ?? true),
-            price: item.price,
-            quantity: item.quantity,
-            item_type: 'asset' as const,
-          })),
+          other_actions: rentItems.map(item => {
+            const actionType = item.other_action_type ?? getFallbackOtherActionType(item.category, item.in_truck ?? true);
+            return {
+              id: item.id,
+              name: item.name,
+              type: actionType,
+              price: item.price,
+              quantity: item.quantity,
+              ...(item.other_action_item_type ? { item_type: item.other_action_item_type } : {}),
+            };
+          }),
         }),
         ...(signatureData && { signature_data: signatureData }),
         ...(receiverName && { receiver_name: receiverName }),
         ...(receiverPosition && { receiver_position: receiverPosition }),
         ...(notes && { remark: notes }),
-        ...(checkoutSessionId && selectedPaymentMethod === 'credit_card' && { checkout_session_id: checkoutSessionId }),
       };
 
       let url = `${IP_ADDRESS}/driver/orders/confirm-payment`;
@@ -200,6 +228,27 @@ const PaymentConfirmation: React.FC = () => {
       // Mark order as delivered and store confirm payment response for receipt
       if (orderDetail) {
         const invoiceNumber = result.invoice_number;
+
+        // Persist adjusted rent item quantities before moving order to completed orders
+        if (orderDetail.rent_items && orderDetail.rent_items.length > 0) {
+          const quantityMap = new Map(rentItems.map(item => [item.id, item.quantity] as const));
+          const store = useOrderStore.getState();
+          const updatedAssignedOrders = store.assignedOrders.map((order) => {
+            if (order.id !== orderDetail.id) return order;
+            return {
+              ...order,
+              rent_items: (order.rent_items || []).map((item) => {
+                const updatedQuantity = quantityMap.has(item.id) ? quantityMap.get(item.id)! : 0;
+                return {
+                  ...item,
+                  quantity: updatedQuantity,
+                  in_truck: updatedQuantity > 0,
+                };
+              }),
+            };
+          });
+          useOrderStore.setState({ assignedOrders: updatedAssignedOrders });
+        }
         
         // Store confirm response - use sale_id from server for invoice generation
         setLastConfirmPaymentResponse({
@@ -242,7 +291,7 @@ const PaymentConfirmation: React.FC = () => {
     } finally {
       setIsProcessing(false);
     }
-  }, [orderDetail, cartItems, subtotal, vat, totalWithVat, selectedPaymentMethod, router, updateOrderStatus, setLastConfirmPaymentResponse, checkoutSessionId, signatureData, receiverName, receiverPosition, notes, user?.id, hasRentItemsSelected, isRentItemsOnly]);
+  }, [orderDetail, cartItems, subtotal, vat, totalWithVat, selectedPaymentMethod, router, updateOrderStatus, setLastConfirmPaymentResponse, signatureData, receiverName, receiverPosition, notes, user?.id, hasRentItemsSelected, isRentItemsOnly, rentItemQuantities]);
 
   const customerName = orderDetail?.customer_name || 'Customer';
   const customerAddress = orderDetail?.customer_address || '—';
@@ -345,13 +394,16 @@ const PaymentConfirmation: React.FC = () => {
         </View>
 
         {/* Rent Items */}
-        {orderDetail?.rent_items && orderDetail.rent_items.length > 0 && (
+        {editableRentItems.length > 0 && (
           <View style={styles.card}>
             <View style={styles.itemsTableHeader}>
               <Text style={styles.tableHeaderText}>Rent Items</Text>
+              <Text style={[styles.tableHeaderText, styles.tableHeaderQtyControl]}>Qty</Text>
               <Text style={[styles.tableHeaderText, styles.tableHeaderPrice]}>Price</Text>
             </View>
-            {orderDetail.rent_items.map((item, index) => (
+            {editableRentItems.map((item, index) => {
+              const quantity = Math.max(0, rentItemQuantities[item.id] ?? item.quantity ?? 0);
+              return (
               <View key={item.id}>
                 <View style={styles.itemsTableRow}>
                   <View style={styles.itemProductInfo}>
@@ -364,14 +416,32 @@ const PaymentConfirmation: React.FC = () => {
                     </View>
                     <View style={styles.itemInfo}>
                       <Text style={styles.itemName}>{item.name}</Text>
-                      <Text style={styles.itemMeta}>{item.category === 'borrow' ? 'Borrow' : 'Deposit'} • Qty: {item.quantity}</Text>
+                      <Text style={styles.itemMeta}>{item.category === 'borrow' ? 'Borrow' : 'Deposit'}</Text>
                     </View>
                   </View>
-                  <Text style={[styles.itemTableValue, styles.tablePrice, styles.itemTableTotal]}>AED {(item.price * item.quantity).toFixed(2)}</Text>
+                  <View style={styles.rentQtyControl}>
+                    <TouchableOpacity
+                      style={[styles.rentQtyButton, quantity === 0 && styles.rentQtyButtonDisabled]}
+                      onPress={() => handleChangeRentItemQuantity(item.id, -1)}
+                      disabled={quantity === 0}
+                      activeOpacity={0.7}
+                    >
+                      <Ionicons name="remove" size={12} color={quantity === 0 ? '#CBD5E1' : '#1E40AF'} />
+                    </TouchableOpacity>
+                    <Text style={styles.rentQtyText}>{quantity}</Text>
+                    <TouchableOpacity
+                      style={styles.rentQtyButton}
+                      onPress={() => handleChangeRentItemQuantity(item.id, 1)}
+                      activeOpacity={0.7}
+                    >
+                      <Ionicons name="add" size={12} color="#1E40AF" />
+                    </TouchableOpacity>
+                  </View>
+                  <Text style={[styles.itemTableValue, styles.tablePrice, styles.itemTableTotal]}>AED {(item.price * quantity).toFixed(2)}</Text>
                 </View>
-                {index < (orderDetail.rent_items?.length || 0) - 1 && <View style={styles.itemDivider} />}
+                {index < editableRentItems.length - 1 && <View style={styles.itemDivider} />}
               </View>
-            ))}
+            )})}
           </View>
         )}
 
@@ -480,7 +550,7 @@ const PaymentConfirmation: React.FC = () => {
           <TouchableOpacity
             style={[styles.confirmButton, isProcessing && styles.confirmButtonDisabled]}
             onPress={handleConfirmPayment}
-            disabled={isProcessing || cartItems.length === 0}
+            disabled={isProcessing || (cartItems.length === 0 && !hasRentItemsSelected)}
             activeOpacity={0.8}
           >
             {isProcessing ? (
@@ -681,6 +751,10 @@ const styles = StyleSheet.create({
     width: 35,
     textAlign: 'center',
   },
+  tableHeaderQtyControl: {
+    width: 80,
+    textAlign: 'center',
+  },
   tableHeaderPrice: {
     width: 70,
     textAlign: 'right',
@@ -725,6 +799,31 @@ const styles = StyleSheet.create({
   tableQty: {
     width: 35,
     textAlign: 'center',
+  },
+  rentQtyControl: {
+    width: 80,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginRight: 4,
+  },
+  rentQtyButton: {
+    width: 22,
+    height: 22,
+    borderRadius: 6,
+    backgroundColor: '#F3F4F6',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  rentQtyButtonDisabled: {
+    backgroundColor: '#F9FAFB',
+  },
+  rentQtyText: {
+    minWidth: 28,
+    textAlign: 'center',
+    fontSize: 12,
+    fontWeight: '700',
+    color: '#1E40AF',
   },
   tablePrice: {
     width: 70,
@@ -948,6 +1047,3 @@ const styles = StyleSheet.create({
 });
 
 export default PaymentConfirmation;
-
-
-

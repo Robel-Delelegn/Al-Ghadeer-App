@@ -188,7 +188,6 @@ const Home = () => {
       const transformedOrders: Order[] = apiOrders.map((api): Order => {
         const customer = api.customer;
         const rentItems = (api.other_actions || [])
-          .filter((a) => a.type.includes('asset') || a.type.includes('deposit'))
           .map((a) => ({
             id: a.id,
             name: a.item.label,
@@ -197,6 +196,8 @@ const Home = () => {
             quantity: a.quantity,
             image_url: a.item.image_url || '',
             in_truck: a.direction === 'to_inventory',
+            other_action_type: a.type,
+            other_action_item_type: a.item.type,
           }));
         return {
           id: api.order_number,

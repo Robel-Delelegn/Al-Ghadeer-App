@@ -19,7 +19,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 const { width } = Dimensions.get('window');
 
-type PaymentMethod = 'cash' | 'wallet' | 'credit_card' | 'credit';
+type PaymentMethod = 'cash' | 'wallet' | 'credit';
 
 interface PaymentOption {
   id: PaymentMethod;
@@ -31,7 +31,6 @@ interface PaymentOption {
 const paymentOptions: PaymentOption[] = [
   { id: 'cash', label: 'Cash', icon: 'cash-outline', description: 'Pay with cash on delivery' },
   { id: 'wallet', label: 'Wallet', icon: 'wallet-outline', description: 'Use customer wallet balance' },
-  { id: 'credit_card', label: 'Card', icon: 'card-outline', description: 'Pay with credit/debit card' },
   { id: 'credit', label: 'Credit', icon: 'receipt-outline', description: 'Payment due at end of month (invoice or delivery note per confirmation)' },
 ];
 
@@ -108,12 +107,6 @@ const Checkout: React.FC = () => {
 
     // Use requires_signature from order to determine navigation
     const needsSignature = orderDetail?.requires_signature === true;
-
-    // Handle credit card payment - redirect to Stripe QR payment
-    if (selectedPaymentMethod === 'credit_card') {
-      router.push('/(root)/(tabs)/stripe-qr-payment');
-      return;
-    }
 
     // Handle Credit - redirect to signature page (invoice or delivery note per API response)
     if (selectedPaymentMethod === 'credit') {
@@ -277,9 +270,9 @@ const Checkout: React.FC = () => {
             )}
           </View>
           <View style={styles.paymentContainer}>
-            {/* Top Row: Cash, Wallet, Card */}
+            {/* Top Row: Cash, Wallet */}
             <View style={styles.paymentRow}>
-              {paymentOptions.filter(opt => ['cash', 'wallet', 'credit_card'].includes(opt.id)).map((option) => {
+              {paymentOptions.filter(opt => ['cash', 'wallet'].includes(opt.id)).map((option) => {
                 const isSelected = selectedPaymentMethod === option.id;
                 const isWallet = option.id === 'wallet';
                 const canUseWallet = isWallet && (walletBalance > 0 || isOrganization);
@@ -712,7 +705,7 @@ const styles = StyleSheet.create({
   },
   paymentOptionTop: {
     flex: 1,
-    maxWidth: '32%',
+    maxWidth: '48%',
   },
   paymentOptionBottom: {
     flex: 0,

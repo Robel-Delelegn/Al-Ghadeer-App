@@ -34,7 +34,6 @@ export interface ConfirmPaymentRequest {
     quantity?: number;
     item_type?: 'asset' | 'bottle';
   }>;
-  checkout_session_id?: string;  // For Stripe credit card payments
 }
 
 export interface ConfirmPaymentResponse {
@@ -149,7 +148,7 @@ export interface Order {
   }> | Record<string, number>;
   total_amount?: number;
   wallet_balance?: number;
-  payment_method?: 'cash' | 'wallet' | 'credit_card' | 'credit' | 'invoice' | 'credit_invoice';  // invoice/credit_invoice from API shown as Credit
+  payment_method?: 'cash' | 'wallet' | 'credit' | 'invoice' | 'credit_invoice';  // invoice/credit_invoice from API shown as Credit
   payment_status?: 'pending' | 'paid' | 'failed' | 'due';
   zone?: string;
   delivery_zone?: string;
@@ -160,7 +159,7 @@ export interface Order {
   completed_at?: string;
   // Signature requirement
   requires_signature?: boolean;
-  // Rent items - items that are borrowed or deposited (not editable by driver)
+  // Rent items - items that are borrowed or deposited
   rent_items?: Array<{
     id: string;
     name: string;
@@ -169,6 +168,8 @@ export interface Order {
     quantity: number;
     image_url: string;
     in_truck?: boolean; // Whether the item is currently in the truck
+    other_action_type?: NonNullable<ConfirmPaymentRequest['other_actions']>[0]['type'];
+    other_action_item_type?: NonNullable<ConfirmPaymentRequest['other_actions']>[0]['item_type'];
   }>;
   // Reasons for the order - same structure as API (do not parse)
   reasons?: Array<{

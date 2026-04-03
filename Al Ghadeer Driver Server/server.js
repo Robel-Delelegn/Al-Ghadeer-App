@@ -9,7 +9,7 @@ const port = process.env.PORT || 3000;
 
 // --- Middleware ---
 // Stripe webhook needs raw body, so handle it before JSON parser
-app.post('/api/payments/webhook', express.raw({ type: 'application/json' }), async (req, res) => {
+app.post('/payments/webhook', express.raw({ type: 'application/json' }), async (req, res) => {
     const sig = req.headers['stripe-signature'];
     const webhookSecret = process.env.STRIPE_WEBHOOK_SECRET;
 
@@ -144,8 +144,8 @@ function cleanExpiredOTPs() {
     }
 }
 
-// POST /api/auth/request-otp
-app.post('/api/auth/request-otp', async (req, res) => {
+// POST /auth/request-otp
+app.post('/auth/request-otp', async (req, res) => {
     console.log('\n📥 ========== OTP REQUEST RECEIVED ==========');
     console.log('📥 Received OTP request');
     const { phone } = req.body;
@@ -201,8 +201,8 @@ app.post('/api/auth/request-otp', async (req, res) => {
     console.log('✅ Response sent successfully');
 });
 
-// POST /api/auth/verify-otp
-app.post('/api/auth/verify-otp', async (req, res) => {
+// POST /auth/verify-otp
+app.post('/auth/verify-otp', async (req, res) => {
     const { phone, otp } = req.body;
     const authHeader = req.headers.authorization;
     const tempToken = authHeader?.replace('Bearer ', '');
@@ -239,7 +239,7 @@ app.post('/api/auth/verify-otp', async (req, res) => {
             id: `driver_${Date.now()}`,
             phone: phone,
             driver_name: 'Driver',
-            status: 'online'
+            status: 'approved'
         };
     }
 
@@ -267,8 +267,8 @@ app.post('/api/auth/verify-otp', async (req, res) => {
     });
 });
 
-// POST /api/auth/resend-otp
-app.post('/api/auth/resend-otp', async (req, res) => {
+// POST /auth/resend-otp
+app.post('/auth/resend-otp', async (req, res) => {
     const { phone } = req.body;
     const authHeader = req.headers.authorization;
     const tempToken = authHeader?.replace('Bearer ', '');
@@ -332,8 +332,8 @@ app.post('/api/auth/resend-otp', async (req, res) => {
     });
 });
 
-// GET /api/auth/me
-app.get('/api/auth/me', async (req, res) => {
+// GET /auth/me
+app.get('/auth/me', async (req, res) => {
     const authHeader = req.headers.authorization;
     const token = authHeader?.replace('Bearer ', '');
 
@@ -361,8 +361,8 @@ app.get('/api/auth/me', async (req, res) => {
     });
 });
 
-// POST /api/auth/logout
-app.post('/api/auth/logout', async (req, res) => {
+// POST /auth/logout
+app.post('/auth/logout', async (req, res) => {
     res.status(200).json({
         success: true,
         data: { message: 'Logged out successfully' },
@@ -374,8 +374,8 @@ app.post('/api/auth/logout', async (req, res) => {
 // ORDER ENDPOINTS
 // ============================================
 
-// GET /api/driver/orders
-app.get('/api/driver/orders', async (req, res) => {
+// GET /driver/orders
+app.get('/driver/orders', async (req, res) => {
     const { driver_id } = req.query;
 
     // Dummy orders data
@@ -587,8 +587,8 @@ app.get('/api/driver/orders', async (req, res) => {
     });
 });
 
-// GET /api/driver/info
-app.get('/api/driver/info', async (req, res) => {
+// GET /driver/info
+app.get('/driver/info', async (req, res) => {
     const { driver_id } = req.query;
 
     console.log('\n👤 Driver Info Request');
@@ -627,8 +627,8 @@ app.get('/api/driver/info', async (req, res) => {
     });
 });
 
-// GET /api/driver/history
-app.get('/api/driver/history', async (req, res) => {
+// GET /driver/history
+app.get('/driver/history', async (req, res) => {
     const { driver_id } = req.query;
 
     console.log('\n📋 Delivery History Request');
@@ -736,8 +736,8 @@ app.get('/api/driver/history', async (req, res) => {
     });
 });
 
-// GET /api/driver/failed-deliveries (also supports /api/failed-deliveries)
-app.get('/api/driver/failed-deliveries', async (req, res) => {
+// GET /driver/failed-deliveries (also supports /failed-deliveries)
+app.get('/driver/failed-deliveries', async (req, res) => {
     const { driver_id } = req.query;
 
     const failedDeliveries = [
@@ -772,8 +772,8 @@ app.get('/api/driver/failed-deliveries', async (req, res) => {
     });
 });
 
-// POST /api/failed-deliveries/submit
-app.post('/api/failed-deliveries/submit', async (req, res) => {
+// POST /failed-deliveries/submit
+app.post('/failed-deliveries/submit', async (req, res) => {
     const { driver_id } = req.query;
     const failureData = req.body;
 
@@ -831,8 +831,8 @@ function updateWalletBalance(customerId, amount, isCredit = false) {
     return null;
 }
 
-// POST /api/driver/orders/validate-payment
-app.post('/api/driver/orders/validate-payment', async (req, res) => {
+// POST /driver/orders/validate-payment
+app.post('/driver/orders/validate-payment', async (req, res) => {
     const { payment_method, amount, order_id, customer_id, customer_type, wallet_balance } = req.body;
 
     console.log('\n📋 Payment Validation Request');
@@ -958,8 +958,8 @@ app.post('/api/driver/orders/validate-payment', async (req, res) => {
     });
 });
 
-// POST /api/driver/orders/confirm-payment
-app.post('/api/driver/orders/confirm-payment', async (req, res) => {
+// POST /driver/orders/confirm-payment
+app.post('/driver/orders/confirm-payment', async (req, res) => {
     const { driver_id } = req.query;
     const orderData = req.body;
 
@@ -1115,9 +1115,9 @@ app.post('/api/driver/orders/confirm-payment', async (req, res) => {
     });
 });
 
-// POST /api/driver/orders/organization-credit-delivery
+// POST /driver/orders/organization-credit-delivery
 // Handles credit delivery for organizations - requires signature
-app.post('/api/driver/orders/organization-credit-delivery', async (req, res) => {
+app.post('/driver/orders/organization-credit-delivery', async (req, res) => {
     const { driver_id } = req.query;
     const { 
         order_id,
@@ -1240,8 +1240,8 @@ app.post('/api/driver/orders/organization-credit-delivery', async (req, res) => 
     });
 });
 
-// GET /api/driver/organization-credits - Get all organization credit records
-app.get('/api/driver/organization-credits', async (req, res) => {
+// GET /driver/organization-credits - Get all organization credit records
+app.get('/driver/organization-credits', async (req, res) => {
     const { driver_id, customer_id } = req.query;
 
     let credits = [...organizationCredits];
@@ -1261,8 +1261,8 @@ app.get('/api/driver/organization-credits', async (req, res) => {
     });
 });
 
-// GET /api/customers/check
-app.get('/api/customers/check', async (req, res) => {
+// GET /customers/check
+app.get('/customers/check', async (req, res) => {
     const { phone } = req.query;
 
     console.log('\n🔍 Customer Check Request');
@@ -1349,8 +1349,8 @@ app.get('/api/customers/check', async (req, res) => {
     }
 });
 
-// POST /api/driver/direct-sales
-app.post('/api/driver/direct-sales', async (req, res) => {
+// POST /driver/direct-sales
+app.post('/driver/direct-sales', async (req, res) => {
     const saleData = req.body;
 
     console.log('\n💰 Direct Sale Request');
@@ -1477,8 +1477,8 @@ app.post('/api/driver/direct-sales', async (req, res) => {
 // LOADED/UNLOADED ITEMS ENDPOINTS
 // ============================================
 
-// GET /api/drivers/:driver_id/loaded-items/request
-app.get('/api/drivers/loaded-items/request', async (req, res) => {
+// GET /drivers/:driver_id/loaded-items/request
+app.get('/drivers/loaded-items/request', async (req, res) => {
     const { driver_id } = req.query;
 
     const items = [
@@ -1540,8 +1540,8 @@ app.get('/api/drivers/loaded-items/request', async (req, res) => {
     });
 });
 
-// POST /api/drivers/:driver_id/loaded-items/confirm
-app.post('/api/drivers/loaded-items/confirm', async (req, res) => {
+// POST /drivers/:driver_id/loaded-items/confirm
+app.post('/drivers/loaded-items/confirm', async (req, res) => {
     const { driver_id } = req.query;
     const { items, is_correct, confirmed_at } = req.body;
 
@@ -1559,8 +1559,8 @@ app.post('/api/drivers/loaded-items/confirm', async (req, res) => {
     });
 });
         
-// GET /api/drivers/:driver_id/unloaded-items/request
-app.get('/api/drivers/:driver_id/unloaded-items/request', async (req, res) => {
+// GET /drivers/:driver_id/unloaded-items/request
+app.get('/drivers/:driver_id/unloaded-items/request', async (req, res) => {
     const { driver_id } = req.params;
 
     const items = [
@@ -1608,8 +1608,8 @@ app.get('/api/drivers/:driver_id/unloaded-items/request', async (req, res) => {
     });
 });
 
-// POST /api/drivers/:driver_id/unloaded-items/confirm
-app.post('/api/drivers/:driver_id/unloaded-items/confirm', async (req, res) => {
+// POST /drivers/:driver_id/unloaded-items/confirm
+app.post('/drivers/:driver_id/unloaded-items/confirm', async (req, res) => {
     const { driver_id } = req.params;
     const { items, is_correct, confirmed_at } = req.body;
 
@@ -1631,8 +1631,8 @@ app.post('/api/drivers/:driver_id/unloaded-items/confirm', async (req, res) => {
 // EXPENSES ENDPOINTS
 // ============================================
 
-// GET /api/expenses
-app.get('/api/expenses', async (req, res) => {
+// GET /expenses
+app.get('/expenses', async (req, res) => {
     const { driver_id, status } = req.query;
 
     const expenses = [
@@ -1689,8 +1689,8 @@ app.get('/api/expenses', async (req, res) => {
     });
 });
 
-// POST /api/expenses/submit
-app.post('/api/expenses/submit', async (req, res) => {
+// POST /expenses/submit
+app.post('/expenses/submit', async (req, res) => {
     const { driver_id } = req.query;
     const expenseData = req.body;
 
@@ -1714,8 +1714,8 @@ app.post('/api/expenses/submit', async (req, res) => {
 // PRODUCTS ENDPOINTS
 // ============================================
 
-// GET /api/products (also supports /api/driver/products)
-app.get('/api/products', async (req, res) => {
+// GET /products (also supports /driver/products)
+app.get('/products', async (req, res) => {
     const { driver_id, customer_site_id, customer_id } = req.query;
 
     const products = {
@@ -1844,8 +1844,8 @@ app.get('/api/products', async (req, res) => {
     });
 });
 
-// GET /api/driver/products (alias for /api/products)
-app.get('/api/driver/products', async (req, res) => {
+// GET /driver/products (alias for /products)
+app.get('/driver/products', async (req, res) => {
     const { driver_id, customer_site_id, customer_id } = req.query;
 
     const products = [
@@ -1940,8 +1940,8 @@ app.get('/api/driver/products', async (req, res) => {
 // STRIPE PAYMENT ENDPOINTS
 // ============================================
 
-// POST /api/payments/create-checkout-session
-app.post('/api/payments/create-checkout-session', async (req, res) => {
+// POST /payments/create-checkout-session
+app.post('/payments/create-checkout-session', async (req, res) => {
     const { orderId, amount, currency = 'AED', customerId, customerSiteId } = req.body;
 
     console.log('\n💳 Stripe Checkout Session Request');
@@ -2030,8 +2030,8 @@ app.post('/api/payments/create-checkout-session', async (req, res) => {
     }
 });
 
-// GET /api/payments/status/:checkoutSessionId
-app.get('/api/payments/status/:checkoutSessionId', async (req, res) => {
+// GET /payments/status/:checkoutSessionId
+app.get('/payments/status/:checkoutSessionId', async (req, res) => {
     const { checkoutSessionId } = req.params;
 
     console.log('\n🔍 Payment Status Check');
@@ -2084,7 +2084,7 @@ app.get('/api/payments/status/:checkoutSessionId', async (req, res) => {
 // HEALTH CHECK
 // ============================================
 
-app.get('/api/health', (req, res) => {
+app.get('/health', (req, res) => {
     res.status(200).json({
         status: 'ok',
         message: 'Server is running',
@@ -2121,23 +2121,23 @@ app.listen(port, '0.0.0.0', () => {
     console.log(`📡 Listening on: 0.0.0.0:${port}`);
     console.log(`🌐 Network IP: ${networkIP}`);
     console.log(`\n📍 Access URLs:`);
-    console.log(`   Local:  http://localhost:${port}/api`);
-    console.log(`   Network: http://${networkIP}:${port}/api`);
+    console.log(`   Local:  http://localhost:${port}`);
+    console.log(`   Network: http://${networkIP}:${port}`);
     console.log(`\n✅ Health Check:`);
-    console.log(`   http://${networkIP}:${port}/api/health`);
+    console.log(`   http://${networkIP}:${port}/health`);
     console.log(`\n📋 Available endpoints:`);
-    console.log(`   Auth: POST /api/auth/request-otp, /api/auth/verify-otp, /api/auth/resend-otp`);
-    console.log(`   Auth: GET /api/auth/me, POST /api/auth/logout`);
-    console.log(`   Orders: GET /api/driver/orders, GET /api/driver/history`);
-    console.log(`   Items: GET/POST /api/drivers/:driver_id/loaded-items/*`);
-    console.log(`   Items: GET/POST /api/drivers/:driver_id/unloaded-items/*`);
-    console.log(`   Expenses: GET /api/expenses, POST /api/expenses/submit`);
-    console.log(`   Products: GET /api/products`);
-    console.log(`   Payment: POST /api/driver/orders/validate-payment`);
-    console.log(`   Payment: POST /api/driver/orders/confirm-payment`);
-    console.log(`   Direct Sales: POST /api/driver/direct-sales`);
-    console.log(`   Failed: GET/POST /api/driver/failed-deliveries`);
+    console.log(`   Auth: POST /auth/request-otp, /auth/verify-otp, /auth/resend-otp`);
+    console.log(`   Auth: GET /auth/me, POST /auth/logout`);
+    console.log(`   Orders: GET /driver/orders, GET /driver/history`);
+    console.log(`   Items: GET/POST /drivers/:driver_id/loaded-items/*`);
+    console.log(`   Items: GET/POST /drivers/:driver_id/unloaded-items/*`);
+    console.log(`   Expenses: GET /expenses, POST /expenses/submit`);
+    console.log(`   Products: GET /products`);
+    console.log(`   Payment: POST /driver/orders/validate-payment`);
+    console.log(`   Payment: POST /driver/orders/confirm-payment`);
+    console.log(`   Direct Sales: POST /driver/direct-sales`);
+    console.log(`   Failed: GET/POST /driver/failed-deliveries`);
     console.log(`\n💡 OTP codes will be printed to console for testing`);
-    console.log(`\n⚠️  Make sure your .env file has: EXPO_PUBLIC_IP_ADDRESS=http://${networkIP}:${port}/api`);
+    console.log(`\n⚠️  Make sure your .env file has: EXPO_PUBLIC_IP_ADDRESS=http://${networkIP}:${port}`);
     console.log(`${'='.repeat(60)}\n`);
 });

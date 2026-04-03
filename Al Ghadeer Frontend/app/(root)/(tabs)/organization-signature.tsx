@@ -4,7 +4,7 @@ import { useAuthStore, authenticatedFetch } from '@/store/auth';
 import { ConfirmPaymentRequest, ConfirmPaymentResponse, Order } from '@/types/order';
 import { Ionicons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
-import React, { useCallback, useRef, useState, useMemo } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { 
   ActivityIndicator, 
   ScrollView, 
@@ -22,15 +22,35 @@ import {
 import { showWarningAlert, showErrorAlert, showSuccessAlert } from '@/store/utils/alert';
 import { parseApiResponseWithSoftError } from '@/utils/api';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import SignatureScreen, { SignatureViewRef } from 'react-native-signature-canvas';
+import type { SignatureViewRef } from 'react-native-signature-canvas';
 
 const { width, height } = Dimensions.get('window');
 const IP_ADDRESS = process.env.EXPO_PUBLIC_IP_ADDRESS;
+type SignatureCanvasComponent = typeof import('react-native-signature-canvas').default;
+
+let signatureCanvasComponent: SignatureCanvasComponent | null | undefined;
+
+const getSignatureCanvasComponent = (): SignatureCanvasComponent | null => {
+  if (signatureCanvasComponent !== undefined) {
+    return signatureCanvasComponent;
+  }
+
+  try {
+    signatureCanvasComponent = require('react-native-signature-canvas').default as SignatureCanvasComponent;
+  } catch (error) {
+    signatureCanvasComponent = null;
+    console.error('react-native-signature-canvas is unavailable in this build:', error);
+  }
+
+  return signatureCanvasComponent;
+};
 
 const OrganizationSignature: React.FC = () => {
   const insets = useSafeAreaInsets();
   const router = useRouter();
   const signatureRef = useRef<SignatureViewRef>(null);
+  const SignatureCanvas = useMemo(() => getSignatureCanvasComponent(), []);
+  const isSignatureModuleAvailable = SignatureCanvas !== null;
   
   const [isProcessing, setIsProcessing] = useState(false);
   const [receiverName, setReceiverName] = useState('');
@@ -46,7 +66,6 @@ const OrganizationSignature: React.FC = () => {
     selectedOrder, 
     assignedOrders, 
     cartItems,
-    currentDriver,
     selectedPaymentMethod,
     updateOrderStatus,
     setLastConfirmPaymentResponse,
@@ -54,6 +73,27 @@ const OrganizationSignature: React.FC = () => {
   const { user } = useAuthStore();
   
   const orderDetail = assignedOrders.find(item => selectedOrder === item.id) as Order | undefined;
+  const editableRentItems = useMemo(
+    () => (orderDetail?.rent_items || []).filter(item => item.in_truck === true),
+    [orderDetail?.rent_items]
+  );
+  const [rentItemQuantities, setRentItemQuantities] = useState<Record<string, number>>({});
+
+  useEffect(() => {
+    const initial: Record<string, number> = {};
+    editableRentItems.forEach((item) => {
+      initial[item.id] = Math.max(0, item.quantity || 0);
+    });
+    setRentItemQuantities(initial);
+  }, [editableRentItems]);
+
+  const handleChangeRentItemQuantity = useCallback((itemId: string, delta: number) => {
+    setRentItemQuantities((prev) => {
+      const current = prev[itemId] ?? 0;
+      const nextQuantity = Math.max(0, current + delta);
+      return { ...prev, [itemId]: nextQuantity };
+    });
+  }, []);
   
   const { subtotal, vat, totalWithVat, itemCount } = useMemo(() => {
     const sub = cartItems.reduce((sum, item) => {
@@ -119,9 +159,17 @@ const OrganizationSignature: React.FC = () => {
   }, []);
 
   const handleOpenSignature = useCallback(() => {
+    if (!isSignatureModuleAvailable) {
+      showErrorAlert(
+        'Signature Unavailable',
+        'This app build is missing the WebView native module. Rebuild and reinstall the Android app.'
+      );
+      return;
+    }
+
     setShowSignatureModal(true);
     setHasDrawnSignature(false);
-  }, []);
+  }, [isSignatureModuleAvailable]);
 
   const handleSignatureEnd = useCallback(() => {
     // User finished drawing a stroke - enable Done button
@@ -145,6 +193,16 @@ const OrganizationSignature: React.FC = () => {
   }, []);
 
   const handleConfirm = useCallback(async () => {
+    const hasRentItemsSelected = editableRentItems.some((item) => {
+      const quantity = Math.max(0, rentItemQuantities[item.id] ?? item.quantity ?? 0);
+      return quantity > 0;
+    });
+
+    if (cartItems.length === 0 && !hasRentItemsSelected) {
+      showWarningAlert('No Items', 'Please add items or set quantity for other actions.');
+      return;
+    }
+
     if (!receiverName.trim()) {
       showWarningAlert('Required', 'Please enter the receiver\'s name.');
       return;
@@ -174,7 +232,13 @@ const OrganizationSignature: React.FC = () => {
       const total = sub + vatAmount;
 
       const reasonsList = orderDetail?.reasons ?? [];
-      const rentItems = (orderDetail?.rent_items || []).filter(item => item.in_truck === true);
+      const rentItems = (orderDetail?.rent_items || [])
+        .filter(item => item.in_truck === true)
+        .map(item => ({
+          ...item,
+          quantity: Math.max(0, rentItemQuantities[item.id] ?? item.quantity ?? 0),
+        }))
+        .filter(item => item.quantity > 0);
 
       const mapProductCategory = (cat?: string): 'bulk_item' | 'asset' | 'refill' => {
         if (cat === 'refill') return 'refill';
@@ -183,7 +247,7 @@ const OrganizationSignature: React.FC = () => {
       };
 
       type OtherActionType = NonNullable<ConfirmPaymentRequest['other_actions']>[0]['type'];
-      const mapRentItemType = (category: string, inTruck: boolean): OtherActionType => {
+      const getFallbackOtherActionType = (category: string, inTruck: boolean): OtherActionType => {
         if (category === 'deposit') return inTruck ? 'deposit' : 'deposit-refund';
         if (category === 'borrow') return inTruck ? 'asset-movement-to-customer' : 'asset-movement-from-customer';
         return 'asset-movement-to-customer';
@@ -212,14 +276,17 @@ const OrganizationSignature: React.FC = () => {
         receiver_position: receiverPosition.trim() || undefined,
         remark: notes.trim() || undefined,
         ...(rentItems.length > 0 && {
-          other_actions: rentItems.map(item => ({
-            id: item.id,
-            name: item.name,
-            type: mapRentItemType(item.category, item.in_truck ?? true),
-            price: item.price,
-            quantity: item.quantity,
-            item_type: 'asset' as const,
-          })),
+          other_actions: rentItems.map(item => {
+            const actionType = item.other_action_type ?? getFallbackOtherActionType(item.category, item.in_truck ?? true);
+            return {
+              id: item.id,
+              name: item.name,
+              type: actionType,
+              price: item.price,
+              quantity: item.quantity,
+              ...(item.other_action_item_type ? { item_type: item.other_action_item_type } : {}),
+            };
+          }),
         }),
       };
 
@@ -252,6 +319,27 @@ const OrganizationSignature: React.FC = () => {
 
       // Mark order as delivered and store confirm payment response for receipt
       if (orderDetail) {
+        // Persist adjusted rent item quantities before moving order to completed orders
+        if (orderDetail.rent_items && orderDetail.rent_items.length > 0) {
+          const quantityMap = new Map(rentItems.map(item => [item.id, item.quantity] as const));
+          const store = useOrderStore.getState();
+          const updatedAssignedOrders = store.assignedOrders.map((order) => {
+            if (order.id !== orderDetail.id) return order;
+            return {
+              ...order,
+              rent_items: (order.rent_items || []).map((item) => {
+                const updatedQuantity = quantityMap.has(item.id) ? quantityMap.get(item.id)! : 0;
+                return {
+                  ...item,
+                  quantity: updatedQuantity,
+                  in_truck: updatedQuantity > 0,
+                };
+              }),
+            };
+          });
+          useOrderStore.setState({ assignedOrders: updatedAssignedOrders });
+        }
+
         // Store confirm response - use sale_id from server for invoice generation
         setLastConfirmPaymentResponse({
           orderId: orderDetail.id,
@@ -284,7 +372,7 @@ const OrganizationSignature: React.FC = () => {
     } finally {
       setIsProcessing(false);
     }
-  }, [receiverName, receiverPosition, notes, hasSignature, signatureData, orderDetail, cartItems, totalWithVat, currentDriver, organizationName, router, updateOrderStatus, setLastConfirmPaymentResponse, selectedPaymentMethod]);
+  }, [editableRentItems, rentItemQuantities, cartItems, receiverName, hasSignature, signatureData, orderDetail, receiverPosition, notes, selectedPaymentMethod, user?.id, setLastConfirmPaymentResponse, updateOrderStatus, router]);
 
   const signatureStyle = `.m-signature-pad {
     box-shadow: none;
@@ -433,6 +521,62 @@ const OrganizationSignature: React.FC = () => {
             ))}
           </View>
 
+          {/* Other Actions */}
+          {editableRentItems.length > 0 && (
+            <View style={styles.card}>
+              <View style={styles.cardHeader}>
+                <Text style={styles.cardTitle}>Other Actions</Text>
+                <View style={styles.itemBadge}>
+                  <Text style={styles.itemBadgeText}>{editableRentItems.length}</Text>
+                </View>
+              </View>
+              {editableRentItems.map((item, index) => {
+                const quantity = Math.max(0, rentItemQuantities[item.id] ?? item.quantity ?? 0);
+                return (
+                  <View key={item.id}>
+                    <View style={styles.otherActionRow}>
+                      <View style={styles.otherActionLeft}>
+                        <View style={[styles.otherActionIcon, item.category === 'borrow' ? styles.otherActionIconBorrow : styles.otherActionIconDeposit]}>
+                          <Ionicons
+                            name={item.category === 'borrow' ? 'arrow-down-circle' : 'arrow-up-circle'}
+                            size={16}
+                            color={item.category === 'borrow' ? '#10B981' : '#3B82F6'}
+                          />
+                        </View>
+                        <View style={styles.otherActionInfo}>
+                          <Text style={styles.itemName}>{item.name}</Text>
+                          <Text style={styles.otherActionMeta}>{item.category === 'borrow' ? 'Borrow' : 'Deposit'}</Text>
+                        </View>
+                      </View>
+                      <View style={styles.otherActionRight}>
+                        <View style={styles.rentQtyControl}>
+                          <TouchableOpacity
+                            style={[styles.rentQtyButton, quantity === 0 && styles.rentQtyButtonDisabled]}
+                            onPress={() => handleChangeRentItemQuantity(item.id, -1)}
+                            disabled={quantity === 0}
+                            activeOpacity={0.7}
+                          >
+                            <Ionicons name="remove" size={12} color={quantity === 0 ? '#CBD5E1' : '#1E40AF'} />
+                          </TouchableOpacity>
+                          <Text style={styles.rentQtyText}>{quantity}</Text>
+                          <TouchableOpacity
+                            style={styles.rentQtyButton}
+                            onPress={() => handleChangeRentItemQuantity(item.id, 1)}
+                            activeOpacity={0.7}
+                          >
+                            <Ionicons name="add" size={12} color="#1E40AF" />
+                          </TouchableOpacity>
+                        </View>
+                        <Text style={styles.itemPrice}>AED {(item.price * quantity).toFixed(2)}</Text>
+                      </View>
+                    </View>
+                    {index < editableRentItems.length - 1 && <View style={styles.itemDivider} />}
+                  </View>
+                );
+              })}
+            </View>
+          )}
+
           {/* Receiver Details */}
           <View style={styles.card}>
             <Text style={styles.cardTitle}>Receiver Information</Text>
@@ -487,7 +631,15 @@ const OrganizationSignature: React.FC = () => {
               I acknowledge receipt of the above items and agree to pay the amount due.
             </Text>
 
-            {hasSignature ? (
+            {!isSignatureModuleAvailable ? (
+              <View style={styles.signatureUnavailable}>
+                <Ionicons name="alert-circle" size={28} color="#DC2626" />
+                <Text style={styles.signatureUnavailableTitle}>Signature is unavailable in this build</Text>
+                <Text style={styles.signatureUnavailableText}>
+                  Rebuild and reinstall the Android app to load the required native WebView module.
+                </Text>
+              </View>
+            ) : hasSignature ? (
               <TouchableOpacity 
                 style={styles.signaturePreview}
                 onPress={handleOpenSignature}
@@ -592,20 +744,27 @@ const OrganizationSignature: React.FC = () => {
 
           {/* Signature Canvas - Full Screen */}
           <View style={styles.modalSignatureContainer}>
-            <SignatureScreen
-              ref={signatureRef}
-              onOK={handleSignature}
-              onEmpty={handleEmpty}
-              onEnd={handleSignatureEnd}
-              autoClear={false}
-              descriptionText=""
-              webStyle={signatureStyleFullScreen}
-              backgroundColor="#FFFFFF"
-              penColor="#111827"
-              minWidth={2}
-              maxWidth={4}
-              imageType="image/png"
-            />
+            {SignatureCanvas ? (
+              <SignatureCanvas
+                ref={signatureRef}
+                onOK={handleSignature}
+                onEmpty={handleEmpty}
+                onEnd={handleSignatureEnd}
+                autoClear={false}
+                descriptionText=""
+                webStyle={signatureStyleFullScreen}
+                backgroundColor="#FFFFFF"
+                penColor="#111827"
+                minWidth={2}
+                maxWidth={4}
+                imageType="image/png"
+              />
+            ) : (
+              <View style={styles.signatureUnavailableModal}>
+                <Ionicons name="alert-circle" size={28} color="#DC2626" />
+                <Text style={styles.signatureUnavailableTitle}>Signature is unavailable in this build</Text>
+              </View>
+            )}
           </View>
 
           {/* Modal Footer */}
@@ -620,15 +779,15 @@ const OrganizationSignature: React.FC = () => {
             <TouchableOpacity
               style={[
                 styles.modalDoneButton,
-                !hasDrawnSignature && styles.modalDoneButtonDisabled
+                (!hasDrawnSignature || !isSignatureModuleAvailable) && styles.modalDoneButtonDisabled
               ]}
               onPress={handleDoneSignature}
-              disabled={!hasDrawnSignature}
+              disabled={!hasDrawnSignature || !isSignatureModuleAvailable}
               activeOpacity={0.8}
             >
               <Text style={[
                 styles.modalDoneButtonText,
-                !hasDrawnSignature && styles.modalDoneButtonTextDisabled
+                (!hasDrawnSignature || !isSignatureModuleAvailable) && styles.modalDoneButtonTextDisabled
               ]}>
                 Done
               </Text>
@@ -861,6 +1020,73 @@ const styles = StyleSheet.create({
     fontWeight: '600',
     color: '#0F172A',
   },
+  itemDivider: {
+    height: 1,
+    backgroundColor: '#F1F5F9',
+  },
+  otherActionRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    paddingVertical: 10,
+    gap: 10,
+  },
+  otherActionLeft: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  otherActionIcon: {
+    width: 30,
+    height: 30,
+    borderRadius: 8,
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginRight: 8,
+  },
+  otherActionIconBorrow: {
+    backgroundColor: '#ECFDF5',
+  },
+  otherActionIconDeposit: {
+    backgroundColor: '#EFF6FF',
+  },
+  otherActionInfo: {
+    flex: 1,
+  },
+  otherActionMeta: {
+    fontSize: 12,
+    color: '#64748B',
+    marginTop: 2,
+  },
+  otherActionRight: {
+    alignItems: 'flex-end',
+    gap: 6,
+  },
+  rentQtyControl: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#F3F4F6',
+    borderRadius: 8,
+    padding: 3,
+  },
+  rentQtyButton: {
+    width: 22,
+    height: 22,
+    borderRadius: 6,
+    backgroundColor: '#FFFFFF',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  rentQtyButtonDisabled: {
+    backgroundColor: '#F9FAFB',
+  },
+  rentQtyText: {
+    minWidth: 28,
+    textAlign: 'center',
+    fontSize: 12,
+    fontWeight: '700',
+    color: '#1E40AF',
+  },
   inputGroup: {
     marginBottom: 16,
   },
@@ -900,6 +1126,35 @@ const styles = StyleSheet.create({
         elevation: 2,
       },
     }),
+  },
+  signatureUnavailable: {
+    borderWidth: 1,
+    borderColor: '#FECACA',
+    borderRadius: 14,
+    padding: 16,
+    alignItems: 'center',
+    backgroundColor: '#FEF2F2',
+    gap: 8,
+  },
+  signatureUnavailableModal: {
+    flex: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: 24,
+    backgroundColor: '#FEF2F2',
+    gap: 8,
+  },
+  signatureUnavailableTitle: {
+    fontSize: 14,
+    fontWeight: '700',
+    color: '#991B1B',
+    textAlign: 'center',
+  },
+  signatureUnavailableText: {
+    fontSize: 13,
+    color: '#7F1D1D',
+    textAlign: 'center',
+    lineHeight: 18,
   },
   signatureHeader: {
     flexDirection: 'row',
@@ -1132,4 +1387,3 @@ const styles = StyleSheet.create({
 });
 
 export default OrganizationSignature;
-

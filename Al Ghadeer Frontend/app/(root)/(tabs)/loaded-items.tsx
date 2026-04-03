@@ -4,7 +4,7 @@ import { authenticatedFetch } from '@/store/auth';
 import { parseApiResponse, parseApiResponseWithSoftError } from '@/utils/api';
 import { Ionicons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
-import React, { useState, useCallback, useEffect } from 'react';
+import React, { useState, useCallback, useEffect, useMemo } from 'react';
 import { 
   ScrollView, 
   Text, 
@@ -28,6 +28,21 @@ interface Item {
   unit: string;
   category: string;
 }
+
+type ItemGroup = 'wholesale' | 'refill' | 'other';
+
+const normalizeCategory = (category?: string) =>
+  (category || '').trim().toLowerCase().replace(/[\s_-]+/g, '');
+
+const getItemGroup = (category?: string): ItemGroup => {
+  const normalized = normalizeCategory(category);
+
+  if (normalized.includes('refill')) return 'refill';
+  if (normalized.includes('wholesale') || normalized.includes('bulk') || normalized.includes('retailitem')) {
+    return 'wholesale';
+  }
+  return 'other';
+};
 
 interface ItemsResponse {
   success: boolean;
@@ -61,6 +76,34 @@ const LoadedItems = () => {
   const [verificationId, setVerificationId] = useState<string | null>(null);
 
   const totalQuantity = items.reduce((sum, item) => sum + item.quantity, 0);
+  const groupOrder: ItemGroup[] = ['wholesale', 'refill', 'other'];
+
+  const groupedItems = useMemo(() => {
+    return items.reduce(
+      (acc, item) => {
+        const group = getItemGroup(item.category);
+        acc[group].push(item);
+        return acc;
+      },
+      {
+        wholesale: [] as Item[],
+        refill: [] as Item[],
+        other: [] as Item[],
+      }
+    );
+  }, [items]);
+
+  const getGroupLabel = (group: ItemGroup) => {
+    if (group === 'wholesale') return 'Wholesale';
+    if (group === 'refill') return 'Refill';
+    return 'Other';
+  };
+
+  const getGroupIcon = (group: ItemGroup): React.ComponentProps<typeof Ionicons>['name'] => {
+    if (group === 'wholesale') return 'storefront-outline';
+    if (group === 'refill') return 'water-outline';
+    return 'cube-outline';
+  };
 
   const fetchItems = useCallback(async () => {
     if (!currentDriver) return;
@@ -229,22 +272,66 @@ const LoadedItems = () => {
             {/* Items */}
             <View style={styles.itemsSection}>
               <Text style={styles.sectionTitle}>Items to Load</Text>
-              
-              {items.map((item, index) => (
-                <View key={item.id} style={styles.itemCard}>
-                  <View style={styles.itemIcon}>
-                    <Ionicons name="water-outline" size={20} color="#0EA5E9" />
+
+              {groupOrder.map((group) => {
+                const sectionItems = groupedItems[group];
+                if (sectionItems.length === 0) return null;
+
+                return (
+                  <View key={group} style={styles.categorySection}>
+                    <View style={styles.categoryHeader}>
+                      <View
+                        style={[
+                          styles.categoryBadge,
+                          group === 'wholesale' && styles.categoryBadgeWholesale,
+                          group === 'refill' && styles.categoryBadgeRefill,
+                          group === 'other' && styles.categoryBadgeOther,
+                        ]}
+                      >
+                        <Ionicons
+                          name={getGroupIcon(group)}
+                          size={14}
+                          color={group === 'wholesale' ? '#1D4ED8' : group === 'refill' ? '#0E7490' : '#475569'}
+                        />
+                        <Text style={styles.categoryBadgeText}>{getGroupLabel(group)}</Text>
+                      </View>
+                      <View style={styles.categoryCountBadge}>
+                        <Text style={styles.categoryCountText}>{sectionItems.length}</Text>
+                      </View>
+                    </View>
+
+                    {sectionItems.map((item) => (
+                      <View key={item.id} style={styles.itemCard}>
+                        <View
+                          style={[
+                            styles.itemIcon,
+                            group === 'wholesale' && styles.itemIconWholesale,
+                            group === 'refill' && styles.itemIconRefill,
+                            group === 'other' && styles.itemIconOther,
+                          ]}
+                        >
+                          <Ionicons
+                            name={getGroupIcon(group)}
+                            size={20}
+                            color={group === 'wholesale' ? '#1D4ED8' : group === 'refill' ? '#0891B2' : '#475569'}
+                          />
+                        </View>
+                        <View style={styles.itemInfo}>
+                          <Text style={styles.itemName}>{item.name}</Text>
+                          <Text style={styles.itemCategory}>
+                            {getGroupLabel(group)}
+                            {group === 'other' && item.category ? ` • ${item.category}` : ''}
+                          </Text>
+                        </View>
+                        <View style={styles.itemQuantity}>
+                          <Text style={styles.itemQuantityValue}>{item.quantity}</Text>
+                          <Text style={styles.itemQuantityUnit}>{item.unit}</Text>
+                        </View>
+                      </View>
+                    ))}
                   </View>
-                  <View style={styles.itemInfo}>
-                    <Text style={styles.itemName}>{item.name}</Text>
-                    <Text style={styles.itemCategory}>{item.category}</Text>
-                  </View>
-                  <View style={styles.itemQuantity}>
-                    <Text style={styles.itemQuantityValue}>{item.quantity}</Text>
-                    <Text style={styles.itemQuantityUnit}>{item.unit}</Text>
-                  </View>
-                </View>
-              ))}
+                );
+              })}
             </View>
 
             {/* Verification */}
@@ -320,27 +407,55 @@ const LoadedItems = () => {
             {/* Items Table */}
             <View style={styles.itemsSection}>
               <Text style={styles.sectionTitle}>Items in Truck</Text>
-              
-              <View style={styles.tableContainer}>
-                <View style={styles.tableHeader}>
-                  <Text style={[styles.tableHeaderText, styles.tableColName]}>Item</Text>
-                  <Text style={[styles.tableHeaderText, styles.tableColCategory]}>Category</Text>
-                  <Text style={[styles.tableHeaderText, styles.tableColQuantity]}>Quantity</Text>
-                  <Text style={[styles.tableHeaderText, styles.tableColUnit]}>Unit</Text>
-                </View>
-                
-                {items.map((item, index) => (
-                  <View key={item.id} style={[
-                    styles.tableRow,
-                    index < items.length - 1 && styles.tableRowBorder
-                  ]}>
-                    <Text style={[styles.tableCell, styles.tableColName]}>{item.name}</Text>
-                    <Text style={[styles.tableCell, styles.tableColCategory]}>{item.category}</Text>
-                    <Text style={[styles.tableCell, styles.tableColQuantity]}>{item.quantity}</Text>
-                    <Text style={[styles.tableCell, styles.tableColUnit]}>{item.unit}</Text>
+
+              {groupOrder.map((group) => {
+                const sectionItems = groupedItems[group];
+                if (sectionItems.length === 0) return null;
+
+                return (
+                  <View key={group} style={styles.categorySection}>
+                    <View style={styles.categoryHeader}>
+                      <View
+                        style={[
+                          styles.categoryBadge,
+                          group === 'wholesale' && styles.categoryBadgeWholesale,
+                          group === 'refill' && styles.categoryBadgeRefill,
+                          group === 'other' && styles.categoryBadgeOther,
+                        ]}
+                      >
+                        <Ionicons
+                          name={getGroupIcon(group)}
+                          size={14}
+                          color={group === 'wholesale' ? '#1D4ED8' : group === 'refill' ? '#0E7490' : '#475569'}
+                        />
+                        <Text style={styles.categoryBadgeText}>{getGroupLabel(group)}</Text>
+                      </View>
+                      <View style={styles.categoryCountBadge}>
+                        <Text style={styles.categoryCountText}>{sectionItems.length}</Text>
+                      </View>
+                    </View>
+
+                    <View style={styles.tableContainer}>
+                      <View style={styles.tableHeader}>
+                        <Text style={[styles.tableHeaderText, styles.tableColName]}>Item</Text>
+                        <Text style={[styles.tableHeaderText, styles.tableColQuantity]}>Quantity</Text>
+                        <Text style={[styles.tableHeaderText, styles.tableColUnit]}>Unit</Text>
+                      </View>
+
+                      {sectionItems.map((item, index) => (
+                        <View
+                          key={item.id}
+                          style={[styles.tableRow, index < sectionItems.length - 1 && styles.tableRowBorder]}
+                        >
+                          <Text style={[styles.tableCell, styles.tableColName]}>{item.name}</Text>
+                          <Text style={[styles.tableCell, styles.tableColQuantity]}>{item.quantity}</Text>
+                          <Text style={[styles.tableCell, styles.tableColUnit]}>{item.unit}</Text>
+                        </View>
+                      ))}
+                    </View>
                   </View>
-                ))}
-              </View>
+                );
+              })}
             </View>
           </>
         )}
@@ -526,6 +641,53 @@ const styles = StyleSheet.create({
     letterSpacing: 0.5,
     marginBottom: 16,
   },
+  categorySection: {
+    marginBottom: 16,
+  },
+  categoryHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginBottom: 10,
+  },
+  categoryBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    borderRadius: 999,
+  },
+  categoryBadgeWholesale: {
+    backgroundColor: '#DBEAFE',
+  },
+  categoryBadgeRefill: {
+    backgroundColor: '#CFFAFE',
+  },
+  categoryBadgeOther: {
+    backgroundColor: '#E2E8F0',
+  },
+  categoryBadgeText: {
+    fontSize: 12,
+    fontWeight: '700',
+    color: '#1E3A8A',
+    textTransform: 'uppercase',
+    letterSpacing: 0.4,
+  },
+  categoryCountBadge: {
+    minWidth: 24,
+    height: 24,
+    borderRadius: 12,
+    backgroundColor: '#F1F5F9',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: 8,
+  },
+  categoryCountText: {
+    fontSize: 12,
+    fontWeight: '700',
+    color: '#475569',
+  },
   itemCard: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -542,6 +704,15 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     alignItems: 'center',
     marginRight: 14,
+  },
+  itemIconWholesale: {
+    backgroundColor: '#DBEAFE',
+  },
+  itemIconRefill: {
+    backgroundColor: '#CFFAFE',
+  },
+  itemIconOther: {
+    backgroundColor: '#E2E8F0',
   },
   itemInfo: {
     flex: 1,

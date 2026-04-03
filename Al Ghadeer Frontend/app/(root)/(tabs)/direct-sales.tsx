@@ -1,7 +1,7 @@
 import ApiErrorText from '@/components/ApiErrorText';
+import { authenticatedFetch, useAuthStore } from '@/store/auth';
 import { useOrderStore } from '@/store/index';
 import { Order } from '@/types/order';
-import { authenticatedFetch } from '@/store/auth';
 import { parseApiResponseWithSoftError } from '@/utils/api';
 import { Ionicons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
@@ -19,6 +19,7 @@ import {
   Platform,
   KeyboardAvoidingView,
   Animated,
+  RefreshControl,
 } from 'react-native';
 import { showErrorAlert, showWarningAlert, showSuccessAlert } from '@/store/utils/alert';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -26,7 +27,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 const { width } = Dimensions.get('window');
 const IP_ADDRESS = process.env.EXPO_PUBLIC_IP_ADDRESS;
 
-// Server product structure - matches /api/products response exactly
+// Server product structure - matches /products response exactly
 interface ServerProduct {
   id: string;
   name: string;
@@ -36,6 +37,8 @@ interface ServerProduct {
   category: string;
   originalPrice?: number; // Optional, for special offers
   badge?: string; // Optional, for special offers
+  loaded_quantity?: number | string; // Stock loaded on vehicle (if provided by API)
+  available_stock?: number | string; // Available stock (if provided by API)
 }
 
 // Server response structure - can be wrapped in success/data or direct object
@@ -53,9 +56,48 @@ type ProductsApiResponse =
 const PAYMENT_METHODS = [
   { id: 'cash', label: 'Cash', icon: 'cash-outline' as const },
   { id: 'wallet', label: 'Wallet', icon: 'wallet-outline' as const },
-  { id: 'credit_card', label: 'Card', icon: 'card-outline' as const },
   { id: 'credit', label: 'Credit', icon: 'receipt-outline' as const },
 ];
+
+type ProductGroup = 'wholesale' | 'refill' | 'other';
+
+const normalizeCategory = (category?: string) =>
+  (category || '').trim().toLowerCase().replace(/[\s_-]+/g, '');
+
+const getProductGroup = (category?: string): ProductGroup => {
+  const normalized = normalizeCategory(category);
+
+  if (normalized.includes('refill')) return 'refill';
+  if (normalized.includes('wholesale') || normalized.includes('bulk') || normalized.includes('retailitem')) {
+    return 'wholesale';
+  }
+  return 'other';
+};
+
+const parseStockNumber = (value: unknown): number | null => {
+  if (typeof value === 'number' && Number.isFinite(value)) return Math.max(0, value);
+  if (typeof value === 'string') {
+    const parsed = Number(value);
+    if (Number.isFinite(parsed)) return Math.max(0, parsed);
+  }
+  return null;
+};
+
+const isCoolerProduct = (product: Pick<ServerProduct, 'id' | 'name'>) => {
+  const idNormalized = normalizeCategory(product.id);
+  const nameNormalized = normalizeCategory(product.name);
+  return idNormalized.includes('cooler') || nameNormalized.includes('cooler');
+};
+
+const getCoolerStockLimit = (product: ServerProduct): number => {
+  if (!isCoolerProduct(product)) return Infinity;
+  const candidates = [product.loaded_quantity, product.available_stock];
+  for (const candidate of candidates) {
+    const parsed = parseStockNumber(candidate);
+    if (parsed !== null) return parsed;
+  }
+  return Infinity;
+};
 
 // Response structure for direct sales API
 interface DirectSaleApiResponse {
@@ -84,13 +126,14 @@ interface CustomerData {
 const DirectSales: React.FC = () => {
   const insets = useSafeAreaInsets();
   const router = useRouter();
+  const { user } = useAuthStore();
   const { currentDriver, selectOrder, setPaymentMethod: setGlobalPaymentMethod, setLastConfirmPaymentResponse, clearCart } = useOrderStore();
   const [products, setProducts] = useState<ServerProduct[]>([]);
   const [loading, setLoading] = useState(true);
   const [quantities, setQuantities] = useState<Record<string, number>>({});
   const [customerName, setCustomerName] = useState('');
   const [customerPhone, setCustomerPhone] = useState('');
-  const [paymentMethod, setPaymentMethod] = useState<'cash' | 'wallet' | 'credit_card' | 'credit'>('cash');
+  const [paymentMethod, setPaymentMethod] = useState<'cash' | 'wallet' | 'credit'>('cash');
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [location, setLocation] = useState<{ latitude: number; longitude: number; address: string } | null>(null);
   const [locationLoading, setLocationLoading] = useState(false);
@@ -98,15 +141,27 @@ const DirectSales: React.FC = () => {
   const [isExistingCustomer, setIsExistingCustomer] = useState(false);
   const [customerChecked, setCustomerChecked] = useState(false);
   const [apiError, setApiError] = useState<string | null>(null);
+  const [refreshingProducts, setRefreshingProducts] = useState(false);
   const [customerData, setCustomerData] = useState<CustomerData | null>(null);
   const [selectedSite, setSelectedSite] = useState<CustomerSite | null>(null);
+  const driverId = user?.id || currentDriver?.id;
 
-  const fetchProducts = useCallback(async () => {
+  const fetchProducts = useCallback(async ({ showLoading = true }: { showLoading?: boolean } = {}) => {
+    if (!driverId) {
+      setProducts([]);
+      if (showLoading) {
+        setLoading(false);
+      }
+      setApiError('Driver information is not available yet. Please reopen Direct Sale after login finishes.');
+      return;
+    }
+
     try {
-      setLoading(true);
+      if (showLoading) {
+        setLoading(true);
+      }
       setApiError(null);
-      const driverId = currentDriver?.id;
-      const url = `${IP_ADDRESS}/products?driver_id=${driverId}`;
+      const url = `${IP_ADDRESS}/products?driver_id=${encodeURIComponent(driverId)}`;
       
       const response = await authenticatedFetch(url);
       const result = await parseApiResponseWithSoftError<{ [category: string]: ServerProduct[] }>(response);
@@ -140,12 +195,23 @@ const DirectSales: React.FC = () => {
     } catch (err) {
       console.error('Error fetching products:', err);
     } finally {
-      setLoading(false);
+      if (showLoading) {
+        setLoading(false);
+      }
     }
-  }, [currentDriver?.id]);
+  }, [driverId]);
 
   useEffect(() => {
     fetchProducts();
+  }, [fetchProducts]);
+
+  const handleRefreshProducts = useCallback(async () => {
+    setRefreshingProducts(true);
+    try {
+      await fetchProducts({ showLoading: false });
+    } finally {
+      setRefreshingProducts(false);
+    }
   }, [fetchProducts]);
 
   const checkCustomer = useCallback(async () => {
@@ -239,17 +305,41 @@ const DirectSales: React.FC = () => {
     getLocation();
   }, []);
 
-  const handleChangeQuantity = useCallback((productId: string, delta: number) => {
+  const handleChangeQuantity = useCallback((product: ServerProduct, delta: number) => {
+    let blockedByStock = false;
+    const stockLimit = getCoolerStockLimit(product);
+
     setQuantities((prev) => {
-      const current = prev[productId] || 0;
-      const newVal = Math.max(0, current + delta);
-      return { ...prev, [productId]: newVal };
+      const current = prev[product.id] || 0;
+      const next = Math.max(0, current + delta);
+      const capped = Number.isFinite(stockLimit) ? Math.min(next, stockLimit) : next;
+      blockedByStock = delta > 0 && Number.isFinite(stockLimit) && next > stockLimit;
+      return { ...prev, [product.id]: capped };
     });
+
+    if (blockedByStock) {
+      showWarningAlert('Stock limit reached', `${product.name} stock is limited to ${stockLimit}.`);
+    }
   }, []);
 
   const selectedProducts = useMemo(() => {
     return products.filter((p) => (quantities[p.id] || 0) > 0);
   }, [products, quantities]);
+
+  const groupedProducts = useMemo(() => {
+    return products.reduce(
+      (acc, product) => {
+        const group = getProductGroup(product.category);
+        acc[group].push(product);
+        return acc;
+      },
+      {
+        wholesale: [] as ServerProduct[],
+        refill: [] as ServerProduct[],
+        other: [] as ServerProduct[],
+      }
+    );
+  }, [products]);
 
   const totalItems = useMemo(() => {
     return Object.values(quantities).reduce((sum, q) => sum + q, 0);
@@ -266,7 +356,81 @@ const DirectSales: React.FC = () => {
 
   const isFormValid = selectedProducts.length > 0 && customerName.trim() && customerPhone.trim() && location;
 
+  const renderProductCard = (product: ServerProduct, index: number, group: ProductGroup) => {
+    const quantity = quantities[product.id] || 0;
+    const isSelected = quantity > 0;
+    const stockLimit = getCoolerStockLimit(product);
+    const hasStockLimit = Number.isFinite(stockLimit);
+    const isMaxStock = hasStockLimit && quantity >= stockLimit;
+    const groupCardStyle =
+      group === 'refill'
+        ? styles.productCardRefill
+        : group === 'wholesale'
+        ? styles.productCardWholesale
+        : styles.productCardOther;
+
+    const displayPrice = product.originalPrice ? (
+      <View style={styles.priceContainer}>
+        <Text style={styles.productPriceOriginal}>AED {product.originalPrice}</Text>
+        <Text style={styles.productPrice}>AED {product.price}</Text>
+      </View>
+    ) : (
+      <Text style={styles.productPrice}>AED {product.price}</Text>
+    );
+
+    return (
+      <View
+        key={`${product.id}-${group}-${index}`}
+        style={[styles.productCard, groupCardStyle, isSelected && styles.productCardSelected]}
+      >
+        <View style={styles.productInfo}>
+          <View style={styles.productNameContainer}>
+            <Text style={styles.productName} numberOfLines={1}>
+              {product.name}
+            </Text>
+            {product.badge && (
+              <View style={styles.badge}>
+                <Text style={styles.badgeText}>{product.badge}</Text>
+              </View>
+            )}
+          </View>
+          {displayPrice}
+          {hasStockLimit && (
+            <Text style={styles.productStockText}>
+              Stock: {stockLimit}
+            </Text>
+          )}
+        </View>
+
+        <View style={styles.quantityControl}>
+          <TouchableOpacity
+            style={[styles.quantityButton, quantity === 0 && styles.quantityButtonDisabled]}
+            onPress={() => handleChangeQuantity(product, -1)}
+            disabled={quantity === 0}
+          >
+            <Ionicons name="remove" size={18} color={quantity === 0 ? '#CBD5E1' : '#1E40AF'} />
+          </TouchableOpacity>
+
+          <Text style={styles.quantityText}>{quantity}</Text>
+
+          <TouchableOpacity
+            style={[styles.quantityButton, isMaxStock && styles.quantityButtonDisabled]}
+            onPress={() => handleChangeQuantity(product, 1)}
+            disabled={isMaxStock}
+          >
+            <Ionicons name="add" size={18} color={isMaxStock ? '#CBD5E1' : '#1E40AF'} />
+          </TouchableOpacity>
+        </View>
+      </View>
+    );
+  };
+
   const handleConfirmSale = useCallback(async () => {
+    if (!driverId) {
+      showWarningAlert('Driver Missing', 'Driver information is not loaded yet. Please try again in a moment.');
+      return;
+    }
+
     if (!isFormValid) {
       if (selectedProducts.length === 0) showWarningAlert('No Items', 'Please select at least one product.');
       else if (!customerName.trim()) showWarningAlert('Required', 'Please enter customer name.');
@@ -279,7 +443,7 @@ const DirectSales: React.FC = () => {
     setApiError(null);
     try {
       const saleData = {
-        driver_id: currentDriver?.id,
+        driver_id: driverId,
         customer_id: customerData?.id || null,  // Include customer ID if existing customer
         customer_site_id: selectedSite?.id || null,  // Include site ID if selected
         customer_name: customerName.trim(),
@@ -404,7 +568,7 @@ const DirectSales: React.FC = () => {
     } finally {
       setIsSubmitting(false);
     }
-  }, [isFormValid, selectedProducts, quantities, customerName, customerPhone, paymentMethod, location, subtotal, vat, totalAmount, currentDriver, router]);
+  }, [driverId, isFormValid, selectedProducts, quantities, customerName, customerPhone, paymentMethod, location, subtotal, vat, totalAmount, router]);
 
   return (
     <View style={[styles.container, { paddingTop: insets.top }]}>
@@ -438,6 +602,14 @@ const DirectSales: React.FC = () => {
           contentContainerStyle={styles.contentContainer}
         showsVerticalScrollIndicator={false}
           keyboardShouldPersistTaps="handled"
+          refreshControl={
+            <RefreshControl
+              refreshing={refreshingProducts}
+              onRefresh={handleRefreshProducts}
+              tintColor="#1E40AF"
+              colors={['#1E40AF']}
+            />
+          }
       >
           {/* Customer Section */}
           <View style={styles.section}>
@@ -547,10 +719,10 @@ const DirectSales: React.FC = () => {
           <View style={styles.section}>
             <Text style={styles.sectionTitle}>Payment</Text>
             <View style={styles.paymentContainer}>
-              {/* Top Row: Cash, Wallet, Card */}
+              {/* Top Row: Cash, Wallet */}
             <View style={styles.paymentRow}>
-                {PAYMENT_METHODS.filter(m => ['cash', 'wallet', 'credit_card'].includes(m.id)).map((method) => {
-                  const isDisabled = ['wallet', 'credit_card'].includes(method.id);
+                {PAYMENT_METHODS.filter(m => ['cash', 'wallet'].includes(m.id)).map((method) => {
+                  const isDisabled = ['wallet'].includes(method.id);
                   return (
                     <TouchableOpacity 
                       key={method.id}
@@ -600,7 +772,7 @@ const DirectSales: React.FC = () => {
                 })}
               </View>
               
-              {/* Bottom Row: Credit Sale, Credit Invoice */}
+              {/* Bottom Row: Credit */}
               <View style={[styles.paymentRow, styles.paymentRowBottom]}>
                 {PAYMENT_METHODS.filter(m => m.id === 'credit').map((method) => {
                   const isDisabled = false;
@@ -668,56 +840,60 @@ const DirectSales: React.FC = () => {
                 <Text style={styles.emptyText}>No products available</Text>
             </View>
           ) : (
-              <View style={styles.productGrid}>
-              {products.map((product, index) => {
-                const quantity = quantities[product.id] || 0;
-                  const isSelected = quantity > 0;
-
-                const displayPrice = product.originalPrice ? (
-                  <View style={styles.priceContainer}>
-                    <Text style={styles.productPriceOriginal}>AED {product.originalPrice}</Text>
-                    <Text style={styles.productPrice}>AED {product.price}</Text>
-                  </View>
-                ) : (
-                  <Text style={styles.productPrice}>AED {product.price}</Text>
-                );
-
-                return (
-                    <View key={`${product.id}-${index}`} style={[styles.productCard, isSelected && styles.productCardSelected]}>
-                      <View style={styles.productInfo}>
-                        <View style={styles.productNameContainer}>
-                          <Text style={styles.productName} numberOfLines={1}>{product.name}</Text>
-                          {product.badge && (
-                            <View style={styles.badge}>
-                              <Text style={styles.badgeText}>{product.badge}</Text>
-                            </View>
-                          )}
-                        </View>
-                        {displayPrice}
+              <View style={styles.productsSections}>
+                {groupedProducts.wholesale.length > 0 && (
+                  <View style={styles.productCategorySection}>
+                    <View style={styles.productCategoryHeader}>
+                      <View style={[styles.productCategoryBadge, styles.productCategoryBadgeWholesale]}>
+                        <Ionicons name="storefront-outline" size={14} color="#1E40AF" />
+                        <Text style={styles.productCategoryTitle}>Wholesale</Text>
                       </View>
-
-                      <View style={styles.quantityControl}>
-                        <TouchableOpacity
-                          style={[styles.quantityButton, quantity === 0 && styles.quantityButtonDisabled]}
-                          onPress={() => handleChangeQuantity(product.id, -1)}
-                          disabled={quantity === 0}
-                        >
-                          <Ionicons name="remove" size={18} color={quantity === 0 ? '#CBD5E1' : '#1E40AF'} />
-                        </TouchableOpacity>
-
-                        <Text style={styles.quantityText}>{quantity}</Text>
-
-                        <TouchableOpacity
-                          style={styles.quantityButton}
-                          onPress={() => handleChangeQuantity(product.id, 1)}
-                        >
-                          <Ionicons name="add" size={18} color="#1E40AF" />
-                        </TouchableOpacity>
+                      <View style={styles.productCategoryCountBadge}>
+                        <Text style={styles.productCategoryCount}>{groupedProducts.wholesale.length}</Text>
+                      </View>
+                    </View>
+                    <View style={styles.productGrid}>
+                      {groupedProducts.wholesale.map((product, index) =>
+                        renderProductCard(product, index, 'wholesale')
+                      )}
                     </View>
                   </View>
-                );
-              })}
-            </View>
+                )}
+
+                {groupedProducts.refill.length > 0 && (
+                  <View style={styles.productCategorySection}>
+                    <View style={styles.productCategoryHeader}>
+                      <View style={[styles.productCategoryBadge, styles.productCategoryBadgeRefill]}>
+                        <Ionicons name="water-outline" size={14} color="#0C4A6E" />
+                        <Text style={styles.productCategoryTitle}>Refill</Text>
+                      </View>
+                      <View style={styles.productCategoryCountBadge}>
+                        <Text style={styles.productCategoryCount}>{groupedProducts.refill.length}</Text>
+                      </View>
+                    </View>
+                    <View style={styles.productGrid}>
+                      {groupedProducts.refill.map((product, index) => renderProductCard(product, index, 'refill'))}
+                    </View>
+                  </View>
+                )}
+
+                {groupedProducts.other.length > 0 && (
+                  <View style={styles.productCategorySection}>
+                    <View style={styles.productCategoryHeader}>
+                      <View style={[styles.productCategoryBadge, styles.productCategoryBadgeOther]}>
+                        <Ionicons name="cube-outline" size={14} color="#475569" />
+                        <Text style={styles.productCategoryTitle}>Other Products</Text>
+                      </View>
+                      <View style={styles.productCategoryCountBadge}>
+                        <Text style={styles.productCategoryCount}>{groupedProducts.other.length}</Text>
+                      </View>
+                    </View>
+                    <View style={styles.productGrid}>
+                      {groupedProducts.other.map((product, index) => renderProductCard(product, index, 'other'))}
+                    </View>
+                  </View>
+                )}
+              </View>
           )}
         </View>
 
@@ -1070,6 +1246,55 @@ const styles = StyleSheet.create({
     color: '#94A3B8',
     fontWeight: '500',
   },
+  productsSections: {
+    gap: 20,
+  },
+  productCategorySection: {
+    gap: 10,
+  },
+  productCategoryHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+  },
+  productCategoryBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    borderRadius: 999,
+  },
+  productCategoryBadgeWholesale: {
+    backgroundColor: '#DBEAFE',
+  },
+  productCategoryBadgeRefill: {
+    backgroundColor: '#CFFAFE',
+  },
+  productCategoryBadgeOther: {
+    backgroundColor: '#E2E8F0',
+  },
+  productCategoryTitle: {
+    fontSize: 12,
+    fontWeight: '700',
+    color: '#1E40AF',
+    textTransform: 'uppercase',
+    letterSpacing: 0.4,
+  },
+  productCategoryCountBadge: {
+    minWidth: 24,
+    height: 24,
+    borderRadius: 12,
+    backgroundColor: '#F1F5F9',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: 8,
+  },
+  productCategoryCount: {
+    fontSize: 12,
+    fontWeight: '700',
+    color: '#475569',
+  },
   productGrid: {
     gap: 10,
   },
@@ -1082,6 +1307,18 @@ const styles = StyleSheet.create({
     padding: 16,
     borderWidth: 2,
     borderColor: 'transparent',
+  },
+  productCardWholesale: {
+    borderLeftWidth: 4,
+    borderLeftColor: '#3B82F6',
+  },
+  productCardRefill: {
+    borderLeftWidth: 4,
+    borderLeftColor: '#06B6D4',
+  },
+  productCardOther: {
+    borderLeftWidth: 4,
+    borderLeftColor: '#94A3B8',
   },
   productCardSelected: {
     backgroundColor: '#F0FDF4',
@@ -1129,6 +1366,12 @@ const styles = StyleSheet.create({
     fontSize: 14,
     fontWeight: '700',
     color: '#10B981',
+  },
+  productStockText: {
+    marginTop: 4,
+    fontSize: 11,
+    fontWeight: '600',
+    color: '#64748B',
   },
   quantityControl: {
     flexDirection: 'row',

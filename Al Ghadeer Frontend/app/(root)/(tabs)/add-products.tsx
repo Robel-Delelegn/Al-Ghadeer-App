@@ -33,8 +33,8 @@ const getImageUrl = (imagePath: string | null | undefined): string | null => {
     return imagePath;
   }
   
-  // Remove /api from IP_ADDRESS if present and build full URL
-  const baseUrl = IP_ADDRESS?.replace(/\/api$/, '') || '';
+  // Build full URL from configured backend base
+  const baseUrl = (IP_ADDRESS || '').replace(/\/$/, '');
   // Ensure imagePath starts with /
   const normalizedPath = imagePath.startsWith('/') ? imagePath : `/${imagePath}`;
   return `${baseUrl}${normalizedPath}`;
@@ -258,26 +258,36 @@ const ProductList: React.FC = () => {
 
   const currentOrder = assignedOrders.find(order => order.id === selectedOrder);
 
-  // Initialize rent items state from order
-  const [rentItemsInTruck, setRentItemsInTruck] = useState<Record<string, boolean>>(() => {
-    const initial: Record<string, boolean> = {};
+  // Initialize rent/deposit quantities from order
+  const [rentItemQuantities, setRentItemQuantities] = useState<Record<string, number>>(() => {
+    const initial: Record<string, number> = {};
     if (currentOrder?.rent_items) {
       currentOrder.rent_items.forEach(item => {
-        initial[item.id] = item.in_truck ?? false;
+        const initialQuantity = item.in_truck ? (item.quantity || 0) : 0;
+        initial[item.id] = Math.max(0, initialQuantity);
       });
     }
     return initial;
   });
 
   useEffect(() => {
-    const initial: Record<string, boolean> = {};
+    const initial: Record<string, number> = {};
     if (currentOrder?.rent_items) {
       currentOrder.rent_items.forEach(item => {
-        initial[item.id] = item.in_truck ?? false;
+        const initialQuantity = item.in_truck ? (item.quantity || 0) : 0;
+        initial[item.id] = Math.max(0, initialQuantity);
       });
     }
-    setRentItemsInTruck(initial);
-  }, [currentOrder]);
+    setRentItemQuantities(initial);
+  }, [currentOrder?.rent_items]);
+
+  const handleChangeRentItemQuantity = useCallback((itemId: string, delta: number) => {
+    setRentItemQuantities((prev) => {
+      const current = prev[itemId] ?? 0;
+      const nextQuantity = Math.max(0, current + delta);
+      return { ...prev, [itemId]: nextQuantity };
+    });
+  }, []);
 
   const initialQuantities = useMemo(() => {
     const record: Record<string, number> = {};
@@ -313,11 +323,11 @@ const ProductList: React.FC = () => {
     return Object.values(quantities).reduce((sum, qty) => sum + qty, 0);
   }, [quantities]);
 
-  // Check if any rent items are selected (in truck)
+  // Check if any rent/deposit items have a positive quantity
   const hasRentItemsSelected = useMemo(() => {
     if (!currentOrder?.rent_items) return false;
-    return currentOrder.rent_items.some(item => rentItemsInTruck[item.id] === true);
-  }, [currentOrder?.rent_items, rentItemsInTruck]);
+    return currentOrder.rent_items.some(item => (rentItemQuantities[item.id] ?? 0) > 0);
+  }, [currentOrder?.rent_items, rentItemQuantities]);
 
   // Button should be enabled if products are selected OR rent items are selected
   const canCheckout = totalSelectedItems > 0 || hasRentItemsSelected;
@@ -328,19 +338,23 @@ const ProductList: React.FC = () => {
 
   const handleCheckout = useCallback(() => {
     const selected = products.filter((p) => (quantities[p.id] || 0) > 0);
-    const hasRentItems = currentOrder?.rent_items?.some(item => rentItemsInTruck[item.id] === true);
+    const hasRentItems = currentOrder?.rent_items?.some(item => (rentItemQuantities[item.id] ?? 0) > 0);
     
     if (selected.length === 0 && !hasRentItems) {
       showWarningAlert('No items selected', 'Please select at least one product or rent item to continue.');
       return;
     }
 
-    // Update rent items in_truck status in the order
+    // Update rent/deposit quantities and in_truck status in the order
     if (currentOrder && currentOrder.rent_items) {
-      const updatedRentItems = currentOrder.rent_items.map(item => ({
-        ...item,
-        in_truck: rentItemsInTruck[item.id] ?? false
-      }));
+      const updatedRentItems = currentOrder.rent_items.map(item => {
+        const updatedQuantity = Math.max(0, rentItemQuantities[item.id] ?? 0);
+        return {
+          ...item,
+          quantity: updatedQuantity,
+          in_truck: updatedQuantity > 0,
+        };
+      });
       
       const updatedOrder = {
         ...currentOrder,
@@ -388,7 +402,7 @@ const ProductList: React.FC = () => {
     }
     
     router.push('/(root)/(tabs)/checkout');
-  }, [products, quantities, addToCart, clearCart, router, currentOrder, selectedOrder, assignedOrders, rentItemsInTruck, setAssignedOrders]);
+  }, [products, quantities, addToCart, clearCart, router, currentOrder, assignedOrders, rentItemQuantities, setAssignedOrders]);
 
   if (loading) {
     return (
@@ -497,12 +511,12 @@ const ProductList: React.FC = () => {
         {currentOrder?.rent_items && currentOrder.rent_items.length > 0 && (
           <View style={styles.categorySection}>
             <View style={styles.categoryHeader}>
-              <Text style={styles.categoryTitle}>Extra Instructions</Text>
+              <Text style={styles.rentSectionTitle}>Other Actions</Text>
               <Text style={styles.categoryCount}>{currentOrder.rent_items.length}</Text>
             </View>
             
             {currentOrder.rent_items.map((item) => {
-              const isInTruck = rentItemsInTruck[item.id] ?? false;
+              const quantity = Math.max(0, rentItemQuantities[item.id] ?? 0);
               return (
                 <View key={item.id} style={styles.rentItemCard}>
                   <View style={styles.rentItemMain}>
@@ -524,21 +538,32 @@ const ProductList: React.FC = () => {
                     <View style={styles.rentItemInfo}>
                       <Text style={styles.rentItemName}>{item.name}</Text>
                       <Text style={styles.rentItemDetails}>
-                        {item.category === 'borrow' ? 'Borrow' : 'Deposit'} • Qty: {item.quantity} • AED {item.price.toFixed(2)} each
+                        {item.category === 'borrow' ? 'Borrow' : 'Deposit'} • Qty: {quantity} • AED {item.price.toFixed(2)} each
                       </Text>
                     </View>
                   </View>
-                  <TouchableOpacity
-                    style={[styles.rentItemToggle, isInTruck ? styles.rentItemToggleOn : styles.rentItemToggleOff]}
-                    onPress={() => setRentItemsInTruck(prev => ({ ...prev, [item.id]: !isInTruck }))}
-                    activeOpacity={0.7}
-                  >
-                    {isInTruck ? (
-                      <Ionicons name="checkmark-circle" size={28} color="#10B981" />
-                    ) : (
-                      <Ionicons name="ellipse-outline" size={28} color="#9CA3AF" />
-                    )}
-                  </TouchableOpacity>
+                  <View style={styles.rentItemQuantityControl}>
+                    <View style={styles.quantityControl}>
+                      <TouchableOpacity
+                        style={[styles.qtyButton, quantity === 0 && styles.qtyButtonDisabled]}
+                        onPress={() => handleChangeRentItemQuantity(item.id, -1)}
+                        disabled={quantity === 0}
+                        activeOpacity={0.7}
+                      >
+                        <Ionicons name="remove" size={16} color={quantity === 0 ? '#D1D5DB' : '#1E40AF'} />
+                      </TouchableOpacity>
+                      <View style={styles.qtyDisplay}>
+                        <Text style={styles.qtyText}>{quantity}</Text>
+                      </View>
+                      <TouchableOpacity
+                        style={styles.qtyButton}
+                        onPress={() => handleChangeRentItemQuantity(item.id, 1)}
+                        activeOpacity={0.7}
+                      >
+                        <Ionicons name="add" size={16} color="#1E40AF" />
+                      </TouchableOpacity>
+                    </View>
+                  </View>
                 </View>
               );
             })}
@@ -732,6 +757,11 @@ const styles = StyleSheet.create({
     fontSize: 12,
     fontWeight: '600',
     color: '#6B7280',
+  },
+  rentSectionTitle: {
+    fontSize: 15,
+    fontWeight: '700',
+    color: '#1E40AF',
   },
   productCard: {
     backgroundColor: '#FFFFFF',
@@ -1007,6 +1037,9 @@ const styles = StyleSheet.create({
   rentItemDetails: {
     fontSize: 12,
     color: '#6B7280',
+  },
+  rentItemQuantityControl: {
+    marginLeft: 12,
   },
   rentItemToggle: {
     width: 44,

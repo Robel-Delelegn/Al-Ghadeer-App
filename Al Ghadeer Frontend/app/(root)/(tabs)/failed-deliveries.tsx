@@ -8,7 +8,7 @@ import React, { useState, useCallback, useMemo } from 'react';
 import { ScrollView, Text, TextInput, TouchableOpacity, View, ActivityIndicator, Modal, Image } from 'react-native';
 import { showErrorAlert, showSuccessAlert, showWarningAlert } from '@/store/utils/alert';
 
-const IP_ADDRESS = process.env.EXPO_PUBLIC_IP_ADDRESS || 'http://localhost:3000/api';
+const IP_ADDRESS = process.env.EXPO_PUBLIC_IP_ADDRESS || 'http://localhost:3000';
 
 const FAILURE_REASONS = [
   'Customer not available',

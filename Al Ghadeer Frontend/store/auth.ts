@@ -12,7 +12,7 @@ interface User {
   vehicle_number?: string;
   vehicle_type?: string;
   zone?: string;
-  status?: 'pending' | 'approved' | 'rejected';
+  status?: string;
 }
 
 interface AuthStore {
@@ -32,7 +32,17 @@ interface AuthStore {
   getToken: () => Promise<string | null>;
 }
 
-const API_BASE_URL = process.env.EXPO_PUBLIC_IP_ADDRESS;
+const API_BASE_URL = (process.env.EXPO_PUBLIC_IP_ADDRESS || 'http://localhost:3000').trim().replace(/\/+$/, '');
+
+type AccountStatus = 'pending' | 'approved' | 'rejected' | 'unknown';
+
+const normalizeAccountStatus = (status?: string): AccountStatus => {
+  const normalized = (status || '').trim().toLowerCase();
+  if (normalized === 'pending') return 'pending';
+  if (normalized === 'approved') return 'approved';
+  if (normalized === 'rejected') return 'rejected';
+  return 'unknown';
+};
 
 export const useAuthStore = create<AuthStore>()(
   persist(
@@ -44,14 +54,13 @@ export const useAuthStore = create<AuthStore>()(
 
       /**
        * Request OTP - First time login: Request OTP via SMS
-       * POST /api/auth/request-otp
+       * POST /auth/request-otp
        */
       requestOtp: async (phone: string) => {
         set({ isLoading: true });
         try {
           console.log('[requestOtp] Input:', { phone, API_BASE_URL });
-          const baseUrl = API_BASE_URL?.endsWith('/api') ? API_BASE_URL : `${API_BASE_URL}/api`;
-          const url = `${baseUrl}/auth/request-otp`;
+          const url = `${API_BASE_URL}/auth/request-otp`;
           console.log('[requestOtp] Request:', { method: 'POST', url, body: { phone } });
 
           const response = await fetch(url, {
@@ -126,8 +135,7 @@ export const useAuthStore = create<AuthStore>()(
       verifyOtp: async (phone: string, otp: string, tempToken: string) => {
         set({ isLoading: true });
         try {
-          const baseUrl = API_BASE_URL?.endsWith('/api') ? API_BASE_URL : `${API_BASE_URL}/api`;
-          const url = `${baseUrl}/auth/verify-otp`;
+          const url = `${API_BASE_URL}/auth/verify-otp`;
           console.log(`🌐 API Request: POST ${url}`);
           const response = await fetch(url, {
             method: 'POST',
@@ -167,13 +175,12 @@ export const useAuthStore = create<AuthStore>()(
 
       /**
        * Resend OTP - Resend OTP code to phone number using temp token
-       * POST /api/auth/resend-otp
+       * POST /auth/resend-otp
        */
       resendOtp: async (phone: string, tempToken: string) => {
         set({ isLoading: true });
         try {
-          const baseUrl = API_BASE_URL?.endsWith('/api') ? API_BASE_URL : `${API_BASE_URL}/api`;
-          const url = `${baseUrl}/auth/resend-otp`;
+          const url = `${API_BASE_URL}/auth/resend-otp`;
           console.log(`🌐 API Request: POST ${url}`);
           const response = await fetch(url, {
             method: 'POST',
@@ -213,8 +220,7 @@ export const useAuthStore = create<AuthStore>()(
           // Call logout endpoint if token exists
           if (token) {
             try {
-              const baseUrl = API_BASE_URL?.endsWith('/api') ? API_BASE_URL : `${API_BASE_URL}/api`;
-              const url = `${baseUrl}/auth/logout`;
+              const url = `${API_BASE_URL}/auth/logout`;
               console.log(`🌐 API Request: POST ${url}`);
               await fetch(url, {
                 method: 'POST',
@@ -249,7 +255,7 @@ export const useAuthStore = create<AuthStore>()(
 
       /**
        * Check Authentication - Verify token and get user info
-       * GET /api/auth/me
+       * GET /auth/me
        */
       checkAuth: async () => {
         set({ isLoading: true });
@@ -268,8 +274,7 @@ export const useAuthStore = create<AuthStore>()(
           }
 
           // Verify token with backend API
-          const baseUrl = API_BASE_URL?.endsWith('/api') ? API_BASE_URL : `${API_BASE_URL}/api`;
-          const url = `${baseUrl}/auth/me`;
+          const url = `${API_BASE_URL}/auth/me`;
           console.log(`🌐 API Request: GET ${url}`);
           const response = await fetch(url, {
             method: 'GET',
@@ -302,8 +307,9 @@ export const useAuthStore = create<AuthStore>()(
 
           const data = await parseApiResponse<{ user: User }>(response);
           if (data.user) {
-            if (data.user.status !== 'approved') {
-              // User not approved, sign them out
+            const accountStatus = normalizeAccountStatus(data.user.status);
+            if (accountStatus === 'rejected' || accountStatus === 'pending') {
+              // Block only explicit non-approved account states.
               console.log('User not approved, clearing auth');
               await SecureStore.deleteItemAsync('auth_token');
               await SecureStore.deleteItemAsync('refresh_token');
@@ -424,5 +430,3 @@ export const authenticatedFetch = async (
     headers,
   });
 };
-
-

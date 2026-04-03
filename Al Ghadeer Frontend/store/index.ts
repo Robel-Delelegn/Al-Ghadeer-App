@@ -81,7 +81,7 @@ interface OrderStore {
   cartItems: CartItem[];
   
   // Payment management
-  selectedPaymentMethod: 'cash' | 'wallet' | 'credit_card' | 'credit';
+  selectedPaymentMethod: 'cash' | 'wallet' | 'credit';
   lastConfirmPaymentResponse: { orderId: string; sale_id?: string; invoice_number?: string; order_number: string } | null;
 
   // Order actions
@@ -112,7 +112,7 @@ interface OrderStore {
   getAvailableStock: (productId: string) => number; // Get available stock for a product (loaded_quantity - cart quantity)
   
   // Payment actions
-  setPaymentMethod: (method: 'cash' | 'wallet' | 'credit_card' | 'credit') => void;
+  setPaymentMethod: (method: 'cash' | 'wallet' | 'credit') => void;
   setLastConfirmPaymentResponse: (data: { orderId: string; sale_id?: string; invoice_number?: string; order_number: string } | null) => void;
 
   // Utility actions
@@ -135,7 +135,7 @@ export const useOrderStore = create<OrderStore>()(persist(
     cartItems: [],
     
     // Payment management state
-    selectedPaymentMethod: 'cash' as 'cash' | 'wallet' | 'credit_card' | 'credit',
+    selectedPaymentMethod: 'cash' as 'cash' | 'wallet' | 'credit',
     lastConfirmPaymentResponse: null,
 
     // Order management actions
@@ -329,7 +329,7 @@ export const useOrderStore = create<OrderStore>()(persist(
     },
     
     // Payment management actions
-    setPaymentMethod: (method: 'cash' | 'wallet' | 'credit_card' | 'credit') => {
+    setPaymentMethod: (method: 'cash' | 'wallet' | 'credit') => {
       set({ selectedPaymentMethod: method });
     },
     setLastConfirmPaymentResponse: (data) => {
@@ -361,4 +361,3 @@ export const useOrderStore = create<OrderStore>()(persist(
 
 // Export types for use in components
 export type { CartItem, Driver, Order, Product };
-

@@ -152,13 +152,6 @@ export default function Layout() {
         }}
       />
       <Tabs.Screen
-        name="stripe-qr-payment"
-        options={{
-          headerShown: false,
-          href: null, // Hide from tab bar
-        }}
-      />
-      <Tabs.Screen
         name="order-details"
         options={{
           headerShown: false,

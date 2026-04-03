@@ -4,14 +4,31 @@ import { authenticatedFetch } from '@/store/auth';
 import { parseApiResponseWithSoftError } from '@/utils/api';
 import { Ionicons } from '@expo/vector-icons';
 import * as FileSystem from 'expo-file-system';
-import * as Print from 'expo-print';
 import { useRouter } from 'expo-router';
 import * as Sharing from 'expo-sharing';
-import React, { useCallback, useState, useEffect } from 'react';
+import React, { useCallback, useState, useEffect, useMemo } from 'react';
 import { ActivityIndicator, ScrollView, Text, TouchableOpacity, View } from 'react-native';
 import { showSuccessAlert, showErrorAlert } from '@/store/utils/alert';
 
 const IP_ADDRESS = process.env.EXPO_PUBLIC_IP_ADDRESS;
+type PrintModule = typeof import('expo-print');
+
+let printModule: PrintModule | null | undefined;
+
+const getPrintModule = (): PrintModule | null => {
+  if (printModule !== undefined) {
+    return printModule;
+  }
+
+  try {
+    printModule = require('expo-print') as PrintModule;
+  } catch (error) {
+    printModule = null;
+    console.error('expo-print is unavailable in this build:', error);
+  }
+
+  return printModule;
+};
 
 // Response structure for generate invoice API
 interface GenerateInvoiceResponse {
@@ -39,6 +56,7 @@ const PaymentReceipt: React.FC = () => {
   const [isNavigating, setIsNavigating] = useState(false);
   const [isGeneratingInvoice, setIsGeneratingInvoice] = useState(false);
   const [generatedInvoiceNumber, setGeneratedInvoiceNumber] = useState<string | null>(null);
+  const printNativeModule = useMemo(() => getPrintModule(), []);
 
   // customer_id = customer.id from OrdersResponse (customer dictionary)
   const shippingDetails = orderDetail ? {
@@ -48,8 +66,7 @@ const PaymentReceipt: React.FC = () => {
     customerId: orderDetail.customer_id ?? '',  // from customer.id - no dummy
   } : { name: 'N/A', address: 'N/A', contact: 'N/A', customerId: '' };
   const customerIdDisplay = shippingDetails.customerId || '—';
-  const paymentMethodDisplay = selectedPaymentMethod === 'credit_card' ? 'Credit Card' : 
-                                selectedPaymentMethod === 'wallet' ? 'Wallet' : 
+  const paymentMethodDisplay = selectedPaymentMethod === 'wallet' ? 'Wallet' : 
                                 selectedPaymentMethod === 'credit' ? 'Credit' :
                                 ['invoice', 'credit_invoice'].includes(selectedPaymentMethod ?? '') ? 'Credit' :
                                 'Cash';
@@ -629,6 +646,13 @@ const PaymentReceipt: React.FC = () => {
 
   const handleDownloadInvoice = useCallback(async () => {
     if (isDownloading) return; // Prevent multiple simultaneous downloads
+    if (!printNativeModule) {
+      showErrorAlert(
+        'Download Unavailable',
+        'This app build is missing Expo Print. Rebuild and reinstall the Android app.'
+      );
+      return;
+    }
     
     setIsDownloading(true);
     try {
@@ -637,7 +661,7 @@ const PaymentReceipt: React.FC = () => {
       const documentType = isDeliveryNote ? 'Delivery_Note' : 'Invoice';
       
       // Generate PDF
-      const { uri } = await Print.printToFileAsync({ 
+      const { uri } = await printNativeModule.printToFileAsync({ 
         html,
         base64: false,
         width: 300, // Thermal receipt width
@@ -679,10 +703,17 @@ const PaymentReceipt: React.FC = () => {
     } finally {
       setIsDownloading(false);
     }
-  }, [generateReceiptHTML, generateDeliveryNoteHTML, isDeliveryNote, orderId, isDownloading]);
+  }, [generateReceiptHTML, generateDeliveryNoteHTML, isDeliveryNote, orderId, isDownloading, printNativeModule]);
 
   const handlePrintInvoice = useCallback(async () => {
     if (isPrinting) return; // Prevent multiple simultaneous print requests
+    if (!printNativeModule) {
+      showErrorAlert(
+        'Print Unavailable',
+        'This app build is missing Expo Print. Rebuild and reinstall the Android app.'
+      );
+      return;
+    }
     
     setIsPrinting(true);
     try {
@@ -692,7 +723,7 @@ const PaymentReceipt: React.FC = () => {
       // Try different approaches based on platform
       try {
         // First try: Direct HTML print (should open system print dialog)
-        await Print.printAsync({ 
+        await printNativeModule.printAsync({ 
           html: html
         });
         console.log('System print dialog opened successfully');
@@ -700,12 +731,12 @@ const PaymentReceipt: React.FC = () => {
         console.log('Direct print failed, trying PDF approach:', directPrintError);
         
         // Second try: Generate PDF and print with URI
-        const { uri } = await Print.printToFileAsync({ 
+        const { uri } = await printNativeModule.printToFileAsync({ 
           html: html,
           base64: false
         });
         
-        await Print.printAsync({ 
+        await printNativeModule.printAsync({ 
           uri: uri
         });
         console.log('PDF print dialog opened successfully');
@@ -720,7 +751,7 @@ const PaymentReceipt: React.FC = () => {
     } finally {
       setIsPrinting(false);
     }
-  }, [generateReceiptHTML, generateDeliveryNoteHTML, isDeliveryNote, isPrinting]);
+  }, [generateReceiptHTML, generateDeliveryNoteHTML, isDeliveryNote, isPrinting, printNativeModule]);
 
   const handleBackToHome = useCallback(async () => {
     if (isNavigating) return; // Prevent multiple navigation attempts
@@ -1003,6 +1034,14 @@ const PaymentReceipt: React.FC = () => {
     
         {/* Action Buttons */}
         <View style={{ gap: 12 }}>
+          {!printNativeModule && (
+            <View style={{ backgroundColor: '#FEF2F2', borderWidth: 1, borderColor: '#FECACA', borderRadius: 8, padding: 12 }}>
+              <Text style={{ color: '#991B1B', fontSize: 13, fontWeight: '600', textAlign: 'center' }}>
+                Print/download is unavailable in this app build. Rebuild and reinstall the Android app.
+              </Text>
+            </View>
+          )}
+
           {/* Generate Invoice Button - Only for Delivery Notes */}
           {isDeliveryNote && saleId && (
             <TouchableOpacity
@@ -1045,7 +1084,7 @@ const PaymentReceipt: React.FC = () => {
 
           <TouchableOpacity
             style={{ 
-              backgroundColor: isDownloading ? '#E9ECEF' : '#1976D2',
+              backgroundColor: (isDownloading || !printNativeModule) ? '#E9ECEF' : '#1976D2',
               paddingVertical: 16, 
               paddingHorizontal: 24, 
               borderRadius: 8,
@@ -1053,7 +1092,7 @@ const PaymentReceipt: React.FC = () => {
               alignItems: 'center',
               justifyContent: 'center',
               borderWidth: 1,
-              borderColor: isDownloading ? '#E9ECEF' : '#1976D2',
+              borderColor: (isDownloading || !printNativeModule) ? '#E9ECEF' : '#1976D2',
               shadowColor: '#1E40AF',
               shadowOffset: { width: 0, height: 2 },
               shadowOpacity: isDownloading ? 0.05 : 0.1,
@@ -1061,7 +1100,7 @@ const PaymentReceipt: React.FC = () => {
               elevation: isDownloading ? 2 : 4
             }}
             onPress={handleDownloadInvoice}
-            disabled={isDownloading}
+            disabled={isDownloading || !printNativeModule}
           >
             {isDownloading ? (
               <>
@@ -1072,9 +1111,9 @@ const PaymentReceipt: React.FC = () => {
               </>
             ) : (
               <>
-                <Ionicons name="download" size={20} color="white" />
-                <Text style={{ color: 'white', fontSize: 16, fontWeight: '600', marginLeft: 8 }}>
-                  {isDownloading ? 'Downloading...' : `Download ${isDeliveryNote ? 'Delivery Note' : 'Invoice'}`}
+                <Ionicons name="download" size={20} color={printNativeModule ? 'white' : '#6C757D'} />
+                <Text style={{ color: printNativeModule ? 'white' : '#6C757D', fontSize: 16, fontWeight: '600', marginLeft: 8 }}>
+                  {printNativeModule ? `Download ${isDeliveryNote ? 'Delivery Note' : 'Invoice'}` : 'Download Unavailable'}
                 </Text>
               </>
             )}
@@ -1086,8 +1125,8 @@ const PaymentReceipt: React.FC = () => {
               paddingHorizontal: 24, 
               borderRadius: 8,
               borderWidth: 1,
-              borderColor: isPrinting ? '#E9ECEF' : '#E9ECEF',
-              backgroundColor: isPrinting ? '#F8F9FA' : '#FFFFFF',
+              borderColor: (isPrinting || !printNativeModule) ? '#E9ECEF' : '#E9ECEF',
+              backgroundColor: (isPrinting || !printNativeModule) ? '#F8F9FA' : '#FFFFFF',
               flexDirection: 'row',
               alignItems: 'center',
               justifyContent: 'center',
@@ -1098,7 +1137,7 @@ const PaymentReceipt: React.FC = () => {
               elevation: 2
             }}
                 onPress={handlePrintInvoice}
-            disabled={isPrinting}
+            disabled={isPrinting || !printNativeModule}
           >
             {isPrinting ? (
               <>
@@ -1111,7 +1150,7 @@ const PaymentReceipt: React.FC = () => {
               <>
                 <Ionicons name="print" size={20} color="#6C757D" />
                 <Text style={{ color: '#6C757D', fontSize: 16, fontWeight: '600', marginLeft: 8 }}>
-                  Print {isDeliveryNote ? 'Delivery Note' : 'Invoice'}
+                  {printNativeModule ? `Print ${isDeliveryNote ? 'Delivery Note' : 'Invoice'}` : 'Print Unavailable'}
                 </Text>
               </>
             )}

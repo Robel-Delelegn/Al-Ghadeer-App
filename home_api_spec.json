@@ -2,7 +2,7 @@
   "home_page_apis": {
     "endpoint_1": {
       "method": "GET",
-      "path": "/api/driver/orders",
+      "path": "/driver/orders",
       "description": "Fetch all assigned orders for a driver",
       "query_parameters": {
         "driver_id": {
@@ -14,7 +14,7 @@
       },
       "request": {
         "method": "GET",
-        "url": "http://localhost:3000/api/driver/orders?driver_id={driver_id}",
+        "url": "http://localhost:3000/driver/orders?driver_id={driver_id}",
         "headers": {
           "Content-Type": "application/json"
         },
