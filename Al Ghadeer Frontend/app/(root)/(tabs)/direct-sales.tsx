@@ -20,6 +20,7 @@ import {
   Platform,
   KeyboardAvoidingView,
   RefreshControl,
+  Modal,
 } from "react-native";
 import { showSuccessAlert, showWarningAlert } from "@/store/utils/alert";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
@@ -387,6 +388,54 @@ const getRouteCandidateLabel = (
   return label;
 };
 
+interface ActionModalProps {
+  visible: boolean;
+  title: string;
+  onClose: () => void;
+  topInset: number;
+  bottomInset: number;
+  children: React.ReactNode;
+}
+
+const ActionModal = ({
+  visible,
+  title,
+  onClose,
+  topInset,
+  bottomInset,
+  children,
+}: ActionModalProps) => (
+  <Modal
+    visible={visible}
+    animationType="slide"
+    presentationStyle="fullScreen"
+    onRequestClose={onClose}
+  >
+    <KeyboardAvoidingView
+      style={styles.modalOverlay}
+      behavior={Platform.OS === "ios" ? "padding" : undefined}
+    >
+      <View
+        style={[
+          styles.modalCard,
+          {
+            paddingTop: Math.max(topInset, 12) + 8,
+            paddingBottom: Math.max(bottomInset, 16),
+          },
+        ]}
+      >
+        <View style={styles.modalHeader}>
+          <Text style={styles.modalTitle}>{title}</Text>
+          <TouchableOpacity onPress={onClose} style={styles.modalCloseButton}>
+            <Ionicons name="close" size={20} color="#475569" />
+          </TouchableOpacity>
+        </View>
+        {children}
+      </View>
+    </KeyboardAvoidingView>
+  </Modal>
+);
+
 const DirectSales: React.FC = () => {
   const insets = useSafeAreaInsets();
   const router = useRouter();
@@ -401,13 +450,22 @@ const DirectSales: React.FC = () => {
   const [products, setProducts] = useState<ServerProduct[]>([]);
   const [loading, setLoading] = useState(true);
   const [quantities, setQuantities] = useState<Record<string, number>>({});
-  const [customerName, setCustomerName] = useState("");
-  const [customerPhone, setCustomerPhone] = useState("");
-  const [customerIdQuery, setCustomerIdQuery] = useState("");
+  const [customerSearchModalVisible, setCustomerSearchModalVisible] =
+    useState(false);
+  const [customerSearchQuery, setCustomerSearchQuery] = useState("");
+  const [hasSearchedCustomers, setHasSearchedCustomers] = useState(false);
+  const [customerModalVisible, setCustomerModalVisible] = useState(false);
+  const [customerModalMode, setCustomerModalMode] = useState<
+    "create" | "manage"
+  >("create");
+  const [customerCreatedInModal, setCustomerCreatedInModal] = useState(false);
+  const [createCustomerName, setCreateCustomerName] = useState("");
+  const [createCustomerPhone, setCreateCustomerPhone] = useState("");
   const [paymentMethod, setPaymentMethod] = useState<
     "cash" | "wallet" | "credit"
   >("cash");
   const [remark, setRemark] = useState("");
+  const [isRemarkExpanded, setIsRemarkExpanded] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [location, setLocation] = useState<{
     latitude: number;
@@ -416,8 +474,6 @@ const DirectSales: React.FC = () => {
   } | null>(null);
   const [isCheckingCustomer, setIsCheckingCustomer] = useState(false);
   const [isCreatingCustomer, setIsCreatingCustomer] = useState(false);
-  const [isExistingCustomer, setIsExistingCustomer] = useState(false);
-  const [customerChecked, setCustomerChecked] = useState(false);
   const [apiError, setApiError] = useState<string | null>(null);
   const [refreshingProducts, setRefreshingProducts] = useState(false);
   const [customerSearchResults, setCustomerSearchResults] = useState<
@@ -528,11 +584,7 @@ const DirectSales: React.FC = () => {
         null;
 
       setCustomerData(customer);
-      setCustomerName(customer.name || "");
-      setCustomerPhone(customer.phone || "");
-      setCustomerIdQuery(customer.id);
-      setIsExistingCustomer(true);
-      setCustomerChecked(true);
+      setCustomerCreatedInModal(false);
       setSiteFormMode(null);
       setSiteDraft(EMPTY_SITE_DRAFT);
       applySelectedSite(preferredSite);
@@ -541,6 +593,65 @@ const DirectSales: React.FC = () => {
       }
     },
     [applySelectedSite],
+  );
+
+  const closeSearchCustomerModal = useCallback(() => {
+    setCustomerSearchModalVisible(false);
+    setCustomerSearchQuery("");
+    setCustomerSearchResults([]);
+    setHasSearchedCustomers(false);
+  }, []);
+
+  const openSearchCustomerModal = useCallback(() => {
+    setApiError(null);
+    setCustomerSearchModalVisible(true);
+    setCustomerSearchQuery("");
+    setCustomerSearchResults([]);
+    setHasSearchedCustomers(false);
+  }, []);
+
+  const closeCustomerModal = useCallback(() => {
+    setCustomerModalVisible(false);
+    setCustomerModalMode("create");
+    setCustomerCreatedInModal(false);
+    setSiteFormMode(null);
+    setSiteDraft(EMPTY_SITE_DRAFT);
+  }, []);
+
+  const openCreateCustomerModal = useCallback(() => {
+    setApiError(null);
+    setCustomerModalMode("create");
+    setCustomerCreatedInModal(false);
+    setCreateCustomerName("");
+    setCreateCustomerPhone("");
+    setSiteFormMode(null);
+    setSiteDraft(EMPTY_SITE_DRAFT);
+    setCustomerModalVisible(true);
+  }, []);
+
+  const openManageCustomerModal = useCallback(() => {
+    if (!customerData) {
+      showWarningAlert(
+        "Customer Required",
+        "Search or create a customer first.",
+      );
+      return;
+    }
+
+    setApiError(null);
+    setCustomerCreatedInModal(false);
+    setCustomerModalMode("manage");
+    setSiteFormMode(null);
+    setSiteDraft(EMPTY_SITE_DRAFT);
+    setCustomerModalVisible(true);
+  }, [customerData]);
+
+  const handleCustomerPicked = useCallback(
+    (customer: CustomerData) => {
+      applyCustomerSelection(customer);
+      closeSearchCustomerModal();
+    },
+    [applyCustomerSelection, closeSearchCustomerModal],
   );
 
   const fetchTodayRoutes = useCallback(async () => {
@@ -624,7 +735,7 @@ const DirectSales: React.FC = () => {
     }
   }, [fetchProducts, fetchTodayRoutes]);
 
-  const checkCustomer = useCallback(async () => {
+  const searchCustomers = useCallback(async () => {
     if (!driverId) {
       showWarningAlert(
         "Driver Missing",
@@ -633,34 +744,23 @@ const DirectSales: React.FC = () => {
       return;
     }
 
-    const trimmedPhone = customerPhone.trim();
-    const trimmedId = customerIdQuery.trim();
-    if (!trimmedPhone && !trimmedId) {
+    const query = customerSearchQuery.trim();
+    if (!query) {
       showWarningAlert(
         "Search Required",
-        "Enter phone or customer ID to search.",
+        "Enter a customer search query.",
       );
       return;
     }
 
     setIsCheckingCustomer(true);
-    setIsExistingCustomer(false);
-    setCustomerChecked(false);
-    setCustomerData(null);
     setCustomerSearchResults([]);
-    applySelectedSite(null);
-    setSiteFormMode(null);
-    setSiteDraft(EMPTY_SITE_DRAFT);
+    setHasSearchedCustomers(false);
 
     try {
       setApiError(null);
       const params = new URLSearchParams();
-      if (trimmedPhone) {
-        params.set("phone", trimmedPhone);
-      }
-      if (trimmedId) {
-        params.set("id", trimmedId);
-      }
+      params.set("search", query);
 
       const response = await authenticatedFetch(
         `${API_BASE_URL}/customers?${params.toString()}`,
@@ -676,57 +776,30 @@ const DirectSales: React.FC = () => {
 
       if (!parseResult.ok) {
         setApiError(parseResult.error);
-        setIsExistingCustomer(false);
-        setCustomerChecked(true);
+        setHasSearchedCustomers(true);
         return;
       }
 
       const customers = Array.isArray(parseResult.data) ? parseResult.data : [];
       setCustomerSearchResults(customers);
-      setCustomerChecked(true);
+      setHasSearchedCustomers(true);
 
       if (customers.length === 0) {
-        setIsExistingCustomer(false);
         showWarningAlert(
           "Customer not found",
-          "No existing customer matched this phone/ID. Use Create Customer below.",
-        );
-        return;
-      }
-
-      const exactMatch =
-        customers.find((customer) => {
-          const isPhoneMatch =
-            trimmedPhone.length > 0 && customer.phone === trimmedPhone;
-          const isIdMatch = trimmedId.length > 0 && customer.id === trimmedId;
-          return isPhoneMatch || isIdMatch;
-        }) || customers[0];
-
-      applyCustomerSelection(exactMatch);
-
-      if (customers.length > 1) {
-        showWarningAlert(
-          "Multiple Matches",
-          "Multiple customers matched. We selected one; you can switch below.",
+          "No existing customer matched that query.",
         );
       }
     } catch (error) {
       console.error("Error searching customers:", error);
-      setIsExistingCustomer(false);
-      setCustomerChecked(false);
+      setHasSearchedCustomers(false);
       setApiError(
         error instanceof Error ? error.message : "Failed to search customers.",
       );
     } finally {
       setIsCheckingCustomer(false);
     }
-  }, [
-    applyCustomerSelection,
-    applySelectedSite,
-    customerIdQuery,
-    customerPhone,
-    driverId,
-  ]);
+  }, [customerSearchQuery, driverId]);
 
   const handleCreateCustomer = useCallback(async () => {
     if (!driverId) {
@@ -737,8 +810,8 @@ const DirectSales: React.FC = () => {
       return;
     }
 
-    const trimmedName = customerName.trim();
-    const trimmedPhone = customerPhone.trim();
+    const trimmedName = createCustomerName.trim();
+    const trimmedPhone = createCustomerPhone.trim();
 
     if (!trimmedName) {
       showWarningAlert("Name Required", "Enter customer name to create.");
@@ -771,9 +844,11 @@ const DirectSales: React.FC = () => {
 
       setCustomerSearchResults([result.data]);
       applyCustomerSelection(result.data);
+      setCustomerCreatedInModal(true);
+      setCustomerModalMode("manage");
       showSuccessAlert(
         "Customer Created",
-        `${result.data.name} is ready for direct sale.`,
+        `${result.data.name} is ready. You can add a site or route before closing.`,
       );
     } catch (error) {
       console.error("Error creating customer:", error);
@@ -783,7 +858,12 @@ const DirectSales: React.FC = () => {
     } finally {
       setIsCreatingCustomer(false);
     }
-  }, [applyCustomerSelection, customerName, customerPhone, driverId]);
+  }, [
+    applyCustomerSelection,
+    createCustomerName,
+    createCustomerPhone,
+    driverId,
+  ]);
 
   const openCreateSiteForm = useCallback(() => {
     setSiteFormMode("create");
@@ -976,23 +1056,23 @@ const DirectSales: React.FC = () => {
       return;
     }
     if (!isUuid(customerId)) {
-      setApiError(`Invalid customer UUID: ${customerId || "N/A"}`);
+      setApiError("Selected customer reference is invalid.");
       showWarningAlert(
-        "Invalid Customer ID",
-        "Selected customer id is not a valid UUID. Please re-search the customer.",
+        "Invalid Customer",
+        "The selected customer reference is invalid. Please search again.",
       );
       return;
     }
     if (!isUuid(siteId)) {
-      setApiError(`Invalid site UUID: ${siteId || "N/A"}`);
+      setApiError("Selected site reference is invalid.");
       showWarningAlert(
-        "Invalid Site ID",
-        "Selected site id is not a valid UUID. Re-select or recreate the site.",
+        "Invalid Site",
+        "The selected site reference is invalid. Re-select or recreate the site.",
       );
       return;
     }
     if (!isUuid(routeId)) {
-      setApiError(`Invalid route UUID: ${routeId || "N/A"}`);
+      setApiError("Selected route reference is invalid.");
       console.warn("[direct-sales] routeId is not UUID. Sending anyway.", {
         customerId,
         siteId,
@@ -1056,7 +1136,7 @@ const DirectSales: React.FC = () => {
       );
       showSuccessAlert(
         "Route Assigned",
-        `Assigned ${selectedRoute?.label || updatedSite.routeId} to this site.`,
+        `Assigned ${selectedRoute?.label || "the selected route"} to this site.`,
       );
     } catch (error) {
       console.error("Error assigning route:", error);
@@ -1080,7 +1160,7 @@ const DirectSales: React.FC = () => {
       if (!routeId) return "Unassigned";
       const match = todayRoutes.find((route) => route.id === routeId);
       const label = match?.label?.trim();
-      return label || routeId;
+      return label || "Assigned route";
     },
     [todayRoutes],
   );
@@ -1176,6 +1256,13 @@ const DirectSales: React.FC = () => {
 
   const vat = useMemo(() => subtotal * 0.05, [subtotal]);
   const totalAmount = useMemo(() => subtotal + vat, [subtotal, vat]);
+  const selectedSiteLabel = useMemo(() => {
+    if (!customerData || !selectedSite) return null;
+    const siteIndex = customerData.sites.findIndex(
+      (site) => site.id === selectedSite.id,
+    );
+    return getSiteLabel(selectedSite, siteIndex >= 0 ? siteIndex : 0);
+  }, [customerData, selectedSite]);
 
   const isFormValid = selectedProducts.length > 0 && Boolean(customerData?.id);
 
@@ -1284,15 +1371,15 @@ const DirectSales: React.FC = () => {
       return;
     }
 
-    if (!customerPhone.trim()) {
-      showWarningAlert("Required", "Please enter phone number.");
+    if (!customerData?.phone?.trim()) {
+      showWarningAlert("Customer Required", "Select a customer first.");
       return;
     }
 
     if (!customerData?.id) {
       showWarningAlert(
         "Customer Required",
-        "Direct sale now requires an existing customer. Search by phone and select a valid customer first.",
+        "Direct sale requires an existing customer. Search or create a customer first.",
       );
       return;
     }
@@ -1402,8 +1489,8 @@ const DirectSales: React.FC = () => {
         invoice_number: invoiceNumber,
         status: "delivered",
         customer_id: customerData.id,
-        customer_name: customerData.name || customerName.trim(),
-        customer_phone: customerPhone.trim(),
+        customer_name: customerData.name,
+        customer_phone: customerData.phone,
         customer_address:
           formatSiteAddress(selectedSite) ||
           selectedSite?.siteName ||
@@ -1444,7 +1531,7 @@ const DirectSales: React.FC = () => {
       showSuccessAlert(
         "Sale Confirmed",
         paymentResult.method === "credit"
-          ? `Credit sale ${saleId} confirmed successfully.`
+          ? "Credit sale confirmed successfully."
           : `Sale of AED ${saleTotal.toFixed(2)} confirmed successfully.`,
         [
           {
@@ -1452,13 +1539,18 @@ const DirectSales: React.FC = () => {
             style: "cancel",
             onPress: () => {
               setQuantities({});
-              setCustomerName("");
-              setCustomerPhone("");
               setCustomerData(null);
-              setSelectedSite(null);
-              setCustomerChecked(false);
-              setIsExistingCustomer(false);
+              applySelectedSite(null);
+              setCustomerSearchResults([]);
+              setCustomerSearchQuery("");
+              setHasSearchedCustomers(false);
+              setCreateCustomerName("");
+              setCreateCustomerPhone("");
+              setCustomerModalVisible(false);
+              setCustomerModalMode("create");
+              setCustomerCreatedInModal(false);
               setRemark("");
+              setIsRemarkExpanded(false);
               clearCart();
               router.back();
             },
@@ -1486,12 +1578,11 @@ const DirectSales: React.FC = () => {
     remark,
     quantities,
     totalAmount,
-    customerName,
-    customerPhone,
     selectedSite,
     location?.address,
     router,
     clearCart,
+    applySelectedSite,
     selectOrder,
     setGlobalPaymentMethod,
     setLastConfirmPaymentResponse,
@@ -1546,699 +1637,141 @@ const DirectSales: React.FC = () => {
             />
           }
         >
-          {/* Customer Section */}
           <View style={styles.section}>
             <Text style={styles.sectionTitle}>Customer</Text>
-            <View style={styles.inputRow}>
-              <View style={styles.inputWrapper}>
-                <Ionicons
-                  name="person-outline"
-                  size={18}
-                  color="#94A3B8"
-                  style={styles.inputIcon}
-                />
-                <TextInput
-                  style={styles.input}
-                  placeholder="Name"
-                  placeholderTextColor="#CBD5E1"
-                  value={customerName}
-                  onChangeText={setCustomerName}
-                />
-              </View>
 
-              <View style={styles.inputWrapper}>
-                <Ionicons
-                  name="call-outline"
-                  size={18}
-                  color="#94A3B8"
-                  style={styles.inputIcon}
-                />
-                <TextInput
-                  style={[styles.input, styles.phoneInput]}
-                  placeholder="Phone"
-                  placeholderTextColor="#CBD5E1"
-                  value={customerPhone}
-                  onChangeText={(text) => {
-                    setCustomerPhone(text);
-                    setIsExistingCustomer(false);
-                    setCustomerChecked(false);
-                    setCustomerData(null);
-                    setCustomerSearchResults([]);
-                    applySelectedSite(null);
-                    setSiteFormMode(null);
-                    setSiteDraft(EMPTY_SITE_DRAFT);
-                  }}
-                  keyboardType="phone-pad"
-                />
-              </View>
-              <View style={styles.inputWrapper}>
-                <Ionicons
-                  name="barcode-outline"
-                  size={18}
-                  color="#94A3B8"
-                  style={styles.inputIcon}
-                />
-                <TextInput
-                  style={styles.input}
-                  placeholder="Customer ID (optional)"
-                  placeholderTextColor="#CBD5E1"
-                  value={customerIdQuery}
-                  onChangeText={(text) => {
-                    setCustomerIdQuery(text);
-                    setIsExistingCustomer(false);
-                    setCustomerChecked(false);
-                    setCustomerData(null);
-                    setCustomerSearchResults([]);
-                    applySelectedSite(null);
-                    setSiteFormMode(null);
-                    setSiteDraft(EMPTY_SITE_DRAFT);
-                  }}
-                  autoCapitalize="none"
-                  autoCorrect={false}
-                />
-              </View>
-
-              <View style={styles.customerActionsRow}>
-                <TouchableOpacity
-                  style={styles.customerActionButton}
-                  onPress={checkCustomer}
-                  disabled={
-                    isCheckingCustomer ||
-                    (!customerPhone.trim() && !customerIdQuery.trim())
-                  }
-                  activeOpacity={0.8}
-                >
-                  {isCheckingCustomer ? (
-                    <ActivityIndicator size="small" color="#FFFFFF" />
-                  ) : (
-                    <>
-                      <Ionicons name="search" size={14} color="#FFFFFF" />
-                      <Text style={styles.customerActionButtonText}>
-                        Search Existing
-                      </Text>
-                    </>
-                  )}
-                </TouchableOpacity>
-                <TouchableOpacity
+            <View style={styles.customerActionsRow}>
+              <TouchableOpacity
+                style={styles.customerActionButton}
+                onPress={openSearchCustomerModal}
+                activeOpacity={0.8}
+              >
+                <Ionicons name="search" size={14} color="#FFFFFF" />
+                <Text style={styles.customerActionButtonText}>
+                  Search Customer
+                </Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={[
+                  styles.customerActionButton,
+                  styles.customerCreateButton,
+                ]}
+                onPress={openCreateCustomerModal}
+                activeOpacity={0.8}
+              >
+                <Ionicons name="person-add-outline" size={14} color="#1E40AF" />
+                <Text
                   style={[
-                    styles.customerActionButton,
-                    styles.customerCreateButton,
-                  ]}
-                  onPress={handleCreateCustomer}
-                  disabled={isCreatingCustomer}
-                  activeOpacity={0.8}
-                >
-                  {isCreatingCustomer ? (
-                    <ActivityIndicator size="small" color="#1E40AF" />
-                  ) : (
-                    <>
-                      <Ionicons
-                        name="person-add-outline"
-                        size={14}
-                        color="#1E40AF"
-                      />
-                      <Text
-                        style={[
-                          styles.customerActionButtonText,
-                          styles.customerCreateButtonText,
-                        ]}
-                      >
-                        Create Customer
-                      </Text>
-                    </>
-                  )}
-                </TouchableOpacity>
-              </View>
-
-              {customerChecked && (
-                <View
-                  style={[
-                    styles.customerNote,
-                    isExistingCustomer
-                      ? styles.customerNoteExisting
-                      : styles.customerNoteNew,
+                    styles.customerActionButtonText,
+                    styles.customerCreateButtonText,
                   ]}
                 >
-                  <Ionicons
-                    name={
-                      isExistingCustomer ? "checkmark-circle" : "person-add"
-                    }
-                    size={14}
-                    color={isExistingCustomer ? "#10B981" : "#3B82F6"}
-                  />
-                  <Text
-                    style={[
-                      styles.customerNoteText,
-                      isExistingCustomer
-                        ? styles.customerNoteTextExisting
-                        : styles.customerNoteTextNew,
-                    ]}
-                  >
-                    {isExistingCustomer
-                      ? "Existing customer selected"
-                      : "No customer selected yet"}
-                  </Text>
-                </View>
-              )}
+                  Create Customer
+                </Text>
+              </TouchableOpacity>
+            </View>
 
-              {customerSearchResults.length > 1 && (
-                <View style={styles.customerMatchesContainer}>
-                  <Text style={styles.sitesLabel}>Matching Customers</Text>
-                  <ScrollView
-                    horizontal
-                    showsHorizontalScrollIndicator={false}
-                    style={styles.sitesScroll}
-                  >
-                    {customerSearchResults.map((customer) => (
-                      <TouchableOpacity
-                        key={customer.id}
-                        style={[
-                          styles.customerMatchCard,
-                          customerData?.id === customer.id &&
-                            styles.customerMatchCardActive,
-                        ]}
-                        onPress={() => applyCustomerSelection(customer)}
-                        activeOpacity={0.8}
-                      >
-                        <Text
-                          style={[
-                            styles.customerMatchName,
-                            customerData?.id === customer.id &&
-                              styles.customerMatchNameActive,
-                          ]}
-                          numberOfLines={1}
-                        >
-                          {customer.name}
-                        </Text>
-                        <Text
-                          style={[
-                            styles.customerMatchMeta,
-                            customerData?.id === customer.id &&
-                              styles.customerMatchMetaActive,
-                          ]}
-                          numberOfLines={1}
-                        >
-                          {customer.phone}
-                        </Text>
-                        <Text
-                          style={[
-                            styles.customerMatchMeta,
-                            customerData?.id === customer.id &&
-                              styles.customerMatchMetaActive,
-                          ]}
-                          numberOfLines={1}
-                        >
-                          {customer.id}
-                        </Text>
-                      </TouchableOpacity>
-                    ))}
-                  </ScrollView>
-                </View>
-              )}
-
-              {customerData ? (
-                <View style={styles.selectedCustomerCard}>
-                  <Text style={styles.selectedCustomerName}>
-                    {customerData.name}
-                  </Text>
-                  <Text style={styles.selectedCustomerMeta}>
-                    {customerData.phone}
-                  </Text>
-                  <Text style={styles.selectedCustomerMeta}>
-                    {customerData.id}
-                  </Text>
-                  <Text style={styles.selectedCustomerMeta}>
-                    {customerData.sites.length} site
-                    {customerData.sites.length === 1 ? "" : "s"}
-                  </Text>
-                </View>
-              ) : null}
-
-              {isExistingCustomer && customerData && (
-                <View style={styles.sitesContainer}>
-                  <Text style={styles.sitesLabel}>Customer Sites</Text>
-
-                  {customerData.sites.length === 0 ? (
-                    <Text style={styles.siteHelperText}>
-                      No site found yet. Add a site to improve delivery
-                      accuracy.
+            {customerData ? (
+              <View style={styles.selectedCustomerCard}>
+                <View style={styles.selectedCustomerTopRow}>
+                  <View style={styles.selectedCustomerCopy}>
+                    <Text style={styles.selectedCustomerName}>
+                      {customerData.name}
                     </Text>
-                  ) : (
-                    <ScrollView
-                      horizontal
-                      showsHorizontalScrollIndicator={false}
-                      style={styles.sitesScroll}
-                    >
-                      {customerData.sites.map((site, index) => (
-                        <TouchableOpacity
-                          key={site.id}
-                          style={[
-                            styles.siteOption,
-                            selectedSite?.id === site.id &&
-                              styles.siteOptionActive,
-                          ]}
-                          onPress={() => {
-                            applySelectedSite(site);
-                            setSelectedRouteId(site.routeId || "");
-                          }}
-                          activeOpacity={0.8}
-                        >
-                          <Ionicons
-                            name="location"
-                            size={14}
-                            color={
-                              selectedSite?.id === site.id
-                                ? "#FFFFFF"
-                                : "#64748B"
-                            }
-                          />
-                          <Text
-                            style={[
-                              styles.siteOptionText,
-                              selectedSite?.id === site.id &&
-                                styles.siteOptionTextActive,
-                            ]}
-                            numberOfLines={1}
-                          >
-                            {getSiteLabel(site, index)}
-                          </Text>
-                        </TouchableOpacity>
-                      ))}
-                    </ScrollView>
-                  )}
-
-                  <View style={styles.siteActionRow}>
-                    <TouchableOpacity
-                      style={styles.siteActionButton}
-                      onPress={openCreateSiteForm}
-                      activeOpacity={0.8}
-                    >
-                      <Ionicons name="add" size={14} color="#1E40AF" />
-                      <Text style={styles.siteActionButtonText}>Add Site</Text>
-                    </TouchableOpacity>
-                    <TouchableOpacity
-                      style={[
-                        styles.siteActionButton,
-                        !selectedSite && styles.siteActionButtonDisabled,
-                      ]}
-                      onPress={openEditSiteForm}
-                      disabled={!selectedSite}
-                      activeOpacity={0.8}
-                    >
-                      <Ionicons
-                        name="create-outline"
-                        size={14}
-                        color={!selectedSite ? "#94A3B8" : "#1E40AF"}
-                      />
-                      <Text
-                        style={[
-                          styles.siteActionButtonText,
-                          !selectedSite && styles.siteActionButtonTextDisabled,
-                        ]}
-                      >
-                        Edit Site
-                      </Text>
-                    </TouchableOpacity>
+                    <Text style={styles.selectedCustomerMeta}>
+                      {customerData.phone}
+                    </Text>
+                    <Text style={styles.selectedCustomerMeta}>
+                      {customerData.sites.length} site
+                      {customerData.sites.length === 1 ? "" : "s"}
+                    </Text>
+                    <Text style={styles.selectedCustomerMeta} numberOfLines={1}>
+                      Site:{" "}
+                      {selectedSiteLabel ||
+                        (customerData.sites.length > 0
+                          ? "Not selected yet"
+                          : "Not added yet")}
+                    </Text>
+                    <Text style={styles.selectedCustomerMeta} numberOfLines={1}>
+                      Route:{" "}
+                      {selectedSite
+                        ? getRouteLabelById(selectedSite.routeId)
+                        : "Unassigned"}
+                    </Text>
                   </View>
 
-                  {selectedSite ? (
-                    <View style={styles.siteDetailCard}>
-                      <Text style={styles.siteDetailTitle}>
-                        {getSiteLabel(selectedSite, 0)}
-                      </Text>
-                      <Text style={styles.siteDetailMeta}>
-                        {formatSiteAddress(selectedSite) ||
-                          "No address details"}
-                      </Text>
-                      <Text style={styles.siteDetailMeta}>
-                        Route: {getRouteLabelById(selectedSite.routeId)}
-                      </Text>
-                      {selectedSite.deliveryInstructions ? (
-                        <Text style={styles.siteDetailMeta}>
-                          Instructions: {selectedSite.deliveryInstructions}
-                        </Text>
-                      ) : null}
-                    </View>
-                  ) : null}
-
-                  {siteFormMode ? (
-                    <View style={styles.siteFormCard}>
-                      <Text style={styles.siteFormTitle}>
-                        {siteFormMode === "create" ? "Add Site" : "Edit Site"}
-                      </Text>
-                      <View style={styles.inputRow}>
-                        <View style={styles.inputWrapper}>
-                          <Ionicons
-                            name="business-outline"
-                            size={18}
-                            color="#94A3B8"
-                            style={styles.inputIcon}
-                          />
-                          <TextInput
-                            style={styles.input}
-                            placeholder="Site name"
-                            placeholderTextColor="#CBD5E1"
-                            value={siteDraft.siteName}
-                            onChangeText={(value) =>
-                              setSiteDraft((prev) => ({
-                                ...prev,
-                                siteName: value,
-                              }))
-                            }
-                          />
-                        </View>
-
-                        <View style={styles.inputWrapper}>
-                          <Ionicons
-                            name="navigate-outline"
-                            size={18}
-                            color="#94A3B8"
-                            style={styles.inputIcon}
-                          />
-                          <TextInput
-                            style={styles.input}
-                            placeholder="Street name"
-                            placeholderTextColor="#CBD5E1"
-                            value={siteDraft.streetName}
-                            onChangeText={(value) =>
-                              setSiteDraft((prev) => ({
-                                ...prev,
-                                streetName: value,
-                              }))
-                            }
-                          />
-                        </View>
-
-                        <View style={styles.siteInputRow}>
-                          <View
-                            style={[styles.inputWrapper, styles.siteInputHalf]}
-                          >
-                            <Ionicons
-                              name="business"
-                              size={18}
-                              color="#94A3B8"
-                              style={styles.inputIcon}
-                            />
-                            <TextInput
-                              style={styles.input}
-                              placeholder="Building no."
-                              placeholderTextColor="#CBD5E1"
-                              value={siteDraft.buildingNo}
-                              onChangeText={(value) =>
-                                setSiteDraft((prev) => ({
-                                  ...prev,
-                                  buildingNo: value,
-                                }))
-                              }
-                            />
-                          </View>
-                          <View
-                            style={[styles.inputWrapper, styles.siteInputHalf]}
-                          >
-                            <Ionicons
-                              name="home-outline"
-                              size={18}
-                              color="#94A3B8"
-                              style={styles.inputIcon}
-                            />
-                            <TextInput
-                              style={styles.input}
-                              placeholder="Flat no."
-                              placeholderTextColor="#CBD5E1"
-                              value={siteDraft.flatNo}
-                              onChangeText={(value) =>
-                                setSiteDraft((prev) => ({
-                                  ...prev,
-                                  flatNo: value,
-                                }))
-                              }
-                            />
-                          </View>
-                        </View>
-
-                        <View style={styles.siteInputRow}>
-                          <View
-                            style={[styles.inputWrapper, styles.siteInputHalf]}
-                          >
-                            <Ionicons
-                              name="map-outline"
-                              size={18}
-                              color="#94A3B8"
-                              style={styles.inputIcon}
-                            />
-                            <TextInput
-                              style={styles.input}
-                              placeholder="Area"
-                              placeholderTextColor="#CBD5E1"
-                              value={siteDraft.areaName}
-                              onChangeText={(value) =>
-                                setSiteDraft((prev) => ({
-                                  ...prev,
-                                  areaName: value,
-                                }))
-                              }
-                            />
-                          </View>
-                          <View
-                            style={[styles.inputWrapper, styles.siteInputHalf]}
-                          >
-                            <Ionicons
-                              name="pin-outline"
-                              size={18}
-                              color="#94A3B8"
-                              style={styles.inputIcon}
-                            />
-                            <TextInput
-                              style={styles.input}
-                              placeholder="City"
-                              placeholderTextColor="#CBD5E1"
-                              value={siteDraft.city}
-                              onChangeText={(value) =>
-                                setSiteDraft((prev) => ({
-                                  ...prev,
-                                  city: value,
-                                }))
-                              }
-                            />
-                          </View>
-                        </View>
-
-                        <View style={styles.siteInputRow}>
-                          <View
-                            style={[styles.inputWrapper, styles.siteInputHalf]}
-                          >
-                            <Ionicons
-                              name="location-outline"
-                              size={18}
-                              color="#94A3B8"
-                              style={styles.inputIcon}
-                            />
-                            <TextInput
-                              style={styles.input}
-                              placeholder="Latitude"
-                              placeholderTextColor="#CBD5E1"
-                              value={siteDraft.latitude}
-                              onChangeText={(value) =>
-                                setSiteDraft((prev) => ({
-                                  ...prev,
-                                  latitude: value,
-                                }))
-                              }
-                              keyboardType="decimal-pad"
-                            />
-                          </View>
-                          <View
-                            style={[styles.inputWrapper, styles.siteInputHalf]}
-                          >
-                            <Ionicons
-                              name="location-outline"
-                              size={18}
-                              color="#94A3B8"
-                              style={styles.inputIcon}
-                            />
-                            <TextInput
-                              style={styles.input}
-                              placeholder="Longitude"
-                              placeholderTextColor="#CBD5E1"
-                              value={siteDraft.longitude}
-                              onChangeText={(value) =>
-                                setSiteDraft((prev) => ({
-                                  ...prev,
-                                  longitude: value,
-                                }))
-                              }
-                              keyboardType="decimal-pad"
-                            />
-                          </View>
-                        </View>
-
-                        {siteFormMode === "create" ? (
-                          <View style={styles.inputWrapper}>
-                            <Ionicons
-                              name="document-text-outline"
-                              size={18}
-                              color="#94A3B8"
-                              style={styles.inputIcon}
-                            />
-                            <TextInput
-                              style={styles.input}
-                              placeholder="Delivery instructions (optional)"
-                              placeholderTextColor="#CBD5E1"
-                              value={siteDraft.deliveryInstructions}
-                              onChangeText={(value) =>
-                                setSiteDraft((prev) => ({
-                                  ...prev,
-                                  deliveryInstructions: value,
-                                }))
-                              }
-                            />
-                          </View>
-                        ) : null}
-                      </View>
-
-                      <View style={styles.siteFormActionRow}>
-                        <TouchableOpacity
-                          style={styles.siteFormGhostButton}
-                          onPress={applyCurrentLocationToSiteForm}
-                          activeOpacity={0.8}
-                        >
-                          <Ionicons
-                            name="locate-outline"
-                            size={14}
-                            color="#1E40AF"
-                          />
-                          <Text style={styles.siteFormGhostButtonText}>
-                            Use Current Location
-                          </Text>
-                        </TouchableOpacity>
-                      </View>
-
-                      <View style={styles.siteFormActionRow}>
-                        <TouchableOpacity
-                          style={styles.siteFormCancelButton}
-                          onPress={closeSiteForm}
-                          activeOpacity={0.8}
-                        >
-                          <Text style={styles.siteFormCancelText}>Cancel</Text>
-                        </TouchableOpacity>
-                        <TouchableOpacity
-                          style={styles.siteFormSaveButton}
-                          onPress={saveSite}
-                          disabled={isSavingSite}
-                          activeOpacity={0.8}
-                        >
-                          {isSavingSite ? (
-                            <ActivityIndicator size="small" color="#FFFFFF" />
-                          ) : (
-                            <Text style={styles.siteFormSaveText}>
-                              Save Site
-                            </Text>
-                          )}
-                        </TouchableOpacity>
-                      </View>
-                    </View>
-                  ) : null}
-
-                  {selectedSite ? (
-                    <View style={styles.routeAssignCard}>
-                      <Text style={styles.routeAssignTitle}>
-                        Route Assignment
-                      </Text>
-
-                      {selectedSite.routeId ? (
-                        <View style={styles.routeAssignedBadge}>
-                          <Ionicons
-                            name="checkmark-circle-outline"
-                            size={14}
-                            color="#0F766E"
-                          />
-                          <Text style={styles.routeAssignedText}>
-                            Assigned: {getRouteLabelById(selectedSite.routeId)}
-                          </Text>
-                        </View>
-                      ) : isLoadingRoutes ? (
-                        <View style={styles.routeLoadingRow}>
-                          <ActivityIndicator size="small" color="#1E40AF" />
-                          <Text style={styles.routeLoadingText}>
-                            {"Loading today's routes..."}
-                          </Text>
-                        </View>
-                      ) : todayRoutes.length === 0 ? (
-                        <Text style={styles.siteHelperText}>
-                          No routes available on your truck today.
-                        </Text>
-                      ) : (
-                        <>
-                          <ScrollView
-                            horizontal
-                            showsHorizontalScrollIndicator={false}
-                            style={styles.sitesScroll}
-                          >
-                            {todayRoutes.map((route, index) => (
-                              <TouchableOpacity
-                                key={route.id}
-                                style={[
-                                  styles.routeOption,
-                                  selectedRouteId === route.id &&
-                                    styles.routeOptionActive,
-                                ]}
-                                onPress={() => setSelectedRouteId(route.id)}
-                                activeOpacity={0.8}
-                              >
-                                <Text
-                                  style={[
-                                    styles.routeOptionText,
-                                    selectedRouteId === route.id &&
-                                      styles.routeOptionTextActive,
-                                  ]}
-                                >
-                                  {route.label?.trim()
-                                    ? route.label
-                                    : `Route ${index + 1}`}
-                                </Text>
-                              </TouchableOpacity>
-                            ))}
-                          </ScrollView>
-                          <TouchableOpacity
-                            style={styles.routeAssignButton}
-                            onPress={assignRouteToSelectedSite}
-                            disabled={!selectedRouteId || isAssigningRoute}
-                            activeOpacity={0.8}
-                          >
-                            {isAssigningRoute ? (
-                              <ActivityIndicator size="small" color="#FFFFFF" />
-                            ) : (
-                              <Text style={styles.routeAssignButtonText}>
-                                Assign Selected Route
-                              </Text>
-                            )}
-                          </TouchableOpacity>
-                        </>
-                      )}
-                    </View>
-                  ) : null}
+                  <TouchableOpacity
+                    style={styles.manageCustomerButton}
+                    onPress={openManageCustomerModal}
+                    activeOpacity={0.8}
+                  >
+                    <Ionicons
+                      name="settings-outline"
+                      size={14}
+                      color="#1E40AF"
+                    />
+                    <Text style={styles.manageCustomerButtonText}>Manage</Text>
+                  </TouchableOpacity>
                 </View>
-              )}
-            </View>
+              </View>
+            ) : (
+              <View style={styles.customerPlaceholderCard}>
+                <Ionicons
+                  name="person-circle-outline"
+                  size={28}
+                  color="#94A3B8"
+                />
+                <Text style={styles.customerPlaceholderTitle}>
+                  No customer selected
+                </Text>
+                <Text style={styles.customerPlaceholderText}>
+                  Search an existing customer or create a new one before
+                  confirming the sale.
+                </Text>
+              </View>
+            )}
           </View>
 
           <View style={styles.section}>
-            <Text style={styles.sectionTitle}>Remark (Optional)</Text>
-            <View style={styles.inputWrapper}>
-              <Ionicons
-                name="document-text-outline"
-                size={18}
-                color="#94A3B8"
-                style={styles.inputIcon}
-              />
-              <TextInput
-                style={styles.input}
-                placeholder="Add a note for this sale"
-                placeholderTextColor="#CBD5E1"
-                value={remark}
-                onChangeText={setRemark}
-              />
-            </View>
+            <TouchableOpacity
+              style={styles.collapsibleHeader}
+              onPress={() => setIsRemarkExpanded((value) => !value)}
+              activeOpacity={0.8}
+            >
+              <Text style={[styles.sectionTitle, styles.collapsibleTitle]}>
+                Remark (Optional)
+              </Text>
+              <View style={styles.collapsibleHeaderRight}>
+                <Text style={styles.collapsibleHeaderText}>
+                  {isRemarkExpanded ? "Hide" : remark.trim() ? "Edit" : "Add"}
+                </Text>
+                <Ionicons
+                  name={isRemarkExpanded ? "chevron-up" : "chevron-down"}
+                  size={16}
+                  color="#64748B"
+                />
+              </View>
+            </TouchableOpacity>
+
+            {isRemarkExpanded ? (
+              <View style={styles.inputWrapper}>
+                <Ionicons
+                  name="document-text-outline"
+                  size={18}
+                  color="#94A3B8"
+                  style={styles.inputIcon}
+                />
+                <TextInput
+                  style={styles.input}
+                  placeholder="Add a note for this sale"
+                  placeholderTextColor="#CBD5E1"
+                  value={remark}
+                  onChangeText={setRemark}
+                />
+              </View>
+            ) : remark.trim() ? (
+              <Text style={styles.remarkPreview}>{remark.trim()}</Text>
+            ) : null}
           </View>
 
           {/* Payment Method */}
@@ -2552,6 +2085,585 @@ const DirectSales: React.FC = () => {
           <View style={{ height: Math.max(insets.bottom, 20) + 80 }} />
         </ScrollView>
       </KeyboardAvoidingView>
+
+      <ActionModal
+        visible={customerSearchModalVisible}
+        title="Search Customer"
+        onClose={closeSearchCustomerModal}
+        topInset={insets.top}
+        bottomInset={insets.bottom}
+      >
+        <View style={styles.modalBody}>
+          <View style={styles.modalSearchRow}>
+            <View style={styles.modalSearchInputWrapper}>
+              <Ionicons
+                name="search"
+                size={18}
+                color="#94A3B8"
+                style={styles.inputIcon}
+              />
+              <TextInput
+                style={styles.input}
+                placeholder="Search customer"
+                placeholderTextColor="#CBD5E1"
+                value={customerSearchQuery}
+                onChangeText={setCustomerSearchQuery}
+                autoCapitalize="none"
+                autoCorrect={false}
+                onSubmitEditing={() => void searchCustomers()}
+                returnKeyType="search"
+              />
+            </View>
+            <TouchableOpacity
+              style={[
+                styles.modalPrimaryButton,
+                !customerSearchQuery.trim() &&
+                  styles.modalPrimaryButtonDisabled,
+              ]}
+              onPress={() => void searchCustomers()}
+              disabled={isCheckingCustomer || !customerSearchQuery.trim()}
+              activeOpacity={0.8}
+            >
+              {isCheckingCustomer ? (
+                <ActivityIndicator size="small" color="#FFFFFF" />
+              ) : (
+                <Text style={styles.modalPrimaryButtonText}>Search</Text>
+              )}
+            </TouchableOpacity>
+          </View>
+
+          {isCheckingCustomer ? (
+            <View style={styles.modalStateCard}>
+              <ActivityIndicator size="small" color="#1E40AF" />
+              <Text style={styles.modalStateText}>Searching customers...</Text>
+            </View>
+          ) : customerSearchResults.length > 0 ? (
+            <ScrollView
+              style={styles.modalResultsList}
+              contentContainerStyle={styles.modalResultsContent}
+              keyboardShouldPersistTaps="handled"
+            >
+              {customerSearchResults.map((customer) => (
+                <TouchableOpacity
+                  key={customer.id}
+                  style={styles.customerMatchCard}
+                  onPress={() => handleCustomerPicked(customer)}
+                  activeOpacity={0.8}
+                >
+                  <Text style={styles.customerMatchName} numberOfLines={1}>
+                    {customer.name}
+                  </Text>
+                  <Text style={styles.customerMatchMeta} numberOfLines={1}>
+                    {customer.phone}
+                  </Text>
+                  <Text style={styles.customerMatchMeta}>
+                    {customer.sites.length} site
+                    {customer.sites.length === 1 ? "" : "s"}
+                  </Text>
+                </TouchableOpacity>
+              ))}
+            </ScrollView>
+          ) : hasSearchedCustomers ? (
+            <View style={styles.modalStateCard}>
+              <Ionicons
+                name="search-circle-outline"
+                size={30}
+                color="#94A3B8"
+              />
+              <Text style={styles.modalStateTitle}>No customers found</Text>
+              <Text style={styles.modalStateText}>
+                Try a different query or create a new customer.
+              </Text>
+            </View>
+          ) : (
+            <Text style={styles.modalHelperText}>
+              Search using a single query. The app will send only the `search`
+              field to the customer endpoint.
+            </Text>
+          )}
+        </View>
+      </ActionModal>
+
+      <ActionModal
+        visible={customerModalVisible}
+        title={
+          customerModalMode === "create" ? "Create Customer" : "Manage Customer"
+        }
+        onClose={closeCustomerModal}
+        topInset={insets.top}
+        bottomInset={insets.bottom}
+      >
+        {customerModalMode === "create" ? (
+          <View style={styles.modalBody}>
+            <View style={styles.inputWrapper}>
+              <Ionicons
+                name="person-outline"
+                size={18}
+                color="#94A3B8"
+                style={styles.inputIcon}
+              />
+              <TextInput
+                style={styles.input}
+                placeholder="Customer name"
+                placeholderTextColor="#CBD5E1"
+                value={createCustomerName}
+                onChangeText={setCreateCustomerName}
+              />
+            </View>
+
+            <View style={styles.inputWrapper}>
+              <Ionicons
+                name="call-outline"
+                size={18}
+                color="#94A3B8"
+                style={styles.inputIcon}
+              />
+              <TextInput
+                style={styles.input}
+                placeholder="Phone number"
+                placeholderTextColor="#CBD5E1"
+                value={createCustomerPhone}
+                onChangeText={setCreateCustomerPhone}
+                keyboardType="phone-pad"
+              />
+            </View>
+
+            <TouchableOpacity
+              style={styles.modalPrimaryButton}
+              onPress={() => void handleCreateCustomer()}
+              disabled={isCreatingCustomer}
+              activeOpacity={0.8}
+            >
+              {isCreatingCustomer ? (
+                <ActivityIndicator size="small" color="#FFFFFF" />
+              ) : (
+                <Text style={styles.modalPrimaryButtonText}>
+                  Create Customer
+                </Text>
+              )}
+            </TouchableOpacity>
+
+            <Text style={styles.modalHelperText}>
+              After creation, you can add a site or assign a route before
+              closing this modal.
+            </Text>
+          </View>
+        ) : customerData ? (
+          <ScrollView
+            style={styles.modalResultsList}
+            contentContainerStyle={styles.customerManageContent}
+            keyboardShouldPersistTaps="handled"
+          >
+            {customerCreatedInModal ? (
+              <View style={styles.customerNoticeCard}>
+                <Ionicons name="checkmark-circle" size={18} color="#10B981" />
+                <Text style={styles.customerNoticeText}>
+                  Customer created. Add a site or route now if needed.
+                </Text>
+              </View>
+            ) : null}
+
+            <View style={styles.selectedCustomerCard}>
+              <Text style={styles.selectedCustomerName}>
+                {customerData.name}
+              </Text>
+              <Text style={styles.selectedCustomerMeta}>
+                {customerData.phone}
+              </Text>
+              <Text style={styles.selectedCustomerMeta}>
+                {customerData.sites.length} site
+                {customerData.sites.length === 1 ? "" : "s"}
+              </Text>
+            </View>
+
+            <View style={styles.sitesContainer}>
+              <Text style={styles.sitesLabel}>Customer Sites</Text>
+
+              {customerData.sites.length === 0 ? (
+                <Text style={styles.siteHelperText}>
+                  No site found yet. Add a site to improve delivery accuracy.
+                </Text>
+              ) : (
+                <ScrollView
+                  horizontal
+                  showsHorizontalScrollIndicator={false}
+                  style={styles.sitesScroll}
+                >
+                  {customerData.sites.map((site, index) => (
+                    <TouchableOpacity
+                      key={site.id}
+                      style={[
+                        styles.siteOption,
+                        selectedSite?.id === site.id && styles.siteOptionActive,
+                      ]}
+                      onPress={() => {
+                        applySelectedSite(site);
+                        setSelectedRouteId(site.routeId || "");
+                      }}
+                      activeOpacity={0.8}
+                    >
+                      <Ionicons
+                        name="location"
+                        size={14}
+                        color={
+                          selectedSite?.id === site.id ? "#FFFFFF" : "#64748B"
+                        }
+                      />
+                      <Text
+                        style={[
+                          styles.siteOptionText,
+                          selectedSite?.id === site.id &&
+                            styles.siteOptionTextActive,
+                        ]}
+                        numberOfLines={1}
+                      >
+                        {getSiteLabel(site, index)}
+                      </Text>
+                    </TouchableOpacity>
+                  ))}
+                </ScrollView>
+              )}
+
+              <View style={styles.siteActionRow}>
+                <TouchableOpacity
+                  style={styles.siteActionButton}
+                  onPress={openCreateSiteForm}
+                  activeOpacity={0.8}
+                >
+                  <Ionicons name="add" size={14} color="#1E40AF" />
+                  <Text style={styles.siteActionButtonText}>Add Site</Text>
+                </TouchableOpacity>
+                <TouchableOpacity
+                  style={[
+                    styles.siteActionButton,
+                    !selectedSite && styles.siteActionButtonDisabled,
+                  ]}
+                  onPress={openEditSiteForm}
+                  disabled={!selectedSite}
+                  activeOpacity={0.8}
+                >
+                  <Ionicons
+                    name="create-outline"
+                    size={14}
+                    color={!selectedSite ? "#94A3B8" : "#1E40AF"}
+                  />
+                  <Text
+                    style={[
+                      styles.siteActionButtonText,
+                      !selectedSite && styles.siteActionButtonTextDisabled,
+                    ]}
+                  >
+                    Edit Site
+                  </Text>
+                </TouchableOpacity>
+              </View>
+
+              {selectedSite ? (
+                <View style={styles.siteDetailCard}>
+                  <Text style={styles.siteDetailTitle}>
+                    {selectedSiteLabel || getSiteLabel(selectedSite, 0)}
+                  </Text>
+                  <Text style={styles.siteDetailMeta}>
+                    {formatSiteAddress(selectedSite) || "No address details"}
+                  </Text>
+                  <Text style={styles.siteDetailMeta}>
+                    Route: {getRouteLabelById(selectedSite.routeId)}
+                  </Text>
+                  {selectedSite.deliveryInstructions ? (
+                    <Text style={styles.siteDetailMeta}>
+                      Instructions: {selectedSite.deliveryInstructions}
+                    </Text>
+                  ) : null}
+                </View>
+              ) : null}
+
+              {siteFormMode ? (
+                <View style={styles.siteFormCard}>
+                  <Text style={styles.siteFormTitle}>
+                    {siteFormMode === "create" ? "Add Site" : "Edit Site"}
+                  </Text>
+                  <View style={styles.inputRow}>
+                    <View style={styles.inputWrapper}>
+                      <Ionicons
+                        name="business-outline"
+                        size={18}
+                        color="#94A3B8"
+                        style={styles.inputIcon}
+                      />
+                      <TextInput
+                        style={styles.input}
+                        placeholder="Site name"
+                        placeholderTextColor="#CBD5E1"
+                        value={siteDraft.siteName}
+                        onChangeText={(value) =>
+                          setSiteDraft((prev) => ({
+                            ...prev,
+                            siteName: value,
+                          }))
+                        }
+                      />
+                    </View>
+
+                    <View style={styles.inputWrapper}>
+                      <Ionicons
+                        name="navigate-outline"
+                        size={18}
+                        color="#94A3B8"
+                        style={styles.inputIcon}
+                      />
+                      <TextInput
+                        style={styles.input}
+                        placeholder="Street name"
+                        placeholderTextColor="#CBD5E1"
+                        value={siteDraft.streetName}
+                        onChangeText={(value) =>
+                          setSiteDraft((prev) => ({
+                            ...prev,
+                            streetName: value,
+                          }))
+                        }
+                      />
+                    </View>
+
+                    <View style={styles.siteInputRow}>
+                      <View style={[styles.inputWrapper, styles.siteInputHalf]}>
+                        <Ionicons
+                          name="business"
+                          size={18}
+                          color="#94A3B8"
+                          style={styles.inputIcon}
+                        />
+                        <TextInput
+                          style={styles.input}
+                          placeholder="Building no."
+                          placeholderTextColor="#CBD5E1"
+                          value={siteDraft.buildingNo}
+                          onChangeText={(value) =>
+                            setSiteDraft((prev) => ({
+                              ...prev,
+                              buildingNo: value,
+                            }))
+                          }
+                        />
+                      </View>
+                      <View style={[styles.inputWrapper, styles.siteInputHalf]}>
+                        <Ionicons
+                          name="home-outline"
+                          size={18}
+                          color="#94A3B8"
+                          style={styles.inputIcon}
+                        />
+                        <TextInput
+                          style={styles.input}
+                          placeholder="Flat no."
+                          placeholderTextColor="#CBD5E1"
+                          value={siteDraft.flatNo}
+                          onChangeText={(value) =>
+                            setSiteDraft((prev) => ({
+                              ...prev,
+                              flatNo: value,
+                            }))
+                          }
+                        />
+                      </View>
+                    </View>
+
+                    <View style={styles.siteInputRow}>
+                      <View style={[styles.inputWrapper, styles.siteInputHalf]}>
+                        <Ionicons
+                          name="map-outline"
+                          size={18}
+                          color="#94A3B8"
+                          style={styles.inputIcon}
+                        />
+                        <TextInput
+                          style={styles.input}
+                          placeholder="Area"
+                          placeholderTextColor="#CBD5E1"
+                          value={siteDraft.areaName}
+                          onChangeText={(value) =>
+                            setSiteDraft((prev) => ({
+                              ...prev,
+                              areaName: value,
+                            }))
+                          }
+                        />
+                      </View>
+                      <View style={[styles.inputWrapper, styles.siteInputHalf]}>
+                        <Ionicons
+                          name="pin-outline"
+                          size={18}
+                          color="#94A3B8"
+                          style={styles.inputIcon}
+                        />
+                        <TextInput
+                          style={styles.input}
+                          placeholder="City"
+                          placeholderTextColor="#CBD5E1"
+                          value={siteDraft.city}
+                          onChangeText={(value) =>
+                            setSiteDraft((prev) => ({
+                              ...prev,
+                              city: value,
+                            }))
+                          }
+                        />
+                      </View>
+                    </View>
+
+                    {siteFormMode === "create" ? (
+                      <View style={styles.inputWrapper}>
+                        <Ionicons
+                          name="document-text-outline"
+                          size={18}
+                          color="#94A3B8"
+                          style={styles.inputIcon}
+                        />
+                        <TextInput
+                          style={styles.input}
+                          placeholder="Delivery instructions (optional)"
+                          placeholderTextColor="#CBD5E1"
+                          value={siteDraft.deliveryInstructions}
+                          onChangeText={(value) =>
+                            setSiteDraft((prev) => ({
+                              ...prev,
+                              deliveryInstructions: value,
+                            }))
+                          }
+                        />
+                      </View>
+                    ) : null}
+                  </View>
+
+                  <View style={styles.siteFormActionRow}>
+                    <TouchableOpacity
+                      style={styles.siteFormGhostButton}
+                      onPress={applyCurrentLocationToSiteForm}
+                      activeOpacity={0.8}
+                    >
+                      <Ionicons
+                        name="locate-outline"
+                        size={14}
+                        color="#1E40AF"
+                      />
+                      <Text style={styles.siteFormGhostButtonText}>
+                        Use Current Location
+                      </Text>
+                    </TouchableOpacity>
+                  </View>
+
+                  <View style={styles.siteFormActionRow}>
+                    <TouchableOpacity
+                      style={styles.siteFormCancelButton}
+                      onPress={closeSiteForm}
+                      activeOpacity={0.8}
+                    >
+                      <Text style={styles.siteFormCancelText}>Cancel</Text>
+                    </TouchableOpacity>
+                    <TouchableOpacity
+                      style={styles.siteFormSaveButton}
+                      onPress={saveSite}
+                      disabled={isSavingSite}
+                      activeOpacity={0.8}
+                    >
+                      {isSavingSite ? (
+                        <ActivityIndicator size="small" color="#FFFFFF" />
+                      ) : (
+                        <Text style={styles.siteFormSaveText}>Save Site</Text>
+                      )}
+                    </TouchableOpacity>
+                  </View>
+                </View>
+              ) : null}
+
+              {selectedSite ? (
+                <View style={styles.routeAssignCard}>
+                  <Text style={styles.routeAssignTitle}>Route Assignment</Text>
+
+                  {selectedSite.routeId ? (
+                    <View style={styles.routeAssignedBadge}>
+                      <Ionicons
+                        name="checkmark-circle-outline"
+                        size={14}
+                        color="#0F766E"
+                      />
+                      <Text style={styles.routeAssignedText}>
+                        Assigned: {getRouteLabelById(selectedSite.routeId)}
+                      </Text>
+                    </View>
+                  ) : isLoadingRoutes ? (
+                    <View style={styles.routeLoadingRow}>
+                      <ActivityIndicator size="small" color="#1E40AF" />
+                      <Text style={styles.routeLoadingText}>
+                        {"Loading today's routes..."}
+                      </Text>
+                    </View>
+                  ) : todayRoutes.length === 0 ? (
+                    <Text style={styles.siteHelperText}>
+                      No routes available on your truck today.
+                    </Text>
+                  ) : (
+                    <>
+                      <ScrollView
+                        horizontal
+                        showsHorizontalScrollIndicator={false}
+                        style={styles.sitesScroll}
+                      >
+                        {todayRoutes.map((route, index) => (
+                          <TouchableOpacity
+                            key={route.id}
+                            style={[
+                              styles.routeOption,
+                              selectedRouteId === route.id &&
+                                styles.routeOptionActive,
+                            ]}
+                            onPress={() => setSelectedRouteId(route.id)}
+                            activeOpacity={0.8}
+                          >
+                            <Text
+                              style={[
+                                styles.routeOptionText,
+                                selectedRouteId === route.id &&
+                                  styles.routeOptionTextActive,
+                              ]}
+                            >
+                              {route.label?.trim()
+                                ? route.label
+                                : `Route ${index + 1}`}
+                            </Text>
+                          </TouchableOpacity>
+                        ))}
+                      </ScrollView>
+                      <TouchableOpacity
+                        style={styles.routeAssignButton}
+                        onPress={assignRouteToSelectedSite}
+                        disabled={!selectedRouteId || isAssigningRoute}
+                        activeOpacity={0.8}
+                      >
+                        {isAssigningRoute ? (
+                          <ActivityIndicator size="small" color="#FFFFFF" />
+                        ) : (
+                          <Text style={styles.routeAssignButtonText}>
+                            Assign Selected Route
+                          </Text>
+                        )}
+                      </TouchableOpacity>
+                    </>
+                  )}
+                </View>
+              ) : null}
+            </View>
+          </ScrollView>
+        ) : (
+          <View style={styles.modalStateCard}>
+            <Ionicons name="person-circle-outline" size={32} color="#94A3B8" />
+            <Text style={styles.modalStateTitle}>No customer selected</Text>
+            <Text style={styles.modalStateText}>
+              Search or create a customer first.
+            </Text>
+          </View>
+        )}
+      </ActionModal>
     </View>
   );
 };
@@ -2661,6 +2773,28 @@ const styles = StyleSheet.create({
   phoneInput: {
     paddingRight: 8,
   },
+  customerPlaceholderCard: {
+    marginTop: 12,
+    borderRadius: 14,
+    borderWidth: 1,
+    borderColor: "#E2E8F0",
+    backgroundColor: "#F8FAFC",
+    padding: 16,
+    alignItems: "center",
+  },
+  customerPlaceholderTitle: {
+    marginTop: 10,
+    fontSize: 14,
+    fontWeight: "700",
+    color: "#0F172A",
+  },
+  customerPlaceholderText: {
+    marginTop: 6,
+    fontSize: 12,
+    lineHeight: 18,
+    color: "#64748B",
+    textAlign: "center",
+  },
   customerActionsRow: {
     flexDirection: "row",
     gap: 10,
@@ -2732,8 +2866,8 @@ const styles = StyleSheet.create({
     borderRadius: 12,
     paddingVertical: 10,
     paddingHorizontal: 12,
-    marginRight: 10,
-    width: 210,
+    marginBottom: 10,
+    width: "100%",
   },
   customerMatchCardActive: {
     borderColor: "#1E40AF",
@@ -2768,10 +2902,35 @@ const styles = StyleSheet.create({
     fontWeight: "700",
     color: "#1E3A8A",
   },
+  selectedCustomerTopRow: {
+    flexDirection: "row",
+    alignItems: "flex-start",
+    gap: 12,
+  },
+  selectedCustomerCopy: {
+    flex: 1,
+  },
   selectedCustomerMeta: {
     marginTop: 3,
     fontSize: 12,
     color: "#475569",
+  },
+  manageCustomerButton: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
+    alignSelf: "flex-start",
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: "#BFDBFE",
+    backgroundColor: "#FFFFFF",
+    paddingHorizontal: 10,
+    paddingVertical: 8,
+  },
+  manageCustomerButtonText: {
+    fontSize: 12,
+    fontWeight: "700",
+    color: "#1E40AF",
   },
   sitesContainer: {
     marginTop: 12,
@@ -3006,6 +3165,145 @@ const styles = StyleSheet.create({
     fontSize: 12,
     fontWeight: "700",
     color: "#FFFFFF",
+  },
+  collapsibleHeader: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    marginBottom: 12,
+  },
+  collapsibleTitle: {
+    marginBottom: 0,
+  },
+  collapsibleHeaderRight: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
+  },
+  collapsibleHeaderText: {
+    fontSize: 12,
+    fontWeight: "700",
+    color: "#64748B",
+  },
+  remarkPreview: {
+    color: "#475569",
+    fontSize: 13,
+    lineHeight: 20,
+    paddingHorizontal: 2,
+  },
+  modalOverlay: {
+    flex: 1,
+    backgroundColor: "#FFFFFF",
+  },
+  modalCard: {
+    flex: 1,
+    backgroundColor: "#FFFFFF",
+    paddingHorizontal: 20,
+  },
+  modalHeader: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    marginBottom: 14,
+    paddingBottom: 12,
+    borderBottomWidth: 1,
+    borderBottomColor: "#E2E8F0",
+  },
+  modalTitle: {
+    fontSize: 18,
+    fontWeight: "700",
+    color: "#0F172A",
+  },
+  modalCloseButton: {
+    width: 34,
+    height: 34,
+    borderRadius: 10,
+    backgroundColor: "#F8FAFC",
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  modalBody: {
+    gap: 12,
+  },
+  modalSearchRow: {
+    gap: 12,
+  },
+  modalSearchInputWrapper: {
+    flexDirection: "row",
+    alignItems: "center",
+    backgroundColor: "#F8FAFC",
+    borderRadius: 14,
+    paddingHorizontal: 16,
+    height: 52,
+  },
+  modalPrimaryButton: {
+    height: 46,
+    borderRadius: 12,
+    backgroundColor: "#1E40AF",
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  modalPrimaryButtonDisabled: {
+    backgroundColor: "#CBD5E1",
+  },
+  modalPrimaryButtonText: {
+    color: "#FFFFFF",
+    fontSize: 13,
+    fontWeight: "700",
+  },
+  modalHelperText: {
+    color: "#64748B",
+    fontSize: 12,
+    lineHeight: 18,
+  },
+  modalResultsList: {
+    flexGrow: 0,
+  },
+  modalResultsContent: {
+    paddingBottom: 4,
+  },
+  customerManageContent: {
+    paddingBottom: 4,
+  },
+  modalStateCard: {
+    borderRadius: 14,
+    borderWidth: 1,
+    borderColor: "#E2E8F0",
+    backgroundColor: "#F8FAFC",
+    padding: 18,
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 8,
+  },
+  modalStateTitle: {
+    fontSize: 14,
+    fontWeight: "700",
+    color: "#0F172A",
+  },
+  modalStateText: {
+    fontSize: 12,
+    color: "#64748B",
+    lineHeight: 18,
+    textAlign: "center",
+  },
+  customerNoticeCard: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: "#BBF7D0",
+    backgroundColor: "#F0FDF4",
+    padding: 12,
+    marginTop: 2,
+    marginBottom: 2,
+  },
+  customerNoticeText: {
+    flex: 1,
+    color: "#166534",
+    fontSize: 12,
+    fontWeight: "600",
+    lineHeight: 18,
   },
   paymentContainer: {
     gap: 12,

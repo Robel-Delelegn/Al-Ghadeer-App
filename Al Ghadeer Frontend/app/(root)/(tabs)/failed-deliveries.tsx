@@ -94,7 +94,7 @@ const FailedDeliveries = () => {
       updateOrderStatus(order.id, 'failed', selectedReason, remark);
       showSuccessAlert(
         'Failed Delivery Reported',
-        `Failure submitted successfully. Note ID: ${parseResult.data.deliveryNoteId}`,
+        'Failure submitted successfully.',
         [{ text: 'OK', onPress: () => router.push('/(root)/(tabs)/home') }]
       );
     } catch (error) {
@@ -224,13 +224,6 @@ const FailedDeliveries = () => {
           </View>
           
           <View style={{ gap: 12 }}>
-            <View style={{ flexDirection: 'row', justifyContent: 'space-between' }}>
-              <Text style={{ color: '#6C757D', fontSize: 14, fontWeight: '500' }}>Order ID:</Text>
-              <Text style={{ color: '#212529', fontSize: 14, fontWeight: '600' }}>
-                {order.display_id || order.order_number || order.id}
-              </Text>
-            </View>
-            
             <View style={{ flexDirection: 'row', justifyContent: 'space-between' }}>
               <Text style={{ color: '#6C757D', fontSize: 14, fontWeight: '500' }}>Customer:</Text>
               <Text style={{ color: '#212529', fontSize: 14, fontWeight: '600' }}>

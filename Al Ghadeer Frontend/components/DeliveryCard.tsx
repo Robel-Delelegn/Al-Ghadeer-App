@@ -45,11 +45,9 @@ const DeliveryCard = ({ item, onPress }: { item: Order; onPress?: () => void }) 
   // Handle both nested and flat structures for backward compatibility
   const customerName =  item.customer_name || 'N/A';
   const customerAddress = item.customer_address || 'N/A';
-  const displayId = item.display_id || item.order_number || item.id;
   const routeName = item.route_name || item.delivery_zone || 'Unassigned route';
   const earlierVisits = Math.max(0, item.earlier_visits_today_count || 0);
   const hasNewItems = item.has_new_items === true;
-  const hasExactLocation = item.has_exact_location === true;
   const taskCount = Array.isArray(item.tasks) ? item.tasks.length : 0;
   const requiresSignature = item.requires_signature === true;
   const requiresImmediateInvoice = item.requires_immediate_invoice === true;
@@ -231,10 +229,7 @@ const DeliveryCard = ({ item, onPress }: { item: Order; onPress?: () => void }) 
         </View>
       </View>
 
-      <View className="flex-row items-center justify-between mb-1">
-        <Text className="text-[11px] text-gray-500 font-JakartaMedium" numberOfLines={1}>
-          Stop ID: {displayId}
-        </Text>
+      <View className="flex-row items-center justify-end mb-1">
         <Text className="text-[11px] text-sky-700 font-JakartaSemiBold" numberOfLines={1}>
           {routeName}
         </Text>
@@ -266,11 +261,6 @@ const DeliveryCard = ({ item, onPress }: { item: Order; onPress?: () => void }) 
             </Text>
           </View>
         ) : null}
-        <View className={`px-2 py-1 rounded-full border ${hasExactLocation ? 'border-green-200 bg-green-50' : 'border-amber-200 bg-amber-50'}`}>
-          <Text className={`text-[10px] font-JakartaSemiBold ${hasExactLocation ? 'text-green-700' : 'text-amber-700'}`}>
-            {hasExactLocation ? 'Exact location' : 'Approx location'}
-          </Text>
-        </View>
         {requiresSignature ? (
           <View className="px-2 py-1 rounded-full border border-violet-200 bg-violet-50">
             <Text className="text-[10px] text-violet-700 font-JakartaSemiBold">

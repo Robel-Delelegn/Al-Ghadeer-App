@@ -6,7 +6,6 @@ import { useLocationStore, useOrderStore } from '@/store/index';
 import { Order } from '@/types/order';
 import ApiErrorText from '@/components/ApiErrorText';
 import { useAuthStore, authenticatedFetch } from '@/store/auth';
-import { AssignmentDay, AssignmentsPayload, getRoutesSummary, getTruckLabel } from '@/utils/assignments';
 import { parseApiResponseWithSoftError } from '@/utils/api';
 import { DeliveryStop, mapDeliveryToOrder } from '@/utils/deliveries';
 import { resolveResourceUrl } from '@/utils/resources';
@@ -54,9 +53,6 @@ const Home = () => {
   const [refreshing, setRefreshing] = useState(false);
   const [isProfileModalVisible, setIsProfileModalVisible] = useState(false);
   const [apiError, setApiError] = useState<string | null>(null);
-  const [todayAssignment, setTodayAssignment] = useState<AssignmentDay | null>(null);
-  const [assignmentsLoading, setAssignmentsLoading] = useState(false);
-  const [assignmentsError, setAssignmentsError] = useState<string | null>(null);
   
   // Helper function to check if order is currently available
   const isOrderCurrentlyAvailable = (order: Order) => {
@@ -237,56 +233,16 @@ const Home = () => {
     }
   }, [user?.id, currentDriver?.id, IP_ADDRESS, updateDriverInfo]);
 
-  const fetchAssignmentsSummary = useCallback(async () => {
-    const driverId = user?.id || currentDriver?.id;
-    if (!driverId) {
-      setTodayAssignment(null);
-      return;
-    }
-
-    try {
-      setAssignmentsLoading(true);
-      setAssignmentsError(null);
-      const url = `${IP_ADDRESS}/assignments`;
-      const response = await authenticatedFetch(url, {
-        headers: {
-          'X-Driver-Id': driverId,
-        },
-      });
-      const result = await parseApiResponseWithSoftError<AssignmentsPayload>(response);
-
-      if (!result.ok) {
-        setTodayAssignment(null);
-        setAssignmentsError(result.error);
-        return;
-      }
-
-      const days = Array.isArray(result.data?.days) ? result.data.days : [];
-      const today = days.find((day) => day.dayOfWeek === result.data.todayDayOfWeek) ?? null;
-      setTodayAssignment(today);
-    } catch (error) {
-      setTodayAssignment(null);
-      setAssignmentsError(error instanceof Error ? error.message : 'Could not load assignments.');
-    } finally {
-      setAssignmentsLoading(false);
-    }
-  }, [user?.id, currentDriver?.id, IP_ADDRESS]);
-
   const onRefresh = useCallback(() => {
     setRefreshing(true);
     fetchDeliveries();
     fetchDriverInfo();
-    fetchAssignmentsSummary();
-  }, [fetchDeliveries, fetchDriverInfo, fetchAssignmentsSummary]);
+  }, [fetchDeliveries, fetchDriverInfo]);
 
   useEffect(() => {
     fetchDeliveries();
     fetchDriverInfo();
-    fetchAssignmentsSummary();
-  }, [fetchDeliveries, fetchDriverInfo, fetchAssignmentsSummary]);
-
-  const assignmentTruck = getTruckLabel(todayAssignment?.truck ?? null);
-  const assignmentRoutesText = getRoutesSummary(todayAssignment?.routes ?? []);
+  }, [fetchDeliveries, fetchDriverInfo]);
   return (
     <GestureHandlerRootView style={{ flex: 1 }}>
       <View className="flex-1 bg-white">
@@ -363,49 +319,6 @@ const Home = () => {
               </View>
             </TouchableOpacity>
           </View>
-        </View>
-
-        <View className="px-4 pb-2">
-          <TouchableOpacity
-            onPress={() => router.push('/(root)/(tabs)/assignments')}
-            className="bg-white rounded-2xl px-4 py-3 border border-gray-200"
-            style={{
-              shadowColor: '#0F172A',
-              shadowOpacity: 0.06,
-              shadowRadius: 12,
-              shadowOffset: { width: 0, height: 6 },
-              elevation: 3,
-            }}
-          >
-            <View className="flex-row items-center justify-between">
-              <View className="flex-row items-center gap-3 flex-1 pr-2">
-                <View className="w-9 h-9 rounded-xl bg-sky-100 items-center justify-center">
-                  <Ionicons name="calendar-outline" size={18} color="#0284C7" />
-                </View>
-                <View className="flex-1">
-                  <Text className="text-[13px] text-gray-500 font-JakartaMedium">Today's Assignment</Text>
-                  <Text className="text-sm text-gray-900 font-JakartaSemiBold" numberOfLines={1}>
-                    {assignmentsLoading ? 'Loading assignment...' : assignmentTruck}
-                  </Text>
-                  <Text className="text-xs text-gray-500 font-JakartaMedium" numberOfLines={1}>
-                    {assignmentsLoading ? 'Checking active routes...' : assignmentRoutesText}
-                  </Text>
-                </View>
-              </View>
-              <View className="flex-row items-center gap-1">
-                {assignmentsLoading ? (
-                  <ActivityIndicator size={14} />
-                ) : null}
-                <Text className="text-sky-700 text-xs font-JakartaSemiBold">View Week</Text>
-                <Ionicons name="chevron-forward" size={14} color="#0369A1" />
-              </View>
-            </View>
-            {assignmentsError ? (
-              <Text className="text-[11px] text-amber-600 mt-2 font-JakartaMedium" numberOfLines={1}>
-                {assignmentsError}
-              </Text>
-            ) : null}
-          </TouchableOpacity>
         </View>
 
         {/* Today's Deliveries Section */}

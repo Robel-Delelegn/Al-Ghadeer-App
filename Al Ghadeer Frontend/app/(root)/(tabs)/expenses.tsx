@@ -967,9 +967,6 @@ const Expenses = () => {
                         <Text style={styles.historyTitle} numberOfLines={1}>
                           {expense.title || "Untitled expense"}
                         </Text>
-                        <Text style={styles.historyMetaLine}>
-                          Request ID: {expense.requestId}
-                        </Text>
                       </View>
                       <View
                         style={[
@@ -1075,7 +1072,7 @@ const Expenses = () => {
             <View>
               <Text style={styles.modalTitle}>Expense Details</Text>
               <Text style={styles.modalSubtitle}>
-                {selectedExpense?.requestId || "Loading..."}
+                {selectedExpense?.title || "Loading..."}
               </Text>
             </View>
             <TouchableOpacity

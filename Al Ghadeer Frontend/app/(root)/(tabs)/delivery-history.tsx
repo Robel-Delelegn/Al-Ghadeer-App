@@ -426,13 +426,6 @@ const getListStatusConfig = (item: HistoryListItem) => {
   };
 };
 
-const getTaskRef = (task: HistoryTask): string => {
-  if (task.type === "subscription") return `Item ${task.itemId}`;
-  if (task.type === "prepaid_order") return `Prepaid ${task.orderId}`;
-  if (task.type === "staff_order") return `Staff ${task.staffOrderId}`;
-  return `Order ${task.orderId}`;
-};
-
 const HistoryScreen = () => {
   const insets = useSafeAreaInsets();
   const router = useRouter();
@@ -784,9 +777,6 @@ const HistoryScreen = () => {
           </View>
 
           <View style={styles.cardTopLine}>
-            <Text style={styles.displayIdText} numberOfLines={1}>
-              {getListDisplayId(item)}
-            </Text>
             <View style={[styles.statusBadge, { backgroundColor: status.bg }]}>
               <Text style={[styles.statusBadgeText, { color: status.text }]}>
                 {status.label}
@@ -854,16 +844,16 @@ const HistoryScreen = () => {
       </View>
 
       <View style={styles.searchRow}>
-        <View style={styles.searchWrap}>
-          <Ionicons name="search" size={16} color="#94A3B8" />
-          <TextInput
-            style={styles.searchInput}
-            value={search}
-            onChangeText={setSearch}
-            placeholder="Search id, customer, phone, address"
-            placeholderTextColor="#94A3B8"
-          />
-        </View>
+            <View style={styles.searchWrap}>
+              <Ionicons name="search" size={16} color="#94A3B8" />
+              <TextInput
+                style={styles.searchInput}
+                value={search}
+                onChangeText={setSearch}
+                placeholder="Search customer, phone, address"
+                placeholderTextColor="#94A3B8"
+              />
+            </View>
         <TouchableOpacity
           style={[
             styles.calendarTrigger,
@@ -1138,7 +1128,7 @@ const HistoryScreen = () => {
             <View>
               <Text style={styles.modalTitle}>History Detail</Text>
               <Text style={styles.modalSubtitle}>
-                {detailData ? detailData.id : "Loading..."}
+                {detailData ? formatDate(detailData.createdAt, true) : "Loading..."}
               </Text>
             </View>
             <TouchableOpacity
@@ -1173,12 +1163,6 @@ const HistoryScreen = () => {
                   <Text style={styles.detailLineLabel}>Created At:</Text>{" "}
                   {formatDate(detailData.createdAt, true)}
                 </Text>
-                {detailData.kind === "delivery" ? (
-                  <Text style={styles.detailLine}>
-                    <Text style={styles.detailLineLabel}>Display ID:</Text>{" "}
-                    {detailData.displayId || "N/A"}
-                  </Text>
-                ) : null}
               </View>
 
               <View style={styles.detailSection}>
@@ -1277,10 +1261,7 @@ const HistoryScreen = () => {
                       detailData.tasks.map((task) => (
                         <View key={task.id} style={styles.detailListRow}>
                           <Text style={styles.detailListTitle}>
-                            {task.type}
-                          </Text>
-                          <Text style={styles.detailListMeta}>
-                            {getTaskRef(task)}
+                            {task.type.replace(/_/g, " ")}
                           </Text>
                           <Text style={styles.detailListMeta}>
                             Outcome: {task.outcome || "N/A"}
@@ -1342,10 +1323,6 @@ const HistoryScreen = () => {
                 <Text style={styles.detailSectionTitle}>Sale</Text>
                 {detailSale ? (
                   <>
-                    <Text style={styles.detailLine}>
-                      <Text style={styles.detailLineLabel}>Sale ID:</Text>{" "}
-                      {detailSale.saleId}
-                    </Text>
                     <Text style={styles.detailLine}>
                       <Text style={styles.detailLineLabel}>Subtotal:</Text> AED{" "}
                       {formatAmount(detailSale.totals.subtotal)}

@@ -267,14 +267,11 @@ const OrderDetails = () => {
   const customerName = order.customer_name || 'Unknown';
   const customerPhone = order.customer_phone || '—';
   const customerAddress =  order.customer_address || '—';
-  const stopDisplayId = order.display_id || order.order_number || order.id;
   const totalAmount = order.total_amount || 0;
   const deliveryInstructions = order.delivery_instructions;
   const routeName = order.route_name || order.delivery_zone || 'Unassigned route';
-  const routeId = order.route_id || 'N/A';
   const earlierVisitsCount = Math.max(0, order.earlier_visits_today_count || 0);
   const hasNewItems = order.has_new_items === true;
-  const hasExactLocation = order.has_exact_location === true;
   const parsedTasks = parseDeliveryTasks(Array.isArray(order.tasks) ? order.tasks : []);
 
   const statusConfig: Record<string, { color: string; bgColor: string; label: string }> = {
@@ -301,7 +298,7 @@ const OrderDetails = () => {
           <Ionicons name="chevron-back" size={20} color="#1E40AF" />
         </TouchableOpacity>
         <View style={styles.headerCenter}>
-          <Text style={styles.headerTitle}>{stopDisplayId}</Text>
+          <Text style={styles.headerTitle}>{customerName}</Text>
           <View style={[styles.statusPill, { backgroundColor: currentStatus.bgColor }]}>
             <View style={[styles.statusDot, { backgroundColor: currentStatus.color }]} />
             <Text style={[styles.statusPillText, { color: currentStatus.color }]}>
@@ -365,20 +362,8 @@ const OrderDetails = () => {
           </View>
           <View style={styles.detailRowDivider} />
           <View style={styles.detailRow}>
-            <Text style={styles.detailLabel}>Route ID</Text>
-            <Text style={styles.detailValue}>{routeId}</Text>
-          </View>
-          <View style={styles.detailRowDivider} />
-          <View style={styles.detailRow}>
             <Text style={styles.detailLabel}>Earlier Visits Today</Text>
             <Text style={styles.detailValue}>{earlierVisitsCount}</Text>
-          </View>
-          <View style={styles.detailRowDivider} />
-          <View style={styles.detailRow}>
-            <Text style={styles.detailLabel}>Location Precision</Text>
-            <Text style={[styles.detailValue, hasExactLocation ? styles.goodText : styles.warnText]}>
-              {hasExactLocation ? 'Exact location' : 'Approximate location'}
-            </Text>
           </View>
           <View style={styles.detailRowDivider} />
           <View style={styles.detailRow}>
@@ -456,11 +441,6 @@ const OrderDetails = () => {
           <View style={styles.card}>
             <Text style={styles.sectionLabel}>ORDER DETAILS</Text>
           <View style={styles.detailRow}>
-            <Text style={styles.detailLabel}>Display ID</Text>
-            <Text style={styles.detailValue}>{stopDisplayId}</Text>
-            </View>
-          <View style={styles.detailRowDivider} />
-          <View style={styles.detailRow}>
             <Text style={styles.detailLabel}>Payment</Text>
             <Text style={styles.detailValue}>
                 {order.payment_method
@@ -523,7 +503,7 @@ const OrderDetails = () => {
                   <View style={styles.taskContent}>
                     <Text style={styles.taskTitle} numberOfLines={1}>{task.label}</Text>
                     <Text style={styles.taskMeta}>
-                      {task.bucket.replace(/_/g, ' ')} • {task.id}
+                      {task.bucket.replace(/_/g, ' ')}
                     </Text>
                   </View>
                 </View>

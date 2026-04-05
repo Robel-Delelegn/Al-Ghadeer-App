@@ -1,12 +1,18 @@
 import ApiErrorText from "@/components/ApiErrorText";
 import { icons } from "@/constants";
 import { authenticatedFetch, useAuthStore } from "@/store/auth";
+import { useOrderStore } from "@/store/index";
 import {
   showErrorAlert,
   showSuccessAlert,
   showWarningAlert,
 } from "@/store/utils/alert";
 import { parseApiResponseWithSoftError } from "@/utils/api";
+import {
+  AssignmentsPayload,
+  getRoutesSummary,
+  getTruckLabel,
+} from "@/utils/assignments";
 import { resolveResourceUrl } from "@/utils/resources";
 import { Ionicons } from "@expo/vector-icons";
 import * as FileSystem from "expo-file-system";
@@ -144,12 +150,18 @@ const Profile = () => {
   const insets = useSafeAreaInsets();
   const router = useRouter();
   const { user, updateUser, signOut } = useAuthStore();
+  const { currentDriver } = useOrderStore();
 
   const [profile, setProfile] = useState<DriverProfile | null>(null);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [busyAction, setBusyAction] = useState<string | null>(null);
   const [apiError, setApiError] = useState<string | null>(null);
+  const [assignmentsPayload, setAssignmentsPayload] =
+    useState<AssignmentsPayload | null>(null);
+  const [assignmentsLoading, setAssignmentsLoading] = useState(true);
+  const [assignmentsRefreshing, setAssignmentsRefreshing] = useState(false);
+  const [assignmentsError, setAssignmentsError] = useState<string | null>(null);
 
   const [nameModalVisible, setNameModalVisible] = useState(false);
   const [firstNameDraft, setFirstNameDraft] = useState("");
@@ -161,6 +173,7 @@ const Profile = () => {
     useState<ContactEditorState>(EMPTY_EDITOR);
 
   const isBusy = !!busyAction;
+  const driverId = user?.id || currentDriver?.id;
 
   const displayName = useMemo(() => {
     if (profile) {
@@ -187,12 +200,12 @@ const Profile = () => {
       "Content-Type": "application/json",
     };
 
-    if (user?.id) {
-      headers["X-Driver-Id"] = user.id;
+    if (driverId) {
+      headers["X-Driver-Id"] = driverId;
     }
 
     return headers;
-  }, [user?.id]);
+  }, [driverId]);
 
   const requestProfile = useCallback(
     async <T,>(path: string, options: RequestInit = {}) => {
@@ -303,6 +316,90 @@ const Profile = () => {
   useEffect(() => {
     void fetchProfile(true);
   }, [fetchProfile]);
+
+  const fetchAssignments = useCallback(
+    async (initialLoad = false) => {
+      if (!driverId) {
+        setAssignmentsPayload(null);
+        setAssignmentsError("Driver ID not available.");
+        setAssignmentsLoading(false);
+        setAssignmentsRefreshing(false);
+        return;
+      }
+
+      if (initialLoad) {
+        setAssignmentsLoading(true);
+      } else {
+        setAssignmentsRefreshing(true);
+      }
+
+      setAssignmentsError(null);
+
+      try {
+        const response = await authenticatedFetch(
+          `${API_BASE_URL}/assignments`,
+          {
+            method: "GET",
+            headers: {
+              "X-Driver-Id": driverId,
+            },
+          },
+        );
+
+        const result =
+          await parseApiResponseWithSoftError<AssignmentsPayload>(response);
+
+        if (!result.ok) {
+          setAssignmentsError(result.error);
+          setAssignmentsPayload(null);
+          return;
+        }
+
+        const normalizedDays = Array.isArray(result.data.days)
+          ? [...result.data.days].sort((a, b) => a.dayOfWeek - b.dayOfWeek)
+          : [];
+
+        setAssignmentsPayload({
+          todayDayOfWeek: result.data.todayDayOfWeek,
+          days: normalizedDays,
+        });
+      } catch (error) {
+        setAssignmentsPayload(null);
+        setAssignmentsError(
+          error instanceof Error
+            ? error.message
+            : "Could not load assignments.",
+        );
+      } finally {
+        if (initialLoad) {
+          setAssignmentsLoading(false);
+        } else {
+          setAssignmentsRefreshing(false);
+        }
+      }
+    },
+    [driverId],
+  );
+
+  useEffect(() => {
+    void fetchAssignments(true);
+  }, [fetchAssignments]);
+
+  const todayAssignment = useMemo(() => {
+    if (!assignmentsPayload) return null;
+    return (
+      assignmentsPayload.days.find(
+        (day) => day.dayOfWeek === assignmentsPayload.todayDayOfWeek,
+      ) || null
+    );
+  }, [assignmentsPayload]);
+
+  const assignmentTruck = getTruckLabel(todayAssignment?.truck ?? null);
+  const assignmentRoutesText = getRoutesSummary(todayAssignment?.routes ?? []);
+
+  const handleRefresh = useCallback(() => {
+    void Promise.all([fetchProfile(false), fetchAssignments(false)]);
+  }, [fetchAssignments, fetchProfile]);
 
   const executeProfileMutation = useCallback(
     async (params: {
@@ -731,8 +828,8 @@ const Profile = () => {
         }}
         refreshControl={
           <RefreshControl
-            refreshing={refreshing}
-            onRefresh={() => void fetchProfile(false)}
+            refreshing={refreshing || assignmentsRefreshing}
+            onRefresh={handleRefresh}
           />
         }
         showsVerticalScrollIndicator={false}
@@ -741,9 +838,6 @@ const Profile = () => {
           <Image source={avatarSource} style={styles.avatar} />
 
           <Text style={styles.displayName}>{displayName}</Text>
-          <Text style={styles.driverId}>
-            Driver ID: {profile?.id || user?.id || "—"}
-          </Text>
 
           <TouchableOpacity
             style={[styles.photoButton, isBusy && styles.disabledButton]}
@@ -759,6 +853,70 @@ const Profile = () => {
               </>
             )}
           </TouchableOpacity>
+        </View>
+
+        <View style={styles.card}>
+          <View style={styles.cardHeader}>
+            <Text style={styles.cardTitle}>Assignments</Text>
+          </View>
+          <View style={styles.cardBody}>
+            {assignmentsLoading ? (
+              <View style={styles.assignmentLoadingState}>
+                <ActivityIndicator size="small" color="#0284C7" />
+                <Text style={styles.assignmentLoadingText}>
+                  Loading assignment...
+                </Text>
+              </View>
+            ) : (
+              <TouchableOpacity
+                onPress={() => router.push("/(root)/(tabs)/assignments")}
+                style={styles.assignmentSummaryButton}
+                activeOpacity={0.85}
+              >
+                <View style={styles.assignmentSummaryRow}>
+                  <View style={styles.assignmentSummaryIcon}>
+                    <Ionicons
+                      name="calendar-outline"
+                      size={18}
+                      color="#0284C7"
+                    />
+                  </View>
+                  <View style={styles.assignmentSummaryContent}>
+                    <Text style={styles.assignmentSummaryLabel}>
+                      Today Assignment
+                    </Text>
+                    <Text
+                      style={styles.assignmentSummaryTitle}
+                      numberOfLines={1}
+                    >
+                      {assignmentTruck}
+                    </Text>
+                    <Text
+                      style={styles.assignmentSummarySubtitle}
+                      numberOfLines={1}
+                    >
+                      {assignmentRoutesText}
+                    </Text>
+                  </View>
+                  <View style={styles.assignmentSummaryRight}>
+                    <Text style={styles.assignmentSummaryAction}>
+                      View Week
+                    </Text>
+                    <Ionicons
+                      name="chevron-forward"
+                      size={14}
+                      color="#0369A1"
+                    />
+                  </View>
+                </View>
+                {assignmentsError ? (
+                  <Text style={styles.assignmentErrorText}>
+                    {assignmentsError}
+                  </Text>
+                ) : null}
+              </TouchableOpacity>
+            )}
+          </View>
         </View>
 
         <View style={styles.card}>
@@ -1216,6 +1374,74 @@ const styles = StyleSheet.create({
   emptyText: {
     color: "#64748B",
     fontSize: 13,
+  },
+  assignmentLoadingState: {
+    paddingVertical: 8,
+    alignItems: "center",
+    gap: 8,
+  },
+  assignmentLoadingText: {
+    fontSize: 13,
+    color: "#475569",
+    fontWeight: "500",
+  },
+  assignmentSummaryButton: {
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: "#E2E8F0",
+    backgroundColor: "#FFFFFF",
+    paddingHorizontal: 14,
+    paddingVertical: 12,
+  },
+  assignmentSummaryRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+  },
+  assignmentSummaryIcon: {
+    width: 36,
+    height: 36,
+    borderRadius: 12,
+    backgroundColor: "#E0F2FE",
+    alignItems: "center",
+    justifyContent: "center",
+    marginRight: 12,
+  },
+  assignmentSummaryContent: {
+    flex: 1,
+    paddingRight: 10,
+  },
+  assignmentSummaryLabel: {
+    color: "#64748B",
+    fontSize: 12,
+    fontWeight: "500",
+  },
+  assignmentSummaryTitle: {
+    marginTop: 2,
+    color: "#0F172A",
+    fontSize: 14,
+    fontWeight: "700",
+  },
+  assignmentSummarySubtitle: {
+    marginTop: 2,
+    color: "#64748B",
+    fontSize: 12,
+    fontWeight: "500",
+  },
+  assignmentSummaryRight: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 2,
+  },
+  assignmentSummaryAction: {
+    color: "#0369A1",
+    fontSize: 11,
+    fontWeight: "700",
+  },
+  assignmentErrorText: {
+    color: "#B45309",
+    fontSize: 13,
+    marginTop: 10,
   },
   signOutButton: {
     marginTop: 4,

@@ -583,7 +583,7 @@ const ProductList: React.FC = () => {
           <Text style={styles.headerTitle}>Add Products</Text>
           {currentOrder && (
             <Text style={styles.headerSubtitle}>
-              {currentOrder.order_number}
+              {currentOrder.customer_name || "Current delivery"}
             </Text>
           )}
         </View>

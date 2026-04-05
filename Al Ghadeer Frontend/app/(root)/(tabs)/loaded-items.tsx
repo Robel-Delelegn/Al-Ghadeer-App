@@ -295,9 +295,6 @@ const LoadedItems = () => {
                 <Text style={styles.truckMeta}>
                   Make: {truckData.truck.make || "—"}
                 </Text>
-                <Text style={styles.truckMeta}>
-                  Truck ID: {truckData.truck.id}
-                </Text>
               </View>
             </View>
 
@@ -329,13 +326,6 @@ const LoadedItems = () => {
               <Text style={styles.statusDescription}>
                 {statusConfig.description}
               </Text>
-
-              {truckData.verificationId ? (
-                <Text style={styles.verificationIdText} numberOfLines={1}>
-                  Verification ID: {truckData.verificationId}
-                </Text>
-              ) : null}
-
               {canAccept ? (
                 <TouchableOpacity
                   style={[

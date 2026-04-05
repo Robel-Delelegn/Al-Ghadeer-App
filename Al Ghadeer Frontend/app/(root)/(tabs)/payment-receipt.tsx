@@ -63,9 +63,7 @@ const PaymentReceipt: React.FC = () => {
     name: orderDetail.customer_name || 'N/A',
     address: orderDetail.customer_address || 'N/A',
     contact: orderDetail.customer_phone || 'N/A',
-    customerId: orderDetail.customer_id ?? '',  // from customer.id - no dummy
-  } : { name: 'N/A', address: 'N/A', contact: 'N/A', customerId: '' };
-  const customerIdDisplay = shippingDetails.customerId || '—';
+  } : { name: 'N/A', address: 'N/A', contact: 'N/A' };
   const paymentMethodDisplay = selectedPaymentMethod === 'wallet' ? 'Wallet' : 
                                 selectedPaymentMethod === 'credit' ? 'Credit' :
                                 ['invoice', 'credit_invoice'].includes(selectedPaymentMethod ?? '') ? 'Credit' :
@@ -287,10 +285,6 @@ const PaymentReceipt: React.FC = () => {
               <div class="info-row">
                 <span class="info-label">Date:</span>
                 <span>${dateStr}</span>
-              </div>
-              <div class="info-row">
-                <span class="info-label">Order Ref:</span>
-                <span>${orderId}</span>
               </div>
               <div class="info-row">
                 <span class="info-label">Delivered to:</span>
@@ -533,16 +527,8 @@ const PaymentReceipt: React.FC = () => {
                 <span></span>
               </div>
               <div class="info-row">
-                <span class="info-label">Order No.:</span>
-                <span>${orderId}</span>
-              </div>
-              <div class="info-row">
                 <span class="info-label">Payment Mode:</span>
                 <span>${paymentMethodDisplay}</span>
-            </div>
-              <div class="info-row">
-                <span class="info-label">Customer ID:</span>
-                <span>${customerIdDisplay}</span>
               </div>
           </div>
 
@@ -834,7 +820,7 @@ const PaymentReceipt: React.FC = () => {
             <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 4 }}>
               <Ionicons name={isDeliveryNote ? 'document-text' : 'checkmark-circle'} size={16} color={isDeliveryNote ? '#F57C00' : '#28A745'} />
               <Text style={{ color: isDeliveryNote ? '#E65100' : '#28A745', fontSize: 14, fontWeight: '600', marginLeft: 6 }}>
-                Order #{orderDetail.order_number}
+                {isDeliveryNote ? 'Delivery note ready' : 'Receipt ready'}
               </Text>
             </View>
             <View style={{ flexDirection: 'row', alignItems: 'center' }}>
@@ -894,10 +880,6 @@ const PaymentReceipt: React.FC = () => {
                 <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginBottom: 4 }}>
                   <Text style={{ color: '#6C757D', fontSize: 11, fontWeight: '600' }}>Date:</Text>
                   <Text style={{ color: '#212529', fontSize: 11 }}>{new Date().toISOString().split('T')[0]}</Text>
-                </View>
-                <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginBottom: 4 }}>
-                  <Text style={{ color: '#6C757D', fontSize: 11, fontWeight: '600' }}>Order Ref:</Text>
-                  <Text style={{ color: '#212529', fontSize: 11 }}>{orderId}</Text>
                 </View>
                 <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginBottom: 4 }}>
                   <Text style={{ color: '#6C757D', fontSize: 11, fontWeight: '600' }}>Delivered to:</Text>
@@ -962,16 +944,8 @@ const PaymentReceipt: React.FC = () => {
           </View>
           <View style={{ marginBottom: 16 }}>
             <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginBottom: 4 }}>
-              <Text style={{ color: '#6C757D', fontSize: 11, fontWeight: '600' }}>Order No.:</Text>
-              <Text style={{ color: '#212529', fontSize: 11 }}>{orderId}</Text>
-            </View>
-            <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginBottom: 4 }}>
               <Text style={{ color: '#6C757D', fontSize: 11, fontWeight: '600' }}>Payment Mode:</Text>
               <Text style={{ color: '#212529', fontSize: 11 }}>{paymentMethodDisplay}</Text>
-            </View>
-            <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginBottom: 4 }}>
-              <Text style={{ color: '#6C757D', fontSize: 11, fontWeight: '600' }}>Customer ID:</Text>
-              <Text style={{ color: '#212529', fontSize: 11 }}>{customerIdDisplay}</Text>
             </View>
           </View>
           <View style={{ marginBottom: 16 }}>

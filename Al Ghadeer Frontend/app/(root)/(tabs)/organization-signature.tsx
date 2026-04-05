@@ -489,7 +489,6 @@ const OrganizationSignature: React.FC = () => {
               </View>
               <View style={styles.infoDetails}>
                 <Text style={styles.orgName}>{organizationName}</Text>
-                <Text style={styles.orderNumber}>{orderDetail?.order_number}</Text>
               </View>
             </View>
             
