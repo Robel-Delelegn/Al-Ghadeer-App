@@ -193,6 +193,13 @@ export default function Layout() {
           href: null, // Hide from tab bar
         }}
       />
+      <Tabs.Screen
+        name="assignments"
+        options={{
+          headerShown: false,
+          href: null, // Hide from tab bar
+        }}
+      />
     </Tabs>
   );
 }

@@ -162,7 +162,7 @@ const SignIn = () => {
       await Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
     } catch {}
 
-    const result = await verifyOtp(phone, otpString, tempToken);
+    const result = await verifyOtp(otpString, tempToken);
 
     if (result.success) {
       try {
@@ -236,9 +236,12 @@ const SignIn = () => {
     } catch {}
 
     setIsResendingOtp(true);
-    const result = await resendOtp(phone, tempToken);
+    const result = await resendOtp(tempToken);
 
     if (result.success) {
+      if (result.tempToken) {
+        setTempToken(result.tempToken);
+      }
       setCountdown(60);
       const timer = setInterval(() => {
         setCountdown((prev) => {

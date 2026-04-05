@@ -4,6 +4,7 @@ import { Image, Text, TouchableOpacity, View } from "react-native";
 
 import { icons } from "@/constants";
 import { Driver } from "@/types/order";
+import { resolveResourceUrl } from "@/utils/resources";
 
 interface DriverCardProps {
   item: Driver;
@@ -28,7 +29,7 @@ const DriverCard = ({item, selected, setSelected}: DriverCardProps) => {
             }}
         >
             <Image
-                source={item.profile_image ? {uri: item.profile_image} : icons.person}
+                source={item.profile_image ? {uri: resolveResourceUrl(item.profile_image) || item.profile_image} : icons.person}
                 className="w-14 h-14 rounded-full"
             />
 

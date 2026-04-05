@@ -23,8 +23,8 @@ interface AuthStore {
 
   // Auth actions
   requestOtp: (phone: string) => Promise<{ success: boolean; message?: string; tempToken?: string; requiresOtp?: boolean }>;
-  verifyOtp: (phone: string, otp: string, tempToken: string) => Promise<{ success: boolean; message?: string }>;
-  resendOtp: (phone: string, tempToken: string) => Promise<{ success: boolean; message?: string }>;
+  verifyOtp: (otp: string, tempToken: string) => Promise<{ success: boolean; message?: string }>;
+  resendOtp: (tempToken: string) => Promise<{ success: boolean; message?: string; tempToken?: string; requiresOtp?: boolean }>;
   signOut: () => Promise<void>;
   checkAuth: () => Promise<boolean>;
   updateUser: (user: User) => void;
@@ -54,13 +54,13 @@ export const useAuthStore = create<AuthStore>()(
 
       /**
        * Request OTP - First time login: Request OTP via SMS
-       * POST /auth/request-otp
+       * POST /auth/login
        */
       requestOtp: async (phone: string) => {
         set({ isLoading: true });
         try {
           console.log('[requestOtp] Input:', { phone, API_BASE_URL });
-          const url = `${API_BASE_URL}/auth/request-otp`;
+          const url = `${API_BASE_URL}/auth/login`;
           console.log('[requestOtp] Request:', { method: 'POST', url, body: { phone } });
 
           const response = await fetch(url, {
@@ -132,7 +132,7 @@ export const useAuthStore = create<AuthStore>()(
         }
       },
 
-      verifyOtp: async (phone: string, otp: string, tempToken: string) => {
+      verifyOtp: async (otp: string, tempToken: string) => {
         set({ isLoading: true });
         try {
           const url = `${API_BASE_URL}/auth/verify-otp`;
@@ -144,16 +144,12 @@ export const useAuthStore = create<AuthStore>()(
               'Authorization': `Bearer ${tempToken}`,
             },
             body: JSON.stringify({
-              phone:phone,
               otp: otp,
             }),
           });
 
-          const data = await parseApiResponse<{ token: string; refresh_token?: string; user?: User; message?: string }>(response);
+          const data = await parseApiResponse<{ token: string; user?: User; message?: string }>(response);
           await SecureStore.setItemAsync('auth_token', data.token);
-          if (data.refresh_token) {
-            await SecureStore.setItemAsync('refresh_token', data.refresh_token);
-          }
           set({
             isAuthenticated: true,
             isLoading: false,
@@ -177,7 +173,7 @@ export const useAuthStore = create<AuthStore>()(
        * Resend OTP - Resend OTP code to phone number using temp token
        * POST /auth/resend-otp
        */
-      resendOtp: async (phone: string, tempToken: string) => {
+      resendOtp: async (tempToken: string) => {
         set({ isLoading: true });
         try {
           const url = `${API_BASE_URL}/auth/resend-otp`;
@@ -188,16 +184,23 @@ export const useAuthStore = create<AuthStore>()(
               'Content-Type': 'application/json',
               'Authorization': `Bearer ${tempToken}`,
             },
-            body: JSON.stringify({
-              phone,
-            }),
           });
 
-          const data = await parseApiResponse<{ message?: string }>(response);
+          const data = await parseApiResponse<{
+            message?: string;
+            tempToken?: string;
+            temp_token?: string;
+            requiresOtp?: boolean;
+            requires_otp?: boolean;
+          }>(response);
+          const latestTempToken = data.tempToken ?? data.temp_token;
+          const requiresOtp = data.requiresOtp ?? data.requires_otp ?? true;
           set({ isLoading: false });
           return {
             success: true,
             message: data.message || 'OTP resent to your phone number',
+            tempToken: latestTempToken,
+            requiresOtp,
           };
         } catch (error) {
           set({ isLoading: false });
@@ -254,15 +257,13 @@ export const useAuthStore = create<AuthStore>()(
       },
 
       /**
-       * Check Authentication - Verify token and get user info
-       * GET /auth/me
+       * Check Authentication - Server is stateless, so token presence is source of truth.
        */
       checkAuth: async () => {
         set({ isLoading: true });
         try {
           const token = await SecureStore.getItemAsync('auth_token');
-          console.log("Checking Authentication using token:", token ? 'exists' : 'null');
-          console.log("API Base URL:", API_BASE_URL);
+          console.log('Checking authentication token:', token ? 'exists' : 'null');
           
           if (!token) {
             set({
@@ -273,84 +274,39 @@ export const useAuthStore = create<AuthStore>()(
             return false;
           }
 
-          // Verify token with backend API
-          const url = `${API_BASE_URL}/auth/me`;
-          console.log(`🌐 API Request: GET ${url}`);
-          const response = await fetch(url, {
-            method: 'GET',
-            headers: {
-              'Authorization': `Bearer ${token}`,
-              'Content-Type': 'application/json',
-            },
-          });
-
-          // Only clear token on explicit auth rejection (401/403)
-          if (response.status === 401 || response.status === 403) {
-            console.log('Token rejected by server (401/403), clearing auth');
+          const currentState = get();
+          const accountStatus = normalizeAccountStatus(currentState.user?.status);
+          if (accountStatus === 'rejected' || accountStatus === 'pending') {
             await SecureStore.deleteItemAsync('auth_token');
             await SecureStore.deleteItemAsync('refresh_token');
-            set({ isAuthenticated: false, user: null, isLoading: false });
-            return false;
-          }
-
-          if (!response.ok) {
-            // Server error (5xx) or other error - keep token, stay authenticated if we have persisted user
-            console.log('Server error during auth check, keeping token');
-            const currentState = get();
-            if (currentState.user) {
-              set({ isAuthenticated: true, isLoading: false });
-              return true;
-            }
-            set({ isAuthenticated: false, user: null, isLoading: false });
-            return false;
-          }
-
-          const data = await parseApiResponse<{ user: User }>(response);
-          if (data.user) {
-            const accountStatus = normalizeAccountStatus(data.user.status);
-            if (accountStatus === 'rejected' || accountStatus === 'pending') {
-              // Block only explicit non-approved account states.
-              console.log('User not approved, clearing auth');
-              await SecureStore.deleteItemAsync('auth_token');
-              await SecureStore.deleteItemAsync('refresh_token');
-              set({
-                isAuthenticated: false,
-                user: null,
-                isLoading: false,
-              });
-              return false;
-            }
-
-            // Token is valid and user is approved
             set({
-              isAuthenticated: true,
-              user: data.user,
+              isAuthenticated: false,
+              user: null,
               isLoading: false,
             });
-            return true;
+            return false;
           }
 
-          // Invalid response format - keep existing state if we have user
-          const currentState = get();
-          if (currentState.user) {
-            set({ isAuthenticated: true, isLoading: false });
-            return true;
-          }
           set({
-            isAuthenticated: false,
-            user: null,
+            isAuthenticated: true,
             isLoading: false,
           });
-          return false;
+          return true;
         } catch (error) {
-          console.error('Auth check error (network issue?):', error);
-          // On network error, keep the user logged in if we have persisted user data
-          // This allows the app to work when server is temporarily unreachable
+          console.error('Auth check error:', error);
           const token = await SecureStore.getItemAsync('auth_token');
           const currentState = get();
           
-          if (token && currentState.user) {
-            console.log('Network error but token and user exist, staying authenticated');
+          if (token) {
+            if (currentState.user) {
+              const accountStatus = normalizeAccountStatus(currentState.user.status);
+              if (accountStatus === 'rejected' || accountStatus === 'pending') {
+                await SecureStore.deleteItemAsync('auth_token');
+                await SecureStore.deleteItemAsync('refresh_token');
+                set({ isAuthenticated: false, user: null, isLoading: false });
+                return false;
+              }
+            }
             set({ isAuthenticated: true, isLoading: false });
             return true;
           }

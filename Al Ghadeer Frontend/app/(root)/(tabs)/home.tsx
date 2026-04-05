@@ -3,10 +3,13 @@ import MyMap from '@/components/map';
 import ProfileModal from '@/components/ProfileModal';
 import { icons, images } from '@/constants';
 import { useLocationStore, useOrderStore } from '@/store/index';
-import { OrdersResponse, Order } from '@/types/order';
+import { Order } from '@/types/order';
 import ApiErrorText from '@/components/ApiErrorText';
 import { useAuthStore, authenticatedFetch } from '@/store/auth';
+import { AssignmentDay, AssignmentsPayload, getRoutesSummary, getTruckLabel } from '@/utils/assignments';
 import { parseApiResponseWithSoftError } from '@/utils/api';
+import { DeliveryStop, mapDeliveryToOrder } from '@/utils/deliveries';
+import { resolveResourceUrl } from '@/utils/resources';
 import * as Location from 'expo-location';
 import { useRouter } from 'expo-router';
 import React, { useEffect, useState, useCallback } from 'react';
@@ -39,7 +42,10 @@ const Home = () => {
   );
   
   const avatar = React.useMemo(
-    () => currentDriver?.profile_image || icons.person,
+    () => {
+      const url = resolveResourceUrl(currentDriver?.profile_image);
+      return url || icons.person;
+    },
     [currentDriver]
   );
   const today = new Date();
@@ -48,6 +54,9 @@ const Home = () => {
   const [refreshing, setRefreshing] = useState(false);
   const [isProfileModalVisible, setIsProfileModalVisible] = useState(false);
   const [apiError, setApiError] = useState<string | null>(null);
+  const [todayAssignment, setTodayAssignment] = useState<AssignmentDay | null>(null);
+  const [assignmentsLoading, setAssignmentsLoading] = useState(false);
+  const [assignmentsError, setAssignmentsError] = useState<string | null>(null);
   
   // Helper function to check if order is currently available
   const isOrderCurrentlyAvailable = (order: Order) => {
@@ -71,7 +80,15 @@ const Home = () => {
   
   // Count currently available orders
   const availableOrdersCount = React.useMemo(
-    () => assignedOrders.filter(isOrderCurrentlyAvailable).length,
+    () => {
+      const hasSchedulingWindow = assignedOrders.some(
+        (order) => Boolean(order.start_time && order.end_time)
+      );
+      if (!hasSchedulingWindow) {
+        return assignedOrders.length;
+      }
+      return assignedOrders.filter(isOrderCurrentlyAvailable).length;
+    },
     [assignedOrders]
   );
 
@@ -87,8 +104,10 @@ const Home = () => {
       'customer_phone',
       'customer_address',
       'order_number',
+      'display_id',
       'customer_site_id',
       'delivery_zone',
+      'route_name',
       'customer_email'
     ];
 
@@ -160,23 +179,28 @@ const Home = () => {
     selectOrder(id)
     router.push("/(root)/(tabs)/order-details")
   }
-  // Helper function to parse time string to minutes
-  const parseTime = React.useCallback((timeStr: string): number => {
-    if (timeStr.includes(':')) {
-      const [hours, minutes] = timeStr.split(':').map(Number);
-      return hours * 60 + minutes;
-    }
-    return new Date(timeStr).getTime();
-  }, []);
-
   const fetchDeliveries = useCallback(async () => {
     const driverId = user?.id || currentDriver?.id;
+    if (!driverId) {
+      setAssignedOrders([]);
+      setApiError('Driver ID is missing. Please sign in again.');
+      setIsloading(false);
+      setRefreshing(false);
+      return;
+    }
+
     try {
       setIsloading(true);
       setApiError(null);
-      const url = `${IP_ADDRESS}/driver/orders?driver_id=${driverId}`;
-      const response = await authenticatedFetch(url);
-      const result = await parseApiResponseWithSoftError<OrdersResponse['data']>(response);
+      const url = `${IP_ADDRESS}/deliveries`;
+      const response = await authenticatedFetch(url, {
+        method: 'GET',
+        headers: {
+          'Content-Type': 'application/json',
+          'X-Driver-Id': driverId,
+        },
+      });
+      const result = await parseApiResponseWithSoftError<DeliveryStop[]>(response);
 
       if (!result.ok) {
         setAssignedOrders([]);
@@ -184,69 +208,20 @@ const Home = () => {
         return;
       }
 
-      const apiOrders: OrdersResponse['data'] = Array.isArray(result.data) ? result.data : [];
-      const transformedOrders: Order[] = apiOrders.map((api): Order => {
-        const customer = api.customer;
-        const rentItems = (api.other_actions || [])
-          .map((a) => ({
-            id: a.id,
-            name: a.item.label,
-            category: a.type.includes('deposit') ? ('deposit' as const) : ('borrow' as const),
-            price: a.price_per_unit,
-            quantity: a.quantity,
-            image_url: a.item.image_url || '',
-            in_truck: a.direction === 'to_inventory',
-            other_action_type: a.type,
-            other_action_item_type: a.item.type,
-          }));
-        return {
-          id: api.order_number,
-          order_number: api.order_number,
-          status: api.status as Order['status'],
-          customer_address: api.delivery_address,
-          customer_name: customer?.name,
-          customer_phone: customer?.phone,
-          customer_email: customer?.email ?? undefined,
-          customer_id: customer?.id,
-          customer_site_id: customer?.site_id,
-          customer_type: (customer?.customer_type === 'organization' ? 'organization' : 'individual') as Order['customer_type'],
-          latitude: api.latitude,
-          longitude: api.longitude,
-          delivery_instructions: api.delivery_instructions ?? undefined,
-          start_time: api.start_time,
-          end_time: api.end_time,
-          total_amount: api.total_amount,
-          zone: api.delivery_zone ?? undefined,
-          delivery_zone: api.delivery_zone ?? undefined,
-          payment_method: api.payment_method as Order['payment_method'],
-          products: api.products.map((p) => ({
-            id: p.id,
-            name: p.name,
-            quantity: p.quantity,
-            category: p.category,
-            type: p.category,
-          })),
-          rent_items: rentItems.length > 0 ? rentItems : undefined,
-          reasons: api.reasons ?? [],
-          requires_signature: customer?.requires_signature,
-        };
-      });
-      
-      const sortedOrders = transformedOrders.sort((a, b) => {
-        if (!a.start_time && !b.start_time) return 0;
-        if (!a.start_time) return 1;
-        if (!b.start_time) return -1;
-        return parseTime(a.start_time) - parseTime(b.start_time);
-      });
-
-      setAssignedOrders(sortedOrders);
+      const deliveries = Array.isArray(result.data) ? result.data : [];
+      const transformedOrders: Order[] = deliveries.map((delivery) =>
+        mapDeliveryToOrder(delivery)
+      );
+      setAssignedOrders(transformedOrders);
     } catch (err) {
-      console.error('Error fetching orders:', err);
+      console.error('Error fetching deliveries:', err);
+      setAssignedOrders([]);
+      setApiError(err instanceof Error ? err.message : 'Failed to load deliveries.');
     } finally {
       setIsloading(false);
       setRefreshing(false);
     }
-  }, [user?.id, currentDriver?.id, IP_ADDRESS, setAssignedOrders, parseTime]);
+  }, [user?.id, currentDriver?.id, IP_ADDRESS, setAssignedOrders]);
 
   const fetchDriverInfo = useCallback(async () => {
     const driverId = user?.id || currentDriver?.id;
@@ -262,16 +237,56 @@ const Home = () => {
     }
   }, [user?.id, currentDriver?.id, IP_ADDRESS, updateDriverInfo]);
 
+  const fetchAssignmentsSummary = useCallback(async () => {
+    const driverId = user?.id || currentDriver?.id;
+    if (!driverId) {
+      setTodayAssignment(null);
+      return;
+    }
+
+    try {
+      setAssignmentsLoading(true);
+      setAssignmentsError(null);
+      const url = `${IP_ADDRESS}/assignments`;
+      const response = await authenticatedFetch(url, {
+        headers: {
+          'X-Driver-Id': driverId,
+        },
+      });
+      const result = await parseApiResponseWithSoftError<AssignmentsPayload>(response);
+
+      if (!result.ok) {
+        setTodayAssignment(null);
+        setAssignmentsError(result.error);
+        return;
+      }
+
+      const days = Array.isArray(result.data?.days) ? result.data.days : [];
+      const today = days.find((day) => day.dayOfWeek === result.data.todayDayOfWeek) ?? null;
+      setTodayAssignment(today);
+    } catch (error) {
+      setTodayAssignment(null);
+      setAssignmentsError(error instanceof Error ? error.message : 'Could not load assignments.');
+    } finally {
+      setAssignmentsLoading(false);
+    }
+  }, [user?.id, currentDriver?.id, IP_ADDRESS]);
+
   const onRefresh = useCallback(() => {
     setRefreshing(true);
     fetchDeliveries();
     fetchDriverInfo();
-  }, [fetchDeliveries, fetchDriverInfo]);
+    fetchAssignmentsSummary();
+  }, [fetchDeliveries, fetchDriverInfo, fetchAssignmentsSummary]);
 
   useEffect(() => {
     fetchDeliveries();
     fetchDriverInfo();
-  }, [fetchDeliveries, fetchDriverInfo]);
+    fetchAssignmentsSummary();
+  }, [fetchDeliveries, fetchDriverInfo, fetchAssignmentsSummary]);
+
+  const assignmentTruck = getTruckLabel(todayAssignment?.truck ?? null);
+  const assignmentRoutesText = getRoutesSummary(todayAssignment?.routes ?? []);
   return (
     <GestureHandlerRootView style={{ flex: 1 }}>
       <View className="flex-1 bg-white">
@@ -348,6 +363,49 @@ const Home = () => {
               </View>
             </TouchableOpacity>
           </View>
+        </View>
+
+        <View className="px-4 pb-2">
+          <TouchableOpacity
+            onPress={() => router.push('/(root)/(tabs)/assignments')}
+            className="bg-white rounded-2xl px-4 py-3 border border-gray-200"
+            style={{
+              shadowColor: '#0F172A',
+              shadowOpacity: 0.06,
+              shadowRadius: 12,
+              shadowOffset: { width: 0, height: 6 },
+              elevation: 3,
+            }}
+          >
+            <View className="flex-row items-center justify-between">
+              <View className="flex-row items-center gap-3 flex-1 pr-2">
+                <View className="w-9 h-9 rounded-xl bg-sky-100 items-center justify-center">
+                  <Ionicons name="calendar-outline" size={18} color="#0284C7" />
+                </View>
+                <View className="flex-1">
+                  <Text className="text-[13px] text-gray-500 font-JakartaMedium">Today's Assignment</Text>
+                  <Text className="text-sm text-gray-900 font-JakartaSemiBold" numberOfLines={1}>
+                    {assignmentsLoading ? 'Loading assignment...' : assignmentTruck}
+                  </Text>
+                  <Text className="text-xs text-gray-500 font-JakartaMedium" numberOfLines={1}>
+                    {assignmentsLoading ? 'Checking active routes...' : assignmentRoutesText}
+                  </Text>
+                </View>
+              </View>
+              <View className="flex-row items-center gap-1">
+                {assignmentsLoading ? (
+                  <ActivityIndicator size={14} />
+                ) : null}
+                <Text className="text-sky-700 text-xs font-JakartaSemiBold">View Week</Text>
+                <Ionicons name="chevron-forward" size={14} color="#0369A1" />
+              </View>
+            </View>
+            {assignmentsError ? (
+              <Text className="text-[11px] text-amber-600 mt-2 font-JakartaMedium" numberOfLines={1}>
+                {assignmentsError}
+              </Text>
+            ) : null}
+          </TouchableOpacity>
         </View>
 
         {/* Today's Deliveries Section */}

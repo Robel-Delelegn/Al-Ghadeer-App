@@ -1,7 +1,7 @@
 import ApiErrorText from '@/components/ApiErrorText';
 import { useOrderStore } from '@/store/index';
 import { useAuthStore, authenticatedFetch } from '@/store/auth';
-import { ConfirmPaymentRequest, ConfirmPaymentResponse, Order } from '@/types/order';
+import { Order } from '@/types/order';
 import { Ionicons } from '@expo/vector-icons';
 import { useRouter, useLocalSearchParams } from 'expo-router';
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
@@ -16,26 +16,38 @@ import {
   Platform,
   Image,
 } from 'react-native';
-import { showErrorAlert, showSuccessAlert } from '@/store/utils/alert';
+import { showErrorAlert } from '@/store/utils/alert';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { parseApiResponseWithSoftError } from '@/utils/api';
+import {
+  buildDeliveryTaskOutcomes,
+  toDeliverySaleItemType,
+  toMoney,
+} from '@/utils/deliveries';
 
 const { width } = Dimensions.get('window');
 const IP_ADDRESS = process.env.EXPO_PUBLIC_IP_ADDRESS;
 
-// Map product category to API expected values
-const mapProductCategory = (cat?: string): 'bulk_item' | 'asset' | 'refill' => {
-  if (cat === 'refill' || cat === 'retail-item') return cat === 'refill' ? 'refill' : 'bulk_item';
-  if (cat === 'assets') return 'asset';
-  return 'bulk_item';
+const getDepositReturnType = (
+  actionType?: string,
+): 'deposit' | 'deposit_return' => {
+  const normalized = (actionType || '').toLowerCase();
+  if (
+    normalized.includes('refund') ||
+    normalized.includes('return') ||
+    normalized.includes('from-customer')
+  ) {
+    return 'deposit_return';
+  }
+  return 'deposit';
 };
 
-// Fallback type mapping for older locally-cached orders that don't carry original action type
-type OtherActionType = NonNullable<ConfirmPaymentRequest['other_actions']>[0]['type'];
-const getFallbackOtherActionType = (category: string, inTruck: boolean): OtherActionType => {
-  if (category === 'deposit') return inTruck ? 'deposit' : 'deposit-refund';
-  if (category === 'borrow') return inTruck ? 'asset-movement-to-customer' : 'asset-movement-from-customer';
-  return 'asset-movement-to-customer';
+const getDepositKind = (
+  value?: string,
+  fallbackCategory?: string,
+): 'asset' | 'bottle' => {
+  const normalized = (value || fallbackCategory || '').toLowerCase();
+  return normalized.includes('bottle') ? 'bottle' : 'asset';
 };
 
 const PaymentConfirmation: React.FC = () => {
@@ -83,7 +95,7 @@ const PaymentConfirmation: React.FC = () => {
   const receiverPosition = params.receiver_position as string | undefined;
   const notes = params.notes as string | undefined;
   
-  const { subtotal, vat, totalWithVat, itemCount, rentItemsTotal, hasRentItemsSelected, isRentItemsOnly } = useMemo(() => {
+  const { subtotal, vat, totalWithVat, itemCount, rentItemsTotal, hasRentItemsSelected } = useMemo(() => {
     // Calculate regular products subtotal (with VAT)
     const sub = cartItems.reduce((sum, item) => {
       if (!item || typeof item.price !== 'number' || typeof item.quantity !== 'number') {
@@ -105,9 +117,6 @@ const PaymentConfirmation: React.FC = () => {
       return quantity > 0;
     });
     
-    // Check if this is rent-items-only (no cart items but rent items selected)
-    const isRentOnly = cartItems.length === 0 && hasRentItems;
-    
     // Total = products (with VAT) + rent items (no VAT)
     const total = sub + vatAmount + rentTotal;
     const count = cartItems.reduce((sum, item) => sum + (item?.quantity || 0), 0);
@@ -119,7 +128,6 @@ const PaymentConfirmation: React.FC = () => {
       itemCount: count,
       rentItemsTotal: rentTotal.toFixed(2),
       hasRentItemsSelected: hasRentItems,
-      isRentItemsOnly: isRentOnly
     };
   }, [cartItems, editableRentItems, rentItemQuantities]);
 
@@ -154,7 +162,6 @@ const PaymentConfirmation: React.FC = () => {
     setIsProcessing(true);
     setApiError(null);
     try {
-      const orderType: 'site' | 'external' = orderDetail?.customer_type === 'organization' ? 'site' : 'external';
       const rentItems = (orderDetail?.rent_items || [])
         .filter(item => item.in_truck === true)
         .map(item => ({
@@ -162,73 +169,93 @@ const PaymentConfirmation: React.FC = () => {
           quantity: Math.max(0, rentItemQuantities[item.id] ?? item.quantity ?? 0),
         }))
         .filter(item => item.quantity > 0);
-      const reasonsList = orderDetail?.reasons ?? [];
 
-      const orderData: ConfirmPaymentRequest = {
-        customer_site_id: orderDetail.customer_site_id || '',
-        customer_id: orderDetail.customer_id || '',
-        customer_name: orderDetail.customer_name || 'N/A',
-        customer_phone: orderDetail.customer_phone || 'N/A',
-        products: cartItems.filter(item => item?.name).map(item => ({
-          id: item.id,
-          name: item.name,
+      const saleItems = cartItems
+        .filter(item => item?.name && item.quantity > 0)
+        .map(item => ({
+          itemId: item.item_id || item.id,
+          itemType: toDeliverySaleItemType(item.item_type || item.category),
           quantity: item.quantity,
-          price: item.price,
-          category: mapProductCategory(item.category),
-        })),
-        subtotal: parseFloat(subtotal),
-        vat: parseFloat(vat),
-        total_amount: parseFloat(totalWithVat),
-        payment_method: selectedPaymentMethod,
-        order_type: orderType,
-        reasons: reasonsList,
-        ...(rentItems.length > 0 && {
-          other_actions: rentItems.map(item => {
-            const actionType = item.other_action_type ?? getFallbackOtherActionType(item.category, item.in_truck ?? true);
-            return {
-              id: item.id,
-              name: item.name,
-              type: actionType,
-              price: item.price,
-              quantity: item.quantity,
-              ...(item.other_action_item_type ? { item_type: item.other_action_item_type } : {}),
-            };
-          }),
-        }),
-        ...(signatureData && { signature_data: signatureData }),
-        ...(receiverName && { receiver_name: receiverName }),
-        ...(receiverPosition && { receiver_position: receiverPosition }),
-        ...(notes && { remark: notes }),
+          unitPrice: toMoney(item.price),
+        }));
+
+      const depositsReturns = rentItems.map(item => ({
+        type: getDepositReturnType(item.other_action_type),
+        depositKind: getDepositKind(item.other_action_item_type, item.category),
+        itemId: item.id,
+        quantity: item.quantity,
+        unitPrice: toMoney(item.price),
+      }));
+
+      const receiver =
+        receiverName && receiverName.trim().length > 0
+          ? {
+              name: receiverName.trim(),
+              ...(receiverPosition?.trim()
+                ? { position: receiverPosition.trim() }
+                : {}),
+              ...(signatureData ? { signatureData } : {}),
+            }
+          : undefined;
+
+      const requestBody = {
+        status: 'success' as const,
+        displayId: orderDetail.display_id || orderDetail.order_number || orderDetail.id,
+        tasks: buildDeliveryTaskOutcomes(orderDetail.tasks || [], 'success'),
+        ...(saleItems.length > 0
+          ? {
+              sale: {
+                items: saleItems,
+                totals: {
+                  subtotal: toMoney(subtotal),
+                  vat: toMoney(vat),
+                  total: toMoney(totalWithVat),
+                },
+                payment: {
+                  method: selectedPaymentMethod,
+                  amount: toMoney(totalWithVat),
+                },
+              },
+            }
+          : {}),
+        ...(depositsReturns.length > 0 ? { depositsReturns } : {}),
+        ...(receiver ? { receiver } : {}),
+        ...(notes?.trim() ? { remark: notes.trim() } : {}),
       };
 
-      let url = `${IP_ADDRESS}/driver/orders/confirm-payment`;
-      if (user?.id) {
-        url += `?driver_id=${user.id}`;
-      }
-      
-      const response = await authenticatedFetch(url, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify(orderData),
+      console.log('[delivery-confirm] request payload', {
+        deliveryId: orderDetail.id,
+        displayId: requestBody.displayId,
+        tasks: requestBody.tasks,
+        saleItems: saleItems.length,
+        depositsReturns: depositsReturns.length,
       });
 
-      const parseResult = await parseApiResponseWithSoftError<ConfirmPaymentResponse['data']>(response);
+      const headers: Record<string, string> = {
+        'Content-Type': 'application/json',
+      };
+      if (user?.id || orderDetail.driver_id) {
+        headers['X-Driver-Id'] = (user?.id || orderDetail.driver_id) as string;
+      }
+
+      const response = await authenticatedFetch(
+        `${IP_ADDRESS}/deliveries/${encodeURIComponent(orderDetail.id)}`,
+        {
+        method: 'POST',
+        headers,
+        body: JSON.stringify(requestBody),
+      });
+
+      const parseResult = await parseApiResponseWithSoftError<{ deliveryNoteId: string }>(response);
       if (!parseResult.ok) {
+        console.error('[delivery-confirm] failed response', parseResult.error);
         setApiError(parseResult.error);
         return;
       }
       const result = parseResult.data;
-      
-      // Log full response to debug sale_id
-      console.log('Confirm Payment - Full server response:', JSON.stringify(result, null, 2));
-      console.log('Confirm Payment - sale_id from server:', result.sale_id);
 
-      // Mark order as delivered and store confirm payment response for receipt
+      // Mark order as delivered and store delivery note id for traceability
       if (orderDetail) {
-        const invoiceNumber = result.invoice_number;
-
         // Persist adjusted rent item quantities before moving order to completed orders
         if (orderDetail.rent_items && orderDetail.rent_items.length > 0) {
           const quantityMap = new Map(rentItems.map(item => [item.id, item.quantity] as const));
@@ -249,49 +276,23 @@ const PaymentConfirmation: React.FC = () => {
           });
           useOrderStore.setState({ assignedOrders: updatedAssignedOrders });
         }
-        
-        // Store confirm response - use sale_id from server for invoice generation
+
         setLastConfirmPaymentResponse({
           orderId: orderDetail.id,
-          sale_id: result.sale_id,
-          invoice_number: invoiceNumber,
-          order_number: result.order_number,
+          sale_id: result.deliveryNoteId,
+          order_number: orderDetail.display_id || orderDetail.order_number || orderDetail.id,
         });
-        
-        // First mark as delivered (this moves it to completedOrders)
         updateOrderStatus(orderDetail.id, 'delivered');
-        
-        // Then update the order in completedOrders with invoice_number
-        if (invoiceNumber) {
-          const store = useOrderStore.getState();
-          const updatedCompletedOrders = store.completedOrders.map(o => 
-            o.id === orderDetail.id ? { ...o, invoice_number: invoiceNumber } : o
-          );
-          useOrderStore.setState({ completedOrders: updatedCompletedOrders });
-        }
       }
 
-      // If rent-items-only, show success without receipt option
-      if (isRentItemsOnly) {
-        showSuccessAlert(
-          'Delivery Confirmed', 
-          result.message || `Order ${result.order_number} confirmed successfully.`,
-          [{ text: 'OK', onPress: () => router.push('/(root)/(tabs)/home') }]
-        );
-      } else {
-        showSuccessAlert(
-          'Payment Successful', 
-          result.message || `Order ${result.order_number} confirmed.`,
-          [{ text: 'View Receipt', onPress: () => router.push('/(root)/(tabs)/payment-receipt') }]
-        );
-      }
+      router.replace('/(root)/(tabs)/payment-receipt');
       
     } catch (error) {
       setApiError(error instanceof Error ? error.message : 'Please try again.');
     } finally {
       setIsProcessing(false);
     }
-  }, [orderDetail, cartItems, subtotal, vat, totalWithVat, selectedPaymentMethod, router, updateOrderStatus, setLastConfirmPaymentResponse, signatureData, receiverName, receiverPosition, notes, user?.id, hasRentItemsSelected, isRentItemsOnly, rentItemQuantities]);
+  }, [orderDetail, cartItems, subtotal, vat, totalWithVat, selectedPaymentMethod, router, updateOrderStatus, setLastConfirmPaymentResponse, signatureData, receiverName, receiverPosition, notes, user?.id, hasRentItemsSelected, rentItemQuantities]);
 
   const customerName = orderDetail?.customer_name || 'Customer';
   const customerAddress = orderDetail?.customer_address || '—';

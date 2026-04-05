@@ -8,15 +8,60 @@ export interface ApiResponse<T = unknown> {
   success: boolean;
 }
 
+type ApiBody<T> = ApiResponse<T> & { message?: string };
+
+async function readApiBody<T>(
+  response: Response,
+): Promise<{ json: ApiBody<T> | null; rawText: string }> {
+  const rawText = await response.text();
+  if (!rawText) {
+    return { json: null, rawText: "" };
+  }
+
+  try {
+    return {
+      json: JSON.parse(rawText) as ApiBody<T>,
+      rawText,
+    };
+  } catch {
+    return { json: null, rawText };
+  }
+}
+
+function getApiErrorMessage(
+  response: Response,
+  json: ApiBody<unknown> | null,
+  rawText: string,
+): string {
+  const jsonMessage = json?.error || json?.message;
+  if (jsonMessage) {
+    return jsonMessage;
+  }
+
+  if (!response.ok) {
+    const plainText = rawText.trim();
+    if (response.status >= 500 && plainText) {
+      return `Server unavailable (${response.status}): ${plainText}`;
+    }
+    return `Request failed (${response.status})`;
+  }
+
+  return "Invalid response from server";
+}
+
 /**
  * Parses an API response and returns the data payload.
  * Throws with the error message when success is false or response is not ok.
  */
 export async function parseApiResponse<T>(response: Response): Promise<T> {
-  const json: ApiResponse<T> = await response.json();
+  const { json, rawText } = await readApiBody<T>(response);
+
+  if (!json) {
+    throw new Error(getApiErrorMessage(response, null, rawText));
+  }
 
   if (!response.ok || !json.success) {
-    throw new Error(json.error || (response.ok ? 'Request failed' : `HTTP ${response.status}`));
+    throw new Error(getApiErrorMessage(response, json, rawText));
   }
 
   return json.data as T;
@@ -32,24 +77,25 @@ export type ApiResult<T> =
  * For 2xx success: returns { ok: true, data }.
  * For 5xx or network: throws.
  */
-export async function parseApiResponseWithSoftError<T>(response: Response): Promise<ApiResult<T>> {
-  let json: ApiResponse<T>;
-  try {
-    json = await response.json();
-  } catch {
-    json = { success: false, error: 'Invalid response' };
-  }
+export async function parseApiResponseWithSoftError<T>(
+  response: Response,
+): Promise<ApiResult<T>> {
+  const { json, rawText } = await readApiBody<T>(response);
 
   if (response.status >= 400 && response.status < 500) {
     return {
       ok: false,
-      error: json.error || (json as { message?: string }).message || `Request failed (${response.status})`,
+      error: getApiErrorMessage(response, json, rawText),
       status: response.status,
     };
   }
 
+  if (!json) {
+    throw new Error(getApiErrorMessage(response, null, rawText));
+  }
+
   if (!response.ok || !json.success) {
-    throw new Error(json.error || (response.ok ? 'Request failed' : `HTTP ${response.status}`));
+    throw new Error(getApiErrorMessage(response, json, rawText));
   }
 
   return { ok: true, data: json.data as T };

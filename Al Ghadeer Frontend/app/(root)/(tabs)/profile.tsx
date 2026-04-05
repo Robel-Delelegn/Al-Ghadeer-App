@@ -1,289 +1,1039 @@
-import { icons } from '@/constants';
-import { useOrderStore } from '@/store/index';
-import { useAuthStore } from '@/store/auth';
-import { Ionicons } from '@expo/vector-icons';
+import ApiErrorText from "@/components/ApiErrorText";
+import { icons } from "@/constants";
+import { authenticatedFetch, useAuthStore } from "@/store/auth";
+import {
+  showErrorAlert,
+  showSuccessAlert,
+  showWarningAlert,
+} from "@/store/utils/alert";
+import { parseApiResponseWithSoftError } from "@/utils/api";
+import { resolveResourceUrl } from "@/utils/resources";
+import { Ionicons } from "@expo/vector-icons";
+import * as FileSystem from "expo-file-system";
+import * as ImagePicker from "expo-image-picker";
 import { useRouter } from "expo-router";
-import React from 'react';
-import { 
-  Image, 
-  Text, 
-  TouchableOpacity, 
-  View, 
-  ScrollView, 
+import React, { useCallback, useEffect, useMemo, useState } from "react";
+import {
+  ActivityIndicator,
+  Image,
+  Modal,
+  RefreshControl,
+  ScrollView,
   StyleSheet,
-  Dimensions,
-} from 'react-native';
-import { LinearGradient } from 'expo-linear-gradient';
-import { showWarningAlert } from '@/store/utils/alert';
-import { useSafeAreaInsets } from 'react-native-safe-area-context';
+  Text,
+  TextInput,
+  TouchableOpacity,
+  View,
+} from "react-native";
+import { useSafeAreaInsets } from "react-native-safe-area-context";
 
-const { width } = Dimensions.get('window');
+const API_BASE_URL = (
+  process.env.EXPO_PUBLIC_IP_ADDRESS || "http://localhost:3000"
+)
+  .trim()
+  .replace(/\/+$/, "");
+
+interface ProfileEmail {
+  address: string;
+  isPrimary: boolean;
+  info: string | null;
+}
+
+interface ProfilePhone {
+  number: string;
+  isPrimary: boolean;
+  info: string | null;
+}
+
+interface DriverProfile {
+  id: string;
+  firstName: string;
+  lastName: string | null;
+  emails: ProfileEmail[];
+  phones: ProfilePhone[];
+  profileImageUrl: string | null;
+}
+
+const normalizeProfile = (profile: DriverProfile): DriverProfile => ({
+  ...profile,
+  profileImageUrl: resolveResourceUrl(profile.profileImageUrl),
+});
+
+interface ContactEditorState {
+  visible: boolean;
+  mode: "add" | "edit";
+  originalValue: string;
+  value: string;
+  info: string;
+}
+
+const EMPTY_EDITOR: ContactEditorState = {
+  visible: false,
+  mode: "add",
+  originalValue: "",
+  value: "",
+  info: "",
+};
+
+interface EditModalProps {
+  visible: boolean;
+  title: string;
+  submitLabel: string;
+  busy: boolean;
+  onClose: () => void;
+  onSubmit: () => void;
+  children: React.ReactNode;
+}
+
+const EditModal = ({
+  visible,
+  title,
+  submitLabel,
+  busy,
+  onClose,
+  onSubmit,
+  children,
+}: EditModalProps) => (
+  <Modal
+    visible={visible}
+    transparent
+    animationType="fade"
+    onRequestClose={onClose}
+  >
+    <View style={styles.modalOverlay}>
+      <View style={styles.modalCard}>
+        <View style={styles.modalHeader}>
+          <Text style={styles.modalTitle}>{title}</Text>
+          <TouchableOpacity onPress={onClose} disabled={busy}>
+            <Ionicons name="close" size={22} color="#64748B" />
+          </TouchableOpacity>
+        </View>
+
+        {children}
+
+        <View style={styles.modalActions}>
+          <TouchableOpacity
+            style={[styles.modalButton, styles.modalCancelButton]}
+            onPress={onClose}
+            disabled={busy}
+          >
+            <Text style={styles.modalCancelText}>Cancel</Text>
+          </TouchableOpacity>
+          <TouchableOpacity
+            style={[
+              styles.modalButton,
+              styles.modalSubmitButton,
+              busy && styles.disabledButton,
+            ]}
+            onPress={onSubmit}
+            disabled={busy}
+          >
+            {busy ? (
+              <ActivityIndicator size="small" color="#FFFFFF" />
+            ) : (
+              <Text style={styles.modalSubmitText}>{submitLabel}</Text>
+            )}
+          </TouchableOpacity>
+        </View>
+      </View>
+    </View>
+  </Modal>
+);
 
 const Profile = () => {
   const insets = useSafeAreaInsets();
   const router = useRouter();
-  const { user, signOut } = useAuthStore();
-  const { currentDriver } = useOrderStore();
+  const { user, updateUser, signOut } = useAuthStore();
 
-  const onLogOut = () => {
-    showWarningAlert(
-      'Sign Out',
-      'Are you sure you want to sign out?',
-      [
-        { text: 'Cancel', style: 'cancel' },
-        { 
-          text: 'Sign Out', 
-          style: 'destructive',
-          onPress: async () => {
+  const [profile, setProfile] = useState<DriverProfile | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
+  const [busyAction, setBusyAction] = useState<string | null>(null);
+  const [apiError, setApiError] = useState<string | null>(null);
+
+  const [nameModalVisible, setNameModalVisible] = useState(false);
+  const [firstNameDraft, setFirstNameDraft] = useState("");
+  const [lastNameDraft, setLastNameDraft] = useState("");
+
+  const [emailEditor, setEmailEditor] =
+    useState<ContactEditorState>(EMPTY_EDITOR);
+  const [phoneEditor, setPhoneEditor] =
+    useState<ContactEditorState>(EMPTY_EDITOR);
+
+  const isBusy = !!busyAction;
+
+  const displayName = useMemo(() => {
+    if (profile) {
+      return (
+        [profile.firstName, profile.lastName]
+          .filter(Boolean)
+          .join(" ")
+          .trim() || "Driver"
+      );
+    }
+    return user?.name || "Driver";
+  }, [profile, user?.name]);
+
+  const avatarSource = useMemo(() => {
+    const photoUrl = resolveResourceUrl(profile?.profileImageUrl);
+    if (photoUrl) {
+      return { uri: photoUrl };
+    }
+    return icons.person;
+  }, [profile?.profileImageUrl]);
+
+  const buildProfileHeaders = useCallback(() => {
+    const headers: Record<string, string> = {
+      "Content-Type": "application/json",
+    };
+
+    if (user?.id) {
+      headers["X-Driver-Id"] = user.id;
+    }
+
+    return headers;
+  }, [user?.id]);
+
+  const requestProfile = useCallback(
+    async <T,>(path: string, options: RequestInit = {}) => {
+      const response = await authenticatedFetch(`${API_BASE_URL}${path}`, {
+        ...options,
+        headers: {
+          ...buildProfileHeaders(),
+          ...((options.headers as Record<string, string> | undefined) || {}),
+        },
+      });
+      return parseApiResponseWithSoftError<T>(response);
+    },
+    [buildProfileHeaders],
+  );
+
+  const syncAuthUser = useCallback(
+    (nextProfile: DriverProfile) => {
+      const currentUser = useAuthStore.getState().user;
+      const primaryPhone =
+        nextProfile.phones.find((p) => p.isPrimary)?.number ||
+        currentUser?.phone ||
+        "";
+      const fullName =
+        [nextProfile.firstName, nextProfile.lastName]
+          .filter(Boolean)
+          .join(" ")
+          .trim() ||
+        currentUser?.name ||
+        "Driver";
+
+      const nextUser = {
+        id: nextProfile.id,
+        phone: primaryPhone,
+        name: fullName,
+        helper_name: currentUser?.helper_name,
+        vehicle_number: currentUser?.vehicle_number,
+        vehicle_type: currentUser?.vehicle_type,
+        zone: currentUser?.zone,
+        status: currentUser?.status,
+      };
+
+      if (
+        currentUser &&
+        currentUser.id === nextUser.id &&
+        currentUser.phone === nextUser.phone &&
+        currentUser.name === nextUser.name &&
+        currentUser.helper_name === nextUser.helper_name &&
+        currentUser.vehicle_number === nextUser.vehicle_number &&
+        currentUser.vehicle_type === nextUser.vehicle_type &&
+        currentUser.zone === nextUser.zone &&
+        currentUser.status === nextUser.status
+      ) {
+        return;
+      }
+
+      updateUser(nextUser);
+    },
+    [updateUser],
+  );
+
+  const fetchProfile = useCallback(
+    async (initialLoad = false) => {
+      if (initialLoad) {
+        setLoading(true);
+      } else {
+        setRefreshing(true);
+      }
+
+      setApiError(null);
+
+      try {
+        const result = await requestProfile<DriverProfile>("/profile", {
+          method: "GET",
+        });
+
+        if (!result.ok) {
+          setApiError(result.error);
+
+          if (result.status === 401) {
+            showErrorAlert(
+              "Session expired",
+              result.error || "Please sign in again.",
+            );
             await signOut();
             router.replace("/");
           }
+          return;
         }
-      ]
-    );
+
+        const nextProfile = normalizeProfile(result.data);
+        setProfile(nextProfile);
+        syncAuthUser(nextProfile);
+      } catch (error) {
+        const message =
+          error instanceof Error ? error.message : "Could not load profile.";
+        setApiError(message);
+      } finally {
+        if (initialLoad) {
+          setLoading(false);
+        } else {
+          setRefreshing(false);
+        }
+      }
+    },
+    [requestProfile, router, signOut, syncAuthUser],
+  );
+
+  useEffect(() => {
+    void fetchProfile(true);
+  }, [fetchProfile]);
+
+  const executeProfileMutation = useCallback(
+    async (params: {
+      path: string;
+      method: "POST" | "PATCH" | "DELETE";
+      actionKey: string;
+      body?: Record<string, unknown>;
+      successMessage: string;
+    }) => {
+      setBusyAction(params.actionKey);
+      setApiError(null);
+
+      try {
+        const result = await requestProfile<DriverProfile>(params.path, {
+          method: params.method,
+          ...(params.body ? { body: JSON.stringify(params.body) } : {}),
+        });
+
+        if (!result.ok) {
+          setApiError(result.error);
+          showErrorAlert("Request failed", result.error);
+          return false;
+        }
+
+        const nextProfile = normalizeProfile(result.data);
+        setProfile(nextProfile);
+        syncAuthUser(nextProfile);
+        showSuccessAlert("Success", params.successMessage);
+        return true;
+      } catch (error) {
+        const message =
+          error instanceof Error ? error.message : "Request failed.";
+        setApiError(message);
+        showErrorAlert("Request failed", message);
+        return false;
+      } finally {
+        setBusyAction(null);
+      }
+    },
+    [requestProfile, syncAuthUser],
+  );
+
+  const openNameEditor = () => {
+    if (!profile) return;
+    setFirstNameDraft(profile.firstName);
+    setLastNameDraft(profile.lastName || "");
+    setNameModalVisible(true);
   };
 
-  const avatar = currentDriver?.profile_image || icons.person;
-  const driverName = currentDriver?.name || user?.name || 'Driver';
-  const helperName = currentDriver?.helper_name || user?.helper_name;
-  const helperPhone = (currentDriver as any)?.helper_phone || null;
-  const phone = currentDriver?.phone || user?.phone || '—';
-  const vehicleType = currentDriver?.vehicle?.type || user?.vehicle_type || '—';
-  const vehiclePlate = currentDriver?.vehicle?.plate_number || user?.vehicle_number || '—';
-  const zones = currentDriver?.zones;
-  const status = currentDriver?.status || 'online';
-  const driverId = currentDriver?.id || user?.id || '—';
+  const saveName = async () => {
+    if (!profile) return;
 
-  const getStatusConfig = () => {
-    switch (status) {
-      case 'online': return { color: '#10B981', bg: 'rgba(16, 185, 129, 0.15)', label: 'On Duty', icon: 'radio-button-on' as const };
-      case 'offline': return { color: '#94A3B8', bg: 'rgba(148, 163, 184, 0.15)', label: 'Off Duty', icon: 'radio-button-off' as const };
-      default: return { color: '#10B981', bg: 'rgba(16, 185, 129, 0.15)', label: 'On Duty', icon: 'radio-button-on' as const };
+    const nextFirstName = firstNameDraft.trim();
+    const nextLastName = lastNameDraft.trim();
+
+    if (!nextFirstName) {
+      showWarningAlert("Missing info", "First name is required.");
+      return;
+    }
+
+    const payload: { firstName?: string; lastName?: string } = {};
+    if (nextFirstName !== profile.firstName) {
+      payload.firstName = nextFirstName;
+    }
+
+    const currentLastName = (profile.lastName || "").trim();
+    if (nextLastName !== currentLastName) {
+      payload.lastName = nextLastName;
+    }
+
+    if (!payload.firstName && payload.lastName === undefined) {
+      showWarningAlert("No changes", "Nothing changed to save.");
+      return;
+    }
+
+    const ok = await executeProfileMutation({
+      path: "/profile",
+      method: "PATCH",
+      actionKey: "save-name",
+      body: payload,
+      successMessage: "Name updated successfully.",
+    });
+
+    if (ok) {
+      setNameModalVisible(false);
     }
   };
 
-  const statusConfig = getStatusConfig();
+  const openAddEmail = () => {
+    setEmailEditor({
+      visible: true,
+      mode: "add",
+      originalValue: "",
+      value: "",
+      info: "",
+    });
+  };
+
+  const openEditEmail = (item: ProfileEmail) => {
+    setEmailEditor({
+      visible: true,
+      mode: "edit",
+      originalValue: item.address,
+      value: item.address,
+      info: item.info || "",
+    });
+  };
+
+  const saveEmail = async () => {
+    const email = emailEditor.value.trim().toLowerCase();
+    const info = emailEditor.info.trim();
+
+    if (!email) {
+      showWarningAlert("Missing info", "Email is required.");
+      return;
+    }
+
+    if (emailEditor.mode === "add") {
+      const ok = await executeProfileMutation({
+        path: "/profile/emails",
+        method: "POST",
+        actionKey: "add-email",
+        body: {
+          email,
+          ...(info ? { info } : {}),
+        },
+        successMessage: "Email added successfully.",
+      });
+
+      if (ok) {
+        setEmailEditor(EMPTY_EDITOR);
+      }
+      return;
+    }
+
+    const oldEmail = emailEditor.originalValue;
+    const oldEmailNormalized = oldEmail.trim().toLowerCase();
+    const existingInfo =
+      profile?.emails.find((item) => item.address === oldEmail)?.info || "";
+
+    const body: { oldEmail: string; newEmail?: string; info?: string } = {
+      oldEmail,
+    };
+    let hasChange = false;
+
+    if (email !== oldEmailNormalized) {
+      body.newEmail = email;
+      hasChange = true;
+    }
+
+    if (info !== existingInfo) {
+      body.info = info;
+      hasChange = true;
+    }
+
+    if (!hasChange) {
+      showWarningAlert("No changes", "Nothing changed to save.");
+      return;
+    }
+
+    const ok = await executeProfileMutation({
+      path: "/profile/emails",
+      method: "PATCH",
+      actionKey: "edit-email",
+      body,
+      successMessage: "Email updated successfully.",
+    });
+
+    if (ok) {
+      setEmailEditor(EMPTY_EDITOR);
+    }
+  };
+
+  const setPrimaryEmail = async (email: string) => {
+    await executeProfileMutation({
+      path: "/profile/emails/primary",
+      method: "PATCH",
+      actionKey: `primary-email-${email}`,
+      body: { email },
+      successMessage: "Primary email updated.",
+    });
+  };
+
+  const deleteEmail = async (email: string) => {
+    showWarningAlert("Delete Email", `Delete ${email}?`, [
+      { text: "Cancel", style: "cancel" },
+      {
+        text: "Delete",
+        style: "destructive",
+        onPress: () => {
+          void executeProfileMutation({
+            path: "/profile/emails",
+            method: "DELETE",
+            actionKey: `delete-email-${email}`,
+            body: { email },
+            successMessage: "Email deleted.",
+          });
+        },
+      },
+    ]);
+  };
+
+  const openAddPhone = () => {
+    setPhoneEditor({
+      visible: true,
+      mode: "add",
+      originalValue: "",
+      value: "",
+      info: "",
+    });
+  };
+
+  const openEditPhone = (item: ProfilePhone) => {
+    setPhoneEditor({
+      visible: true,
+      mode: "edit",
+      originalValue: item.number,
+      value: item.number,
+      info: item.info || "",
+    });
+  };
+
+  const savePhone = async () => {
+    const phone = phoneEditor.value.trim();
+    const info = phoneEditor.info.trim();
+
+    if (!phone) {
+      showWarningAlert("Missing info", "Phone number is required.");
+      return;
+    }
+
+    if (phoneEditor.mode === "add") {
+      const ok = await executeProfileMutation({
+        path: "/profile/phones",
+        method: "POST",
+        actionKey: "add-phone",
+        body: {
+          phone,
+          ...(info ? { info } : {}),
+        },
+        successMessage: "Phone added successfully.",
+      });
+
+      if (ok) {
+        setPhoneEditor(EMPTY_EDITOR);
+      }
+      return;
+    }
+
+    const oldPhone = phoneEditor.originalValue;
+    const existingInfo =
+      profile?.phones.find((item) => item.number === oldPhone)?.info || "";
+
+    const body: { oldPhone: string; newPhone?: string; info?: string } = {
+      oldPhone,
+    };
+    let hasChange = false;
+
+    if (phone !== oldPhone.trim()) {
+      body.newPhone = phone;
+      hasChange = true;
+    }
+
+    if (info !== existingInfo) {
+      body.info = info;
+      hasChange = true;
+    }
+
+    if (!hasChange) {
+      showWarningAlert("No changes", "Nothing changed to save.");
+      return;
+    }
+
+    const ok = await executeProfileMutation({
+      path: "/profile/phones",
+      method: "PATCH",
+      actionKey: "edit-phone",
+      body,
+      successMessage: "Phone updated successfully.",
+    });
+
+    if (ok) {
+      setPhoneEditor(EMPTY_EDITOR);
+    }
+  };
+
+  const setPrimaryPhone = async (phone: string) => {
+    await executeProfileMutation({
+      path: "/profile/phones/primary",
+      method: "PATCH",
+      actionKey: `primary-phone-${phone}`,
+      body: { phone },
+      successMessage: "Primary phone updated.",
+    });
+  };
+
+  const deletePhone = async (phone: string) => {
+    showWarningAlert("Delete Phone", `Delete ${phone}?`, [
+      { text: "Cancel", style: "cancel" },
+      {
+        text: "Delete",
+        style: "destructive",
+        onPress: () => {
+          void executeProfileMutation({
+            path: "/profile/phones",
+            method: "DELETE",
+            actionKey: `delete-phone-${phone}`,
+            body: { phone },
+            successMessage: "Phone deleted.",
+          });
+        },
+      },
+    ]);
+  };
+
+  const uploadPhoto = async () => {
+    try {
+      const permission =
+        await ImagePicker.requestMediaLibraryPermissionsAsync();
+      if (permission.status !== "granted") {
+        showWarningAlert(
+          "Permission required",
+          "Please allow photo library access to upload a profile photo.",
+        );
+        return;
+      }
+
+      const result = await ImagePicker.launchImageLibraryAsync({
+        mediaTypes: ImagePicker.MediaTypeOptions.Images,
+        allowsEditing: true,
+        quality: 0.75,
+        base64: false,
+      });
+
+      if (result.canceled || !result.assets?.[0]?.uri) {
+        return;
+      }
+
+      const asset = result.assets[0];
+      const fileName = asset.fileName || "profile.jpg";
+      const mimeType =
+        asset.mimeType ||
+        (fileName.toLowerCase().endsWith(".png") ? "image/png" : "image/jpeg");
+
+      setBusyAction("upload-photo");
+      setApiError(null);
+
+      const base64 = await FileSystem.readAsStringAsync(asset.uri, {
+        encoding: FileSystem.EncodingType.Base64,
+      });
+      const imageDataUrl = `data:${mimeType};base64,${base64}`;
+
+      const uploadResult = await requestProfile<{
+        profileImageUrl: string | null;
+        message: string;
+      }>("/profile/photo", {
+        method: "POST",
+        body: JSON.stringify({
+          imageDataUrl,
+          originalName: fileName,
+        }),
+      });
+
+      if (!uploadResult.ok) {
+        setApiError(uploadResult.error);
+        showErrorAlert("Upload failed", uploadResult.error);
+        return;
+      }
+
+      setProfile((prev) =>
+        prev
+          ? {
+              ...prev,
+              profileImageUrl: resolveResourceUrl(
+                uploadResult.data.profileImageUrl,
+              ),
+            }
+          : prev,
+      );
+
+      showSuccessAlert(
+        "Profile photo",
+        uploadResult.data.message || "Profile photo updated successfully.",
+      );
+    } catch (error) {
+      const message =
+        error instanceof Error ? error.message : "Could not upload photo.";
+      setApiError(message);
+      showErrorAlert("Upload failed", message);
+    } finally {
+      setBusyAction(null);
+    }
+  };
+
+  const onLogOut = () => {
+    showWarningAlert("Sign Out", "Are you sure you want to sign out?", [
+      { text: "Cancel", style: "cancel" },
+      {
+        text: "Sign Out",
+        style: "destructive",
+        onPress: async () => {
+          await signOut();
+          router.replace("/");
+        },
+      },
+    ]);
+  };
+
+  if (loading) {
+    return (
+      <View style={[styles.loadingContainer, { paddingTop: insets.top }]}>
+        <ActivityIndicator size="large" color="#0284C7" />
+        <Text style={styles.loadingText}>Loading profile...</Text>
+      </View>
+    );
+  }
 
   return (
-    <View style={styles.container}>
-      <ScrollView 
-        style={styles.scrollView}
-        contentContainerStyle={[styles.scrollContent, { paddingBottom: Math.max(insets.bottom, 20) + 100 }]}
+    <View style={[styles.container, { paddingTop: insets.top }]}>
+      <ApiErrorText error={apiError} className="px-4" />
+
+      <ScrollView
+        contentContainerStyle={{
+          paddingHorizontal: 16,
+          paddingBottom: Math.max(insets.bottom, 18) + 96,
+        }}
+        refreshControl={
+          <RefreshControl
+            refreshing={refreshing}
+            onRefresh={() => void fetchProfile(false)}
+          />
+        }
         showsVerticalScrollIndicator={false}
       >
-        {/* Header with Gradient Background */}
-        <LinearGradient
-          colors={['#0EA5E9', '#0284C7', '#0369A1']}
-          start={{ x: 0, y: 0 }}
-          end={{ x: 1, y: 1 }}
-          style={[styles.headerGradient, { paddingTop: insets.top + 20 }]}
-        >
-          {/* Decorative Elements */}
-          <View style={styles.decorativeCircle1} />
-          <View style={styles.decorativeCircle2} />
-          
-          {/* Profile Avatar */}
-          <View style={styles.avatarWrapper}>
-            <View style={styles.avatarContainer}>
-              <Image
-                source={typeof avatar === 'string' ? { uri: avatar } : avatar}
-                style={styles.avatar}
-              />
-              <View style={[styles.statusIndicator, { backgroundColor: statusConfig.color }]}>
-                <View style={styles.statusIndicatorInner} />
-              </View>
-            </View>
-          </View>
+        <View style={styles.headerCard}>
+          <Image source={avatarSource} style={styles.avatar} />
 
-          {/* Name and Status */}
-          <Text style={styles.name}>{driverName}</Text>
-          
-          {/* Status Badge */}
-          <View style={[styles.statusBadge, { backgroundColor: statusConfig.bg }]}>
-            <Ionicons name={statusConfig.icon} size={14} color={statusConfig.color} />
-            <Text style={[styles.statusText, { color: statusConfig.color }]}>
-              {statusConfig.label}
-            </Text>
-          </View>
+          <Text style={styles.displayName}>{displayName}</Text>
+          <Text style={styles.driverId}>
+            Driver ID: {profile?.id || user?.id || "—"}
+          </Text>
 
-          {/* Driver ID */}
-          <View style={styles.driverIdContainer}>
-            <Ionicons name="id-card-outline" size={14} color="rgba(255,255,255,0.7)" />
-            <Text style={styles.driverIdText}>ID: {typeof driverId === 'string' ? driverId.slice(0, 8).toUpperCase() : driverId}</Text>
-          </View>
-        </LinearGradient>
-
-        {/* Content Section */}
-        <View style={styles.content}>
-          {/* Contact Card */}
-          <View style={styles.card}>
-            <View style={styles.cardHeader}>
-              <View style={styles.cardIconContainer}>
-                <Ionicons name="person-outline" size={20} color="#0EA5E9" />
-              </View>
-              <Text style={styles.cardTitle}>Contact Information</Text>
-            </View>
-            
-            <View style={styles.cardBody}>
-              <View style={styles.infoRow}>
-                <View style={styles.infoIconSmall}>
-                  <Ionicons name="call" size={16} color="#64748B" />
-                </View>
-                <View style={styles.infoTextContainer}>
-                  <Text style={styles.infoLabel}>Phone Number</Text>
-                  <Text style={styles.infoValue}>{phone}</Text>
-                </View>
-              </View>
-              
-              {helperName && (
-                <>
-                  <View style={styles.cardDivider} />
-                  <View style={styles.infoRow}>
-                    <View style={styles.infoIconSmall}>
-                      <Ionicons name="people" size={16} color="#64748B" />
-                    </View>
-                    <View style={styles.infoTextContainer}>
-                      <Text style={styles.infoLabel}>Helper</Text>
-                      <Text style={styles.infoValue}>{helperName}</Text>
-                    </View>
-                  </View>
-                  
-                  {helperPhone && (
-                    <>
-                      <View style={styles.cardDivider} />
-                      <View style={styles.infoRow}>
-                        <View style={styles.infoIconSmall}>
-                          <Ionicons name="call-outline" size={16} color="#64748B" />
-                        </View>
-                        <View style={styles.infoTextContainer}>
-                          <Text style={styles.infoLabel}>Helper Phone</Text>
-                          <Text style={styles.infoValue}>{helperPhone}</Text>
-                        </View>
-                      </View>
-                    </>
-                  )}
-                </>
-              )}
-            </View>
-          </View>
-
-          {/* Vehicle Card */}
-          <View style={styles.card}>
-            <View style={styles.cardHeader}>
-              <View style={[styles.cardIconContainer, { backgroundColor: '#FEF3C7' }]}>
-                <Ionicons name="car-sport" size={20} color="#F59E0B" />
-              </View>
-              <Text style={styles.cardTitle}>Vehicle Details</Text>
-            </View>
-            
-            <View style={styles.cardBody}>
-              <View style={styles.vehicleInfoGrid}>
-                <View style={styles.vehicleInfoItem}>
-                  <Text style={styles.vehicleInfoLabel}>Type</Text>
-                  <Text style={styles.vehicleInfoValue}>{vehicleType}</Text>
-                </View>
-                <View style={styles.vehicleInfoDivider} />
-                <View style={styles.vehicleInfoItem}>
-                  <Text style={styles.vehicleInfoLabel}>Plate Number</Text>
-                  <Text style={styles.vehicleInfoValue}>{vehiclePlate}</Text>
-                </View>
-              </View>
-            </View>
-          </View>
-
-          {/* Zones Card */}
-          {zones && zones.length > 0 && (
-            <View style={styles.card}>
-              <View style={styles.cardHeader}>
-                <View style={[styles.cardIconContainer, { backgroundColor: '#DCFCE7' }]}>
-                  <Ionicons name="location" size={20} color="#22C55E" />
-                </View>
-                <Text style={styles.cardTitle}>Assigned {zones.length === 1 ? 'Zone' : 'Zones'}</Text>
-              </View>
-              
-              <View style={styles.cardBody}>
-                <View style={styles.zonesGrid}>
-                  {zones.map((zoneName, index) => (
-                    <View key={index} style={styles.zoneChip}>
-                      <Ionicons name="navigate" size={14} color="#0369A1" />
-                      <Text style={styles.zoneChipText}>{zoneName}</Text>
-                    </View>
-                  ))}
-                </View>
-              </View>
-            </View>
-          )}
-
-          {/* Quick Actions */}
-          <View style={styles.quickActionsContainer}>
-            <Text style={styles.quickActionsTitle}>Quick Actions</Text>
-            <View style={styles.quickActionsGrid}>
-              <TouchableOpacity 
-                style={styles.quickActionCard}
-                onPress={() => router.push('/(root)/(tabs)/delivery-history')}
-                activeOpacity={0.7}
-              >
-                <View style={[styles.quickActionIcon, { backgroundColor: '#EEF2FF' }]}>
-                  <Ionicons name="time-outline" size={24} color="#6366F1" />
-                </View>
-                <Text style={styles.quickActionLabel}>History</Text>
-              </TouchableOpacity>
-
-              <TouchableOpacity 
-                style={styles.quickActionCard}
-                onPress={() => router.push('/(root)/(tabs)/expenses')}
-                activeOpacity={0.7}
-              >
-                <View style={[styles.quickActionIcon, { backgroundColor: '#FEF3C7' }]}>
-                  <Ionicons name="receipt-outline" size={24} color="#F59E0B" />
-                </View>
-                <Text style={styles.quickActionLabel}>Expenses</Text>
-              </TouchableOpacity>
-
-              <TouchableOpacity 
-                style={styles.quickActionCard}
-                onPress={() => router.push('/(root)/(tabs)/loaded-items')}
-                activeOpacity={0.7}
-              >
-                <View style={[styles.quickActionIcon, { backgroundColor: '#DCFCE7' }]}>
-                  <Ionicons name="cube-outline" size={24} color="#22C55E" />
-                </View>
-                <Text style={styles.quickActionLabel}>Inventory</Text>
-              </TouchableOpacity>
-
-              <TouchableOpacity 
-                style={styles.quickActionCard}
-                onPress={() => router.push('/(root)/(tabs)/direct-sales')}
-                activeOpacity={0.7}
-              >
-                <View style={[styles.quickActionIcon, { backgroundColor: '#FCE7F3' }]}>
-                  <Ionicons name="cart-outline" size={24} color="#EC4899" />
-                </View>
-                <Text style={styles.quickActionLabel}>Direct Sale</Text>
-              </TouchableOpacity>
-            </View>
-          </View>
-
-          {/* Sign Out Button */}
-          <TouchableOpacity 
-            style={styles.signOutButton} 
-            onPress={onLogOut} 
-            activeOpacity={0.8}
+          <TouchableOpacity
+            style={[styles.photoButton, isBusy && styles.disabledButton]}
+            onPress={() => void uploadPhoto()}
+            disabled={isBusy}
           >
-            <Ionicons name="log-out-outline" size={20} color="#EF4444" />
-            <Text style={styles.signOutText}>Sign Out</Text>
+            {busyAction === "upload-photo" ? (
+              <ActivityIndicator size="small" color="#FFFFFF" />
+            ) : (
+              <>
+                <Ionicons name="camera-outline" size={16} color="#FFFFFF" />
+                <Text style={styles.photoButtonText}>Change Photo</Text>
+              </>
+            )}
           </TouchableOpacity>
+        </View>
 
-          {/* App Info */}
-          <View style={styles.appInfo}>
-            <View style={styles.appInfoRow}>
-              <Ionicons name="water" size={16} color="#0EA5E9" />
-              <Text style={styles.appName}>Al Ghadeer Water</Text>
+        <View style={styles.card}>
+          <View style={styles.cardHeader}>
+            <Text style={styles.cardTitle}>Basic Information</Text>
+            <TouchableOpacity
+              style={styles.addButton}
+              onPress={openNameEditor}
+              disabled={isBusy}
+            >
+              <Ionicons name="create-outline" size={15} color="#0F766E" />
+              <Text style={styles.addButtonText}>Edit</Text>
+            </TouchableOpacity>
+          </View>
+          <View style={styles.cardBody}>
+            <View style={styles.infoRow}>
+              <Text style={styles.infoLabel}>First name</Text>
+              <Text style={styles.infoValue}>{profile?.firstName || "—"}</Text>
             </View>
-            <Text style={styles.version}>Driver App v1.0.0</Text>
+            <View style={styles.rowDivider} />
+            <View style={styles.infoRow}>
+              <Text style={styles.infoLabel}>Last name</Text>
+              <Text style={styles.infoValue}>{profile?.lastName || "—"}</Text>
+            </View>
           </View>
         </View>
+
+        <View style={styles.card}>
+          <View style={styles.cardHeader}>
+            <Text style={styles.cardTitle}>Emails</Text>
+            <TouchableOpacity
+              style={styles.addButton}
+              onPress={openAddEmail}
+              disabled={isBusy}
+            >
+              <Ionicons name="add" size={16} color="#0F766E" />
+              <Text style={styles.addButtonText}>Add</Text>
+            </TouchableOpacity>
+          </View>
+          <View style={styles.cardBody}>
+            {!profile?.emails?.length ? (
+              <Text style={styles.emptyText}>No email saved yet.</Text>
+            ) : (
+              profile.emails.map((item) => (
+                <View key={item.address} style={styles.contactItem}>
+                  <View style={styles.contactMain}>
+                    <Text style={styles.contactValue}>{item.address}</Text>
+                    {!!item.info && (
+                      <Text style={styles.contactInfo}>{item.info}</Text>
+                    )}
+                    {item.isPrimary && (
+                      <View style={styles.primaryBadge}>
+                        <Ionicons name="star" size={12} color="#92400E" />
+                        <Text style={styles.primaryBadgeText}>Primary</Text>
+                      </View>
+                    )}
+                  </View>
+                  <View style={styles.contactActions}>
+                    <TouchableOpacity
+                      style={styles.actionButton}
+                      onPress={() => openEditEmail(item)}
+                      disabled={isBusy}
+                    >
+                      <Ionicons
+                        name="create-outline"
+                        size={16}
+                        color="#0369A1"
+                      />
+                    </TouchableOpacity>
+                    {!item.isPrimary && (
+                      <TouchableOpacity
+                        style={styles.actionButton}
+                        onPress={() => void setPrimaryEmail(item.address)}
+                        disabled={isBusy}
+                      >
+                        <Ionicons
+                          name="star-outline"
+                          size={16}
+                          color="#0F766E"
+                        />
+                      </TouchableOpacity>
+                    )}
+                    {!item.isPrimary && (
+                      <TouchableOpacity
+                        style={styles.actionButton}
+                        onPress={() => void deleteEmail(item.address)}
+                        disabled={isBusy}
+                      >
+                        <Ionicons
+                          name="trash-outline"
+                          size={16}
+                          color="#B91C1C"
+                        />
+                      </TouchableOpacity>
+                    )}
+                  </View>
+                </View>
+              ))
+            )}
+          </View>
+        </View>
+
+        <View style={styles.card}>
+          <View style={styles.cardHeader}>
+            <Text style={styles.cardTitle}>Phones</Text>
+            <TouchableOpacity
+              style={styles.addButton}
+              onPress={openAddPhone}
+              disabled={isBusy}
+            >
+              <Ionicons name="add" size={16} color="#0F766E" />
+              <Text style={styles.addButtonText}>Add</Text>
+            </TouchableOpacity>
+          </View>
+          <View style={styles.cardBody}>
+            {!profile?.phones?.length ? (
+              <Text style={styles.emptyText}>No phone saved yet.</Text>
+            ) : (
+              profile.phones.map((item) => (
+                <View key={item.number} style={styles.contactItem}>
+                  <View style={styles.contactMain}>
+                    <Text style={styles.contactValue}>{item.number}</Text>
+                    {!!item.info && (
+                      <Text style={styles.contactInfo}>{item.info}</Text>
+                    )}
+                    {item.isPrimary && (
+                      <View style={styles.primaryBadge}>
+                        <Ionicons name="star" size={12} color="#92400E" />
+                        <Text style={styles.primaryBadgeText}>Primary</Text>
+                      </View>
+                    )}
+                  </View>
+                  <View style={styles.contactActions}>
+                    <TouchableOpacity
+                      style={styles.actionButton}
+                      onPress={() => openEditPhone(item)}
+                      disabled={isBusy}
+                    >
+                      <Ionicons
+                        name="create-outline"
+                        size={16}
+                        color="#0369A1"
+                      />
+                    </TouchableOpacity>
+                    {!item.isPrimary && (
+                      <TouchableOpacity
+                        style={styles.actionButton}
+                        onPress={() => void setPrimaryPhone(item.number)}
+                        disabled={isBusy}
+                      >
+                        <Ionicons
+                          name="star-outline"
+                          size={16}
+                          color="#0F766E"
+                        />
+                      </TouchableOpacity>
+                    )}
+                    {!item.isPrimary && (
+                      <TouchableOpacity
+                        style={styles.actionButton}
+                        onPress={() => void deletePhone(item.number)}
+                        disabled={isBusy}
+                      >
+                        <Ionicons
+                          name="trash-outline"
+                          size={16}
+                          color="#B91C1C"
+                        />
+                      </TouchableOpacity>
+                    )}
+                  </View>
+                </View>
+              ))
+            )}
+          </View>
+        </View>
+
+        <TouchableOpacity
+          style={styles.signOutButton}
+          onPress={onLogOut}
+          disabled={isBusy}
+        >
+          <Ionicons name="log-out-outline" size={18} color="#B91C1C" />
+          <Text style={styles.signOutText}>Sign Out</Text>
+        </TouchableOpacity>
       </ScrollView>
+
+      <EditModal
+        visible={nameModalVisible}
+        title="Edit Name"
+        submitLabel="Save"
+        busy={busyAction === "save-name"}
+        onClose={() => setNameModalVisible(false)}
+        onSubmit={() => void saveName()}
+      >
+        <Text style={styles.inputLabel}>First Name</Text>
+        <TextInput
+          style={styles.input}
+          value={firstNameDraft}
+          onChangeText={setFirstNameDraft}
+          placeholder="First name"
+          placeholderTextColor="#94A3B8"
+          editable={busyAction !== "save-name"}
+        />
+
+        <Text style={styles.inputLabel}>Last Name</Text>
+        <TextInput
+          style={styles.input}
+          value={lastNameDraft}
+          onChangeText={setLastNameDraft}
+          placeholder="Last name"
+          placeholderTextColor="#94A3B8"
+          editable={busyAction !== "save-name"}
+        />
+      </EditModal>
+
+      <EditModal
+        visible={emailEditor.visible}
+        title={emailEditor.mode === "add" ? "Add Email" : "Edit Email"}
+        submitLabel={emailEditor.mode === "add" ? "Add" : "Save"}
+        busy={busyAction === "add-email" || busyAction === "edit-email"}
+        onClose={() => setEmailEditor(EMPTY_EDITOR)}
+        onSubmit={() => void saveEmail()}
+      >
+        <Text style={styles.inputLabel}>Email</Text>
+        <TextInput
+          style={styles.input}
+          value={emailEditor.value}
+          onChangeText={(value) =>
+            setEmailEditor((prev) => ({ ...prev, value }))
+          }
+          placeholder="email@example.com"
+          placeholderTextColor="#94A3B8"
+          autoCapitalize="none"
+        />
+
+        <Text style={styles.inputLabel}>Info (optional)</Text>
+        <TextInput
+          style={styles.input}
+          value={emailEditor.info}
+          onChangeText={(info) => setEmailEditor((prev) => ({ ...prev, info }))}
+          placeholder="work / personal"
+          placeholderTextColor="#94A3B8"
+        />
+      </EditModal>
+
+      <EditModal
+        visible={phoneEditor.visible}
+        title={phoneEditor.mode === "add" ? "Add Phone" : "Edit Phone"}
+        submitLabel={phoneEditor.mode === "add" ? "Add" : "Save"}
+        busy={busyAction === "add-phone" || busyAction === "edit-phone"}
+        onClose={() => setPhoneEditor(EMPTY_EDITOR)}
+        onSubmit={() => void savePhone()}
+      >
+        <Text style={styles.inputLabel}>Phone</Text>
+        <TextInput
+          style={styles.input}
+          value={phoneEditor.value}
+          onChangeText={(value) =>
+            setPhoneEditor((prev) => ({ ...prev, value }))
+          }
+          placeholder="+971XXXXXXXXX"
+          placeholderTextColor="#94A3B8"
+          keyboardType="phone-pad"
+        />
+
+        <Text style={styles.inputLabel}>Info (optional)</Text>
+        <TextInput
+          style={styles.input}
+          value={phoneEditor.info}
+          onChangeText={(info) => setPhoneEditor((prev) => ({ ...prev, info }))}
+          placeholder="work / personal"
+          placeholderTextColor="#94A3B8"
+        />
+      </EditModal>
     </View>
   );
 };
@@ -291,315 +1041,275 @@ const Profile = () => {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: '#F1F5F9',
+    backgroundColor: "#F8FAFC",
   },
-  scrollView: {
+  loadingContainer: {
     flex: 1,
+    alignItems: "center",
+    justifyContent: "center",
+    backgroundColor: "#F8FAFC",
   },
-  scrollContent: {
-    flexGrow: 1,
+  loadingText: {
+    marginTop: 10,
+    color: "#334155",
+    fontSize: 14,
+    fontWeight: "500",
   },
-  headerGradient: {
-    paddingBottom: 40,
-    paddingHorizontal: 24,
-    alignItems: 'center',
-    overflow: 'hidden',
-    position: 'relative',
-  },
-  decorativeCircle1: {
-    position: 'absolute',
-    top: -50,
-    right: -50,
-    width: 200,
-    height: 200,
-    borderRadius: 100,
-    backgroundColor: 'rgba(255, 255, 255, 0.1)',
-  },
-  decorativeCircle2: {
-    position: 'absolute',
-    bottom: -30,
-    left: -60,
-    width: 150,
-    height: 150,
-    borderRadius: 75,
-    backgroundColor: 'rgba(255, 255, 255, 0.08)',
-  },
-  avatarWrapper: {
-    marginBottom: 16,
-  },
-  avatarContainer: {
-    position: 'relative',
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 8 },
-    shadowOpacity: 0.25,
-    shadowRadius: 16,
-    elevation: 12,
+  headerCard: {
+    marginTop: 6,
+    marginBottom: 14,
+    borderRadius: 20,
+    backgroundColor: "#0F172A",
+    paddingVertical: 24,
+    paddingHorizontal: 18,
+    alignItems: "center",
   },
   avatar: {
-    width: 110,
-    height: 110,
-    borderRadius: 55,
-    borderWidth: 4,
-    borderColor: 'rgba(255, 255, 255, 0.9)',
-    backgroundColor: '#F1F5F9',
-  },
-  statusIndicator: {
-    position: 'absolute',
-    bottom: 6,
-    right: 6,
-    width: 28,
-    height: 28,
-    borderRadius: 14,
-    borderWidth: 4,
-    borderColor: '#FFFFFF',
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-  statusIndicatorInner: {
-    width: 10,
-    height: 10,
-    borderRadius: 5,
-    backgroundColor: 'rgba(255, 255, 255, 0.9)',
-  },
-  name: {
-    fontSize: 28,
-    fontWeight: '700',
-    color: '#FFFFFF',
-    letterSpacing: -0.5,
-    marginBottom: 12,
-    textShadowColor: 'rgba(0, 0, 0, 0.15)',
-    textShadowOffset: { width: 0, height: 1 },
-    textShadowRadius: 4,
-  },
-  statusBadge: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingHorizontal: 16,
-    paddingVertical: 8,
-    borderRadius: 20,
-    gap: 6,
+    width: 96,
+    height: 96,
+    borderRadius: 48,
+    borderWidth: 3,
+    borderColor: "#FFFFFF",
+    backgroundColor: "#E2E8F0",
     marginBottom: 12,
   },
-  statusText: {
-    fontSize: 14,
-    fontWeight: '600',
+  displayName: {
+    fontSize: 24,
+    fontWeight: "700",
+    color: "#FFFFFF",
   },
-  driverIdContainer: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 6,
-  },
-  driverIdText: {
+  driverId: {
     fontSize: 13,
-    color: 'rgba(255, 255, 255, 0.8)',
-    fontWeight: '500',
+    color: "#CBD5E1",
+    marginTop: 4,
+    marginBottom: 14,
   },
-  content: {
-    paddingHorizontal: 20,
-    marginTop: -20,
+  photoButton: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
+    backgroundColor: "#0EA5E9",
+    paddingHorizontal: 14,
+    paddingVertical: 8,
+    borderRadius: 999,
+  },
+  photoButtonText: {
+    color: "#FFFFFF",
+    fontSize: 13,
+    fontWeight: "600",
   },
   card: {
-    backgroundColor: '#FFFFFF',
-    borderRadius: 20,
-    marginBottom: 16,
-    shadowColor: '#0F172A',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.06,
-    shadowRadius: 12,
-    elevation: 3,
-    overflow: 'hidden',
+    backgroundColor: "#FFFFFF",
+    borderRadius: 16,
+    marginBottom: 12,
+    borderWidth: 1,
+    borderColor: "#E2E8F0",
+    overflow: "hidden",
   },
   cardHeader: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingHorizontal: 20,
-    paddingTop: 20,
-    paddingBottom: 16,
-    gap: 12,
-  },
-  cardIconContainer: {
-    width: 40,
-    height: 40,
-    borderRadius: 12,
-    backgroundColor: '#E0F2FE',
-    justifyContent: 'center',
-    alignItems: 'center',
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    paddingHorizontal: 14,
+    paddingVertical: 12,
+    borderBottomWidth: 1,
+    borderBottomColor: "#F1F5F9",
   },
   cardTitle: {
-    fontSize: 17,
-    fontWeight: '700',
-    color: '#0F172A',
-    letterSpacing: -0.3,
+    color: "#0F172A",
+    fontSize: 16,
+    fontWeight: "700",
+  },
+  addButton: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 3,
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    borderRadius: 999,
+    backgroundColor: "#ECFDF5",
+  },
+  addButtonText: {
+    color: "#0F766E",
+    fontSize: 12,
+    fontWeight: "700",
   },
   cardBody: {
-    paddingHorizontal: 20,
-    paddingBottom: 20,
-  },
-  cardDivider: {
-    height: 1,
-    backgroundColor: '#F1F5F9',
-    marginVertical: 14,
-    marginLeft: 44,
+    paddingHorizontal: 14,
+    paddingVertical: 10,
+    gap: 8,
   },
   infoRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-  },
-  infoIconSmall: {
-    width: 36,
-    height: 36,
-    borderRadius: 10,
-    backgroundColor: '#F8FAFC',
-    justifyContent: 'center',
-    alignItems: 'center',
-    marginRight: 14,
-  },
-  infoTextContainer: {
-    flex: 1,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
   },
   infoLabel: {
+    color: "#64748B",
     fontSize: 12,
-    fontWeight: '500',
-    color: '#94A3B8',
-    marginBottom: 2,
-    textTransform: 'uppercase',
+    textTransform: "uppercase",
     letterSpacing: 0.3,
   },
   infoValue: {
-    fontSize: 16,
-    fontWeight: '600',
-    color: '#1E293B',
+    color: "#0F172A",
+    fontSize: 15,
+    fontWeight: "600",
+    flexShrink: 1,
+    textAlign: "right",
   },
-  vehicleInfoGrid: {
-    flexDirection: 'row',
-    backgroundColor: '#FFFBEB',
-    borderRadius: 16,
-    padding: 16,
+  rowDivider: {
+    height: 1,
+    backgroundColor: "#F1F5F9",
   },
-  vehicleInfoItem: {
-    flex: 1,
-    alignItems: 'center',
-  },
-  vehicleInfoDivider: {
-    width: 1,
-    backgroundColor: '#FDE68A',
-    marginHorizontal: 12,
-  },
-  vehicleInfoLabel: {
-    fontSize: 12,
-    fontWeight: '500',
-    color: '#92400E',
-    marginBottom: 6,
-    textTransform: 'uppercase',
-    letterSpacing: 0.3,
-  },
-  vehicleInfoValue: {
-    fontSize: 18,
-    fontWeight: '700',
-    color: '#78350F',
-  },
-  zonesGrid: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    gap: 10,
-  },
-  zoneChip: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: '#E0F2FE',
-    paddingHorizontal: 14,
-    paddingVertical: 10,
+  contactItem: {
+    backgroundColor: "#F8FAFC",
     borderRadius: 12,
-    gap: 8,
+    paddingHorizontal: 10,
+    paddingVertical: 10,
+    borderWidth: 1,
+    borderColor: "#E2E8F0",
   },
-  zoneChipText: {
+  contactMain: {
+    marginBottom: 8,
+  },
+  contactValue: {
+    color: "#0F172A",
     fontSize: 14,
-    fontWeight: '600',
-    color: '#0369A1',
+    fontWeight: "600",
   },
-  quickActionsContainer: {
-    marginBottom: 20,
+  contactInfo: {
+    marginTop: 4,
+    color: "#475569",
+    fontSize: 12,
   },
-  quickActionsTitle: {
+  primaryBadge: {
+    marginTop: 7,
+    alignSelf: "flex-start",
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 4,
+    backgroundColor: "#FEF3C7",
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    borderRadius: 999,
+  },
+  primaryBadgeText: {
+    color: "#92400E",
+    fontSize: 11,
+    fontWeight: "700",
+  },
+  contactActions: {
+    flexDirection: "row",
+    justifyContent: "flex-end",
+    gap: 6,
+  },
+  actionButton: {
+    width: 34,
+    height: 34,
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: "#E2E8F0",
+    backgroundColor: "#FFFFFF",
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  emptyText: {
+    color: "#64748B",
     fontSize: 13,
-    fontWeight: '600',
-    color: '#64748B',
-    textTransform: 'uppercase',
-    letterSpacing: 0.5,
-    marginBottom: 14,
-    marginLeft: 4,
-  },
-  quickActionsGrid: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    gap: 12,
-  },
-  quickActionCard: {
-    width: (width - 52) / 2,
-    backgroundColor: '#FFFFFF',
-    borderRadius: 16,
-    padding: 20,
-    alignItems: 'center',
-    shadowColor: '#0F172A',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.04,
-    shadowRadius: 8,
-    elevation: 2,
-  },
-  quickActionIcon: {
-    width: 56,
-    height: 56,
-    borderRadius: 16,
-    justifyContent: 'center',
-    alignItems: 'center',
-    marginBottom: 12,
-  },
-  quickActionLabel: {
-    fontSize: 14,
-    fontWeight: '600',
-    color: '#334155',
   },
   signOutButton: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    backgroundColor: '#FFFFFF',
-    paddingVertical: 18,
-    borderRadius: 16,
-    gap: 10,
-    borderWidth: 1.5,
-    borderColor: '#FECACA',
-    shadowColor: '#EF4444',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.08,
-    shadowRadius: 8,
-    elevation: 2,
+    marginTop: 4,
+    backgroundColor: "#FFFFFF",
+    borderWidth: 1,
+    borderColor: "#FECACA",
+    borderRadius: 14,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 8,
+    paddingVertical: 14,
   },
   signOutText: {
-    fontSize: 16,
-    fontWeight: '600',
-    color: '#EF4444',
+    color: "#B91C1C",
+    fontSize: 15,
+    fontWeight: "700",
   },
-  appInfo: {
-    alignItems: 'center',
-    marginTop: 32,
+  disabledButton: {
+    opacity: 0.6,
+  },
+  modalOverlay: {
+    flex: 1,
+    backgroundColor: "rgba(15, 23, 42, 0.5)",
+    justifyContent: "center",
+    paddingHorizontal: 16,
+  },
+  modalCard: {
+    backgroundColor: "#FFFFFF",
+    borderRadius: 16,
+    paddingHorizontal: 16,
+    paddingTop: 14,
     paddingBottom: 16,
+    borderWidth: 1,
+    borderColor: "#E2E8F0",
   },
-  appInfoRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8,
+  modalHeader: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
+    marginBottom: 14,
+  },
+  modalTitle: {
+    color: "#0F172A",
+    fontSize: 17,
+    fontWeight: "700",
+  },
+  inputLabel: {
+    color: "#334155",
+    fontSize: 12,
+    fontWeight: "600",
     marginBottom: 6,
+    marginTop: 4,
+    textTransform: "uppercase",
+    letterSpacing: 0.4,
   },
-  appName: {
-    fontSize: 16,
-    fontWeight: '700',
-    color: '#0EA5E9',
+  input: {
+    backgroundColor: "#F8FAFC",
+    borderWidth: 1,
+    borderColor: "#CBD5E1",
+    borderRadius: 10,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    marginBottom: 10,
+    color: "#0F172A",
+    fontSize: 14,
   },
-  version: {
-    fontSize: 13,
-    color: '#94A3B8',
-    fontWeight: '500',
+  modalActions: {
+    flexDirection: "row",
+    justifyContent: "flex-end",
+    gap: 10,
+    marginTop: 6,
+  },
+  modalButton: {
+    minWidth: 92,
+    paddingHorizontal: 14,
+    paddingVertical: 10,
+    borderRadius: 10,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  modalCancelButton: {
+    backgroundColor: "#F1F5F9",
+  },
+  modalSubmitButton: {
+    backgroundColor: "#0284C7",
+  },
+  modalCancelText: {
+    color: "#334155",
+    fontWeight: "600",
+  },
+  modalSubmitText: {
+    color: "#FFFFFF",
+    fontWeight: "700",
   },
 });
 

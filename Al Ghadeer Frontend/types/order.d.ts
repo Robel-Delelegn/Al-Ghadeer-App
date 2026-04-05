@@ -122,6 +122,8 @@ export interface Order {
   // Basic Order Info
   id: string;
   order_number: string;
+  display_id?: string;
+  date?: string;
   invoice_number?: string;
   status: 'pending' | 'assigned' | 'in_progress' | 'delivered' | 'failed' | 'cancelled';
   // Customer Information (Flat structure - new API format)
@@ -135,6 +137,13 @@ export interface Order {
   latitude?: number;
   longitude?: number;
   delivery_instructions?: string;
+  route_id?: string;
+  route_name?: string;
+  driver_id?: string;
+  earlier_visits_today_count?: number;
+  has_new_items?: boolean;
+  has_exact_location?: boolean;
+  tasks?: unknown[];
   
   // Product Details - supports both array format (new) and Record format (legacy)
   // New format: Array of product objects with id, name, quantity, type, category
@@ -159,6 +168,7 @@ export interface Order {
   completed_at?: string;
   // Signature requirement
   requires_signature?: boolean;
+  requires_immediate_invoice?: boolean;
   // Rent items - items that are borrowed or deposited
   rent_items?: Array<{
     id: string;
@@ -209,6 +219,8 @@ export interface Driver {
 export interface Product {
   // Basic Info
   id: string;
+  item_id?: string;
+  item_type?: 'asset' | 'retail' | 'refill';
   name: string;
   description: string;
   image_url: string;

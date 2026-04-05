@@ -2,6 +2,7 @@ import MyMap from "@/components/map";
 import { icons } from '@/constants';
 import { useOrderStore } from '@/store/index';
 import { useAuthStore } from '@/store/auth';
+import { resolveResourceUrl } from '@/utils/resources';
 import BottomSheet, { BottomSheetView } from "@gorhom/bottom-sheet";
 import { useRef } from "react";
 import { Image, Text, View } from "react-native";
@@ -14,7 +15,7 @@ const formatDate = (date: Date) =>
 const HomeLayout = ({children, snapPoints, driverName}:{children: React.ReactNode, snapPoints?:string[], driverName:string}) => {
     const { user } = useAuthStore();
     const { assignedOrders, currentDriver } = useOrderStore();
-    const avatar = currentDriver?.profile_image || icons.person;
+    const avatar = resolveResourceUrl(currentDriver?.profile_image) || icons.person;
     const today = new Date();
     const bottomSheet = useRef<BottomSheet>(null);
 

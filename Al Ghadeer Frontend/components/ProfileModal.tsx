@@ -4,6 +4,7 @@ import { Ionicons } from '@expo/vector-icons';
 import { icons } from '@/constants';
 import { useOrderStore } from '@/store/index';
 import { useAuthStore } from '@/store/auth';
+import { resolveResourceUrl } from '@/utils/resources';
 
 const { width } = Dimensions.get('window');
 
@@ -43,7 +44,7 @@ const ProfileModal: React.FC<ProfileModalProps> = ({ visible, onClose }) => {
   const hasZones = Array.isArray(zones) && zones.length > 0;
   const helperName = currentDriver?.helper_name || '—';
   const helperPhone = (currentDriver as any)?.helper_phone || '—';
-  const profileImage = currentDriver?.profile_image || icons.person;
+  const profileImage = resolveResourceUrl(currentDriver?.profile_image) || icons.person;
 
   const infoItems = [
     { icon: 'call-outline' as const, label: 'Phone', value: phone },

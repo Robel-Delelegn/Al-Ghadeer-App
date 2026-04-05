@@ -1,474 +1,1236 @@
-import ApiErrorText from '@/components/ApiErrorText';
-import { useExpenseStore, useOrderStore } from '@/store/index';
-import { authenticatedFetch } from '@/store/auth';
-import { parseApiResponseWithSoftError } from '@/utils/api';
-import { Ionicons } from '@expo/vector-icons';
-import * as ImagePicker from 'expo-image-picker';
-import * as FileSystem from 'expo-file-system';
-import React, { useMemo, useState, useEffect, useCallback } from 'react';
-import { 
-  Image, 
-  Modal, 
-  ScrollView, 
-  Text, 
-  TextInput, 
-  TouchableOpacity, 
-  View, 
+import ApiErrorText from "@/components/ApiErrorText";
+import { authenticatedFetch, useAuthStore } from "@/store/auth";
+import { useOrderStore } from "@/store/index";
+import { parseApiResponseWithSoftError } from "@/utils/api";
+import { resolveResourceUrl } from "@/utils/resources";
+import { Ionicons } from "@expo/vector-icons";
+import * as FileSystem from "expo-file-system";
+import * as ImagePicker from "expo-image-picker";
+import React, { useCallback, useEffect, useMemo, useState } from "react";
+import {
   ActivityIndicator,
-  StyleSheet,
-  Dimensions,
+  Image,
+  KeyboardAvoidingView,
+  Linking,
+  Modal,
   Platform,
-  Pressable,
-  KeyboardAvoidingView
-} from 'react-native';
-import { showErrorAlert, showWarningAlert, showSuccessAlert } from '@/store/utils/alert';
-import { useSafeAreaInsets } from 'react-native-safe-area-context';
+  RefreshControl,
+  ScrollView,
+  StyleSheet,
+  Text,
+  TextInput,
+  TouchableOpacity,
+  View,
+} from "react-native";
+import { useSafeAreaInsets } from "react-native-safe-area-context";
+import {
+  showErrorAlert,
+  showSuccessAlert,
+  showWarningAlert,
+} from "@/store/utils/alert";
 
-const { width } = Dimensions.get('window');
+const API_BASE_URL = (
+  process.env.EXPO_PUBLIC_IP_ADDRESS || "http://localhost:3000"
+)
+  .trim()
+  .replace(/\/+$/, "");
 
-const EXPENSE_TYPES = [
-  { id: 'fuel', label: 'Fuel', icon: 'flame-outline' as const },
-  { id: 'parking', label: 'Parking', icon: 'car-outline' as const },
-  { id: 'toll', label: 'Toll', icon: 'card-outline' as const },
-  { id: 'maintenance', label: 'Maintenance', icon: 'construct-outline' as const },
-  { id: 'supplies', label: 'Supplies', icon: 'cube-outline' as const },
-  { id: 'other', label: 'Other', icon: 'ellipsis-horizontal-outline' as const },
+const EXPENSE_TEMPLATES = [
+  { id: "fuel", label: "Fuel", icon: "flame-outline" as const },
+  { id: "parking", label: "Parking", icon: "car-outline" as const },
+  { id: "toll", label: "Toll Fee", icon: "card-outline" as const },
+  {
+    id: "maintenance",
+    label: "Vehicle Maintenance",
+    icon: "construct-outline" as const,
+  },
+  { id: "supplies", label: "Supplies", icon: "cube-outline" as const },
+  {
+    id: "other",
+    label: "Other Expense",
+    icon: "ellipsis-horizontal-outline" as const,
+  },
 ];
 
-const IP_ADDRESS = process.env.EXPO_PUBLIC_IP_ADDRESS;
+type HistoryTab = "pending" | "paid" | "all";
 
-interface SubmitExpenseResponse {
-  success: boolean;
-  message: string;
-  expense: {
-    id: number;
-    request_id: string;
-    status: 'pending' | 'approved' | 'rejected';
-    created_at: string;
-  };
+interface ExpenseActor {
+  id: string;
+  name: string;
+  email: string | null;
 }
 
-interface ServerExpense {
-  id: number;
-  request_id: string;
+interface ExpenseAttachment {
+  id: string;
+  resourceId: string;
+  name: string;
   type: string;
-  amount: number;
-  description?: string;
-  receipt_image?: string;
-  status?: 'pending' | 'approved' | 'rejected';
-  submission_date?: string;
-  created_at?: string;
-  updated_at?: string;
-  reviewed_at?: string;
-  reviewed_by?: string;
-  review_notes?: string;
+  url: string | null;
 }
+
+interface ExpenseItem {
+  requestId: string;
+  title: string | null;
+  description: string | null;
+  amount: number;
+  date: string;
+  status: string;
+  paid: boolean;
+  createdAt: string;
+  approvedBy: ExpenseActor | null;
+  approvedAt: string | null;
+  paidBy: ExpenseActor | null;
+  paidAt: string | null;
+  attachments: ExpenseAttachment[];
+}
+
+const normalizeExpenseItem = (item: ExpenseItem): ExpenseItem => {
+  const attachments = Array.isArray(item.attachments)
+    ? item.attachments.map((attachment) => ({
+        ...attachment,
+        url: resolveResourceUrl(attachment.url),
+      }))
+    : [];
+
+  return {
+    ...item,
+    attachments,
+  };
+};
+
+interface DraftAttachment {
+  id: string;
+  uri: string;
+  imageDataUrl: string;
+  originalName: string;
+}
+
+const MIME_TO_EXTENSION: Record<string, string> = {
+  "image/jpeg": "jpg",
+  "image/jpg": "jpg",
+  "image/png": "png",
+  "image/webp": "webp",
+  "image/heic": "heic",
+  "image/heif": "heif",
+};
+
+const guessMimeType = (uri: string): string => {
+  const lower = uri.toLowerCase();
+  if (lower.endsWith(".png")) return "image/png";
+  if (lower.endsWith(".webp")) return "image/webp";
+  if (lower.endsWith(".heic")) return "image/heic";
+  if (lower.endsWith(".heif")) return "image/heif";
+  return "image/jpeg";
+};
+
+const getTodayDateInput = (): string => {
+  const now = new Date();
+  const year = now.getFullYear();
+  const month = String(now.getMonth() + 1).padStart(2, "0");
+  const day = String(now.getDate()).padStart(2, "0");
+  return `${year}-${month}-${day}`;
+};
+
+const parseApiDate = (rawValue: string): Date | null => {
+  const value = rawValue.trim();
+  if (!value) return null;
+
+  const candidates: string[] = [];
+  candidates.push(value);
+
+  const withTimeSeparator = value.replace(" ", "T");
+  if (withTimeSeparator !== value) {
+    candidates.push(withTimeSeparator);
+  }
+
+  const normalized = withTimeSeparator
+    .replace(/(\.\d{3})\d+/, "$1")
+    .replace(/([+-]\d{2})(?!:\d{2})$/, "$1:00");
+  if (normalized !== withTimeSeparator) {
+    candidates.push(normalized);
+  }
+
+  if (/^\d{4}-\d{2}-\d{2}$/.test(value)) {
+    candidates.push(`${value}T00:00:00`);
+  }
+
+  for (let i = 0; i < candidates.length; i += 1) {
+    const parsed = new Date(candidates[i]);
+    if (!Number.isNaN(parsed.getTime())) {
+      return parsed;
+    }
+  }
+
+  return null;
+};
+
+const formatDate = (value?: string | null, includeTime = false): string => {
+  if (!value) return "N/A";
+  const date = parseApiDate(value);
+  if (!date) return "N/A";
+
+  if (includeTime) {
+    return date.toLocaleString("en-US", {
+      year: "numeric",
+      month: "short",
+      day: "numeric",
+      hour: "2-digit",
+      minute: "2-digit",
+    });
+  }
+
+  return date.toLocaleDateString("en-US", {
+    year: "numeric",
+    month: "short",
+    day: "numeric",
+  });
+};
+
+const normalizeStatus = (status?: string): string => {
+  const normalized = (status || "").trim().toLowerCase();
+  if (!normalized) return "pending";
+  return normalized;
+};
+
+const getStatusStyle = (status: string, paid: boolean) => {
+  if (paid) {
+    return {
+      bg: "#DCFCE7",
+      text: "#166534",
+      border: "#86EFAC",
+      label: "Paid",
+    };
+  }
+
+  const normalized = normalizeStatus(status);
+
+  if (normalized.includes("reject") || normalized.includes("decline")) {
+    return {
+      bg: "#FEE2E2",
+      text: "#B91C1C",
+      border: "#FECACA",
+      label: "Rejected",
+    };
+  }
+
+  if (normalized.includes("approve")) {
+    return {
+      bg: "#DBEAFE",
+      text: "#1D4ED8",
+      border: "#BFDBFE",
+      label: "Approved",
+    };
+  }
+
+  return {
+    bg: "#FEF3C7",
+    text: "#92400E",
+    border: "#FDE68A",
+    label: "Pending",
+  };
+};
+
+const isPendingExpense = (
+  item: Pick<ExpenseItem, "paid" | "status">,
+): boolean => {
+  if (item.paid) return false;
+  const status = normalizeStatus(item.status);
+  return status.includes("pending") || status === "new";
+};
 
 const Expenses = () => {
   const insets = useSafeAreaInsets();
-  const { addExpense } = useExpenseStore();
+  const { user } = useAuthStore();
   const { currentDriver } = useOrderStore();
-  const [selectedType, setSelectedType] = useState<string>('');
-  const [amount, setAmount] = useState<string>('');
-  const [description, setDescription] = useState<string>('');
-  const [receiptUri, setReceiptUri] = useState<string | undefined>(undefined);
-  const [receiptBase64, setReceiptBase64] = useState<string | undefined>(undefined);
+
+  const [selectedTemplateId, setSelectedTemplateId] = useState<string>("");
+  const [title, setTitle] = useState("");
+  const [amount, setAmount] = useState("");
+  const [expenseDate, setExpenseDate] = useState<string>(() =>
+    getTodayDateInput(),
+  );
+  const [description, setDescription] = useState("");
+  const [attachments, setAttachments] = useState<DraftAttachment[]>([]);
   const [submitting, setSubmitting] = useState(false);
+
   const [showHistory, setShowHistory] = useState(false);
-  const [expenseHistory, setExpenseHistory] = useState<ServerExpense[]>([]);
-  const [loadingHistory, setLoadingHistory] = useState(false);
-  const [activeTab, setActiveTab] = useState<'pending' | 'all'>('pending');
+  const [expenseHistory, setExpenseHistory] = useState<ExpenseItem[]>([]);
+  const [historyLoading, setHistoryLoading] = useState(false);
+  const [historyRefreshing, setHistoryRefreshing] = useState(false);
+  const [activeTab, setActiveTab] = useState<HistoryTab>("pending");
+
+  const [showDetail, setShowDetail] = useState(false);
+  const [selectedExpense, setSelectedExpense] = useState<ExpenseItem | null>(
+    null,
+  );
+  const [detailLoading, setDetailLoading] = useState(false);
+  const [detailError, setDetailError] = useState<string | null>(null);
+
   const [apiError, setApiError] = useState<string | null>(null);
 
-  const formattedAmount = useMemo(() => amount.replace(/[^0-9.]/g, ''), [amount]);
-  const isFormValid = selectedType && formattedAmount && Number(formattedAmount) > 0;
+  const driverId = currentDriver?.id || user?.id;
 
-  const convertImageToBase64 = async (uri: string): Promise<string> => {
-    try {
-      const base64 = await FileSystem.readAsStringAsync(uri, {
-        encoding: FileSystem.EncodingType.Base64,
-      });
-      return `data:image/jpeg;base64,${base64}`;
-    } catch (error) {
-      console.error('Error converting image to base64:', error);
-      throw new Error('Failed to process image');
-    }
+  const formattedAmount = useMemo(
+    () => amount.replace(/[^0-9.]/g, "").replace(/(\.\d*?)\./g, "$1"),
+    [amount],
+  );
+  const numericAmount = Number(formattedAmount);
+  const isFormValid =
+    title.trim().length > 0 &&
+    Number.isFinite(numericAmount) &&
+    numericAmount > 0;
+
+  const filteredExpenses = useMemo(() => {
+    if (activeTab === "all") return expenseHistory;
+    if (activeTab === "paid") return expenseHistory.filter((item) => item.paid);
+
+    return expenseHistory.filter((item) => isPendingExpense(item));
+  }, [activeTab, expenseHistory]);
+
+  const expenseStats = useMemo(() => {
+    const pending = expenseHistory.filter((item) =>
+      isPendingExpense(item),
+    ).length;
+    const paid = expenseHistory.filter((item) => item.paid).length;
+    const total = expenseHistory.length;
+    return { pending, paid, total };
+  }, [expenseHistory]);
+
+  const resetForm = () => {
+    setSelectedTemplateId("");
+    setTitle("");
+    setAmount("");
+    setExpenseDate(getTodayDateInput());
+    setDescription("");
+    setAttachments([]);
   };
 
-  const fetchExpenseHistory = useCallback(async (status?: string) => {
-    if (!currentDriver?.id) return;
+  const convertImageToDataUrl = async (uri: string, mimeType: string) => {
+    const base64 = await FileSystem.readAsStringAsync(uri, {
+      encoding: FileSystem.EncodingType.Base64,
+    });
+    return `data:${mimeType};base64,${base64}`;
+  };
 
-    try {
-      setLoadingHistory(true);
-      setApiError(null);
-      let url = `${IP_ADDRESS}/expenses?driver_id=${currentDriver.id}`;
-      if (status) url += `&status=${status}`;
-
-      const response = await authenticatedFetch(url);
-      const result = await parseApiResponseWithSoftError<ServerExpense[] | { data?: ServerExpense[]; expenses?: ServerExpense[] }>(response);
-      if (!result.ok) {
+  const fetchExpenseHistory = useCallback(
+    async (isRefresh = false) => {
+      if (!driverId) {
         setExpenseHistory([]);
-        setApiError(result.error);
+        setApiError("Driver ID not available.");
         return;
       }
-      const data = result.data;
-      let expenses: ServerExpense[] = [];
-      if (Array.isArray(data)) {
-        expenses = data.filter((item: unknown): item is ServerExpense => 
-          item !== null && item !== undefined && typeof item === 'object' && 'id' in item
+
+      try {
+        setApiError(null);
+        if (isRefresh) {
+          setHistoryRefreshing(true);
+        } else {
+          setHistoryLoading(true);
+        }
+
+        const response = await authenticatedFetch(`${API_BASE_URL}/expenses`, {
+          method: "GET",
+          headers: {
+            "X-Driver-Id": driverId,
+          },
+        });
+
+        const result =
+          await parseApiResponseWithSoftError<ExpenseItem[]>(response);
+        if (!result.ok) {
+          setExpenseHistory([]);
+          setApiError(result.error);
+          return;
+        }
+
+        const normalized = result.data.map(normalizeExpenseItem);
+        const sorted = [...normalized].sort((a, b) => {
+          const left = parseApiDate(a.createdAt)?.getTime() ?? 0;
+          const right = parseApiDate(b.createdAt)?.getTime() ?? 0;
+          return right - left;
+        });
+
+        setExpenseHistory(sorted);
+      } catch (error) {
+        setExpenseHistory([]);
+        setApiError(
+          error instanceof Error ? error.message : "Could not load expenses.",
         );
-      } else if (data && typeof data === 'object') {
-        const arr = (data as { data?: ServerExpense[]; expenses?: ServerExpense[] }).data ?? (data as { expenses?: ServerExpense[] }).expenses ?? [];
-        expenses = Array.isArray(arr) ? arr.filter((item: unknown): item is ServerExpense => 
-          item !== null && item !== undefined && typeof item === 'object' && 'id' in item
-        ) : [];
+      } finally {
+        setHistoryLoading(false);
+        setHistoryRefreshing(false);
       }
-      
-      setExpenseHistory(expenses);
-    } catch (error) {
-      console.error('Error fetching expense history:', error);
-      setExpenseHistory([]);
-    } finally {
-      setLoadingHistory(false);
-    }
-  }, [currentDriver?.id]);
+    },
+    [driverId],
+  );
 
   useEffect(() => {
     if (showHistory) {
-      fetchExpenseHistory(activeTab === 'pending' ? 'pending' : undefined);
+      void fetchExpenseHistory(false);
     }
-  }, [showHistory, activeTab, fetchExpenseHistory]);
+  }, [showHistory, fetchExpenseHistory]);
 
-  const pickReceipt = async () => {
+  const handleSelectTemplate = (templateId: string, templateLabel: string) => {
+    setSelectedTemplateId(templateId);
+    setTitle(templateLabel);
+  };
+
+  const pickAttachments = async () => {
+    const remaining = 10 - attachments.length;
+    if (remaining <= 0) {
+      showWarningAlert(
+        "Limit reached",
+        "You can upload up to 10 attachments per request.",
+      );
+      return;
+    }
+
     try {
-      const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
-      if (status !== 'granted') {
-        showWarningAlert('Permission required', 'We need access to your photos to upload a receipt.');
+      const { status } =
+        await ImagePicker.requestMediaLibraryPermissionsAsync();
+      if (status !== "granted") {
+        showWarningAlert(
+          "Permission required",
+          "Photo library permission is required to upload attachments.",
+        );
         return;
       }
+
       const result = await ImagePicker.launchImageLibraryAsync({
         mediaTypes: ImagePicker.MediaTypeOptions.Images,
-        allowsEditing: true,
+        allowsEditing: false,
+        allowsMultipleSelection: true,
+        selectionLimit: remaining,
         quality: 0.7,
         base64: false,
       });
-      if (!result.canceled && result.assets?.[0]?.uri) {
-        const imageUri = result.assets[0].uri;
-        setReceiptUri(imageUri);
-        try {
-          const base64String = await convertImageToBase64(imageUri);
-          setReceiptBase64(base64String);
-        } catch {
-          showErrorAlert('Error', 'Failed to process the selected image.');
-          setReceiptUri(undefined);
-        }
+
+      if (result.canceled || !result.assets?.length) {
+        return;
       }
-    } catch {
-      showErrorAlert('Error', 'Could not open image library.');
+
+      const picked = result.assets.slice(0, remaining);
+      const next: DraftAttachment[] = [];
+
+      for (let i = 0; i < picked.length; i += 1) {
+        const asset = picked[i];
+        if (!asset.uri) continue;
+
+        const mimeType = asset.mimeType || guessMimeType(asset.uri);
+        const imageDataUrl = await convertImageToDataUrl(asset.uri, mimeType);
+        const ext = MIME_TO_EXTENSION[mimeType] || "jpg";
+        const fallbackName = `expense-${Date.now()}-${i + 1}.${ext}`;
+
+        next.push({
+          id: `${Date.now()}-${i}-${asset.uri}`,
+          uri: asset.uri,
+          imageDataUrl,
+          originalName: asset.fileName || fallbackName,
+        });
+      }
+
+      if (next.length === 0) {
+        showErrorAlert("Attachment error", "No valid images were selected.");
+        return;
+      }
+
+      setAttachments((prev) => [...prev, ...next]);
+    } catch (error) {
+      console.error("Error selecting attachments:", error);
+      showErrorAlert("Attachment error", "Could not process selected images.");
     }
   };
 
-  const resetForm = () => {
-    setSelectedType('');
-    setAmount('');
-    setDescription('');
-    setReceiptUri(undefined);
-    setReceiptBase64(undefined);
+  const removeAttachment = (attachmentId: string) => {
+    setAttachments((prev) => prev.filter((item) => item.id !== attachmentId));
   };
 
-  const handleSubmit = async () => {
-    const numericAmount = Number(formattedAmount);
-    if (!selectedType) {
-      showWarningAlert('Missing info', 'Please select an expense type.');
+  const handleSubmitExpense = async () => {
+    if (!driverId) {
+      showErrorAlert(
+        "Missing driver",
+        "Driver information is not available right now.",
+      );
       return;
     }
-    if (!formattedAmount || isNaN(numericAmount) || numericAmount <= 0) {
-      showWarningAlert('Invalid amount', 'Please enter a valid amount.');
+
+    if (!title.trim()) {
+      showWarningAlert("Missing title", "Please enter an expense title.");
       return;
     }
-    if (!currentDriver?.id) {
-      showErrorAlert('Error', 'Driver information not available.');
+
+    if (
+      !formattedAmount ||
+      !Number.isFinite(numericAmount) ||
+      numericAmount <= 0
+    ) {
+      showWarningAlert("Invalid amount", "Amount must be greater than 0.");
+      return;
+    }
+
+    const dateValue = expenseDate.trim();
+    if (dateValue && !/^\d{4}-\d{2}-\d{2}$/.test(dateValue)) {
+      showWarningAlert("Invalid date", "Date must be in YYYY-MM-DD format.");
       return;
     }
 
     try {
       setSubmitting(true);
-      
-      const expenseData = {
-        driver_id: currentDriver.id,
-        type: selectedType,
+      setApiError(null);
+
+      const payload: {
+        title: string;
+        description?: string;
+        amount: number;
+        date?: string;
+        attachments?: { imageDataUrl: string; originalName?: string }[];
+      } = {
+        title: title.trim(),
         amount: numericAmount,
-        description: description?.trim() || undefined,
-        receipt_image: receiptBase64 || undefined,
-        submission_date: new Date().toISOString()
       };
 
-      const url = `${IP_ADDRESS}/expenses/submit?driver_id=${currentDriver.id}`;
-      const response = await authenticatedFetch(url, {
-        method: 'POST',
-        body: JSON.stringify(expenseData),
+      const normalizedDescription = description.trim();
+      if (normalizedDescription) {
+        payload.description = normalizedDescription;
+      }
+      if (dateValue) {
+        payload.date = dateValue;
+      }
+      if (attachments.length > 0) {
+        payload.attachments = attachments.slice(0, 10).map((item) => ({
+          imageDataUrl: item.imageDataUrl,
+          originalName: item.originalName,
+        }));
+      }
+
+      const response = await authenticatedFetch(`${API_BASE_URL}/expenses`, {
+        method: "POST",
+        headers: {
+          "X-Driver-Id": driverId,
+        },
+        body: JSON.stringify(payload),
       });
 
-      const submitResult = await parseApiResponseWithSoftError<unknown>(response);
-      if (!submitResult.ok) {
-        setApiError(submitResult.error);
+      const result = await parseApiResponseWithSoftError<ExpenseItem>(response);
+      if (!result.ok) {
+        setApiError(result.error);
         return;
       }
 
-      addExpense({ 
-        type: selectedType, 
-        amount: numericAmount, 
-        description: description?.trim() || undefined, 
-        receiptUri: receiptBase64 || receiptUri
+      const createdExpense = normalizeExpenseItem(result.data);
+      setExpenseHistory((prev) => {
+        const exists = prev.some(
+          (item) => item.requestId === createdExpense.requestId,
+        );
+        if (exists) return prev;
+        return [createdExpense, ...prev];
       });
 
-      showSuccessAlert('Success', 'Expense submitted successfully!', [
-        { text: 'OK', onPress: resetForm }
+      showSuccessAlert("Submitted", "Expense request created successfully.", [
+        { text: "OK", onPress: resetForm },
       ]);
     } catch (error) {
-      setApiError(error instanceof Error ? error.message : 'Could not submit expense.');
+      setApiError(
+        error instanceof Error
+          ? error.message
+          : "Could not submit expense request.",
+      );
     } finally {
       setSubmitting(false);
     }
   };
 
-  const getStatusStyle = (status: string) => {
-    switch (status) {
-      case 'approved': return { bg: '#ECFDF5', text: '#059669', border: '#A7F3D0' };
-      case 'rejected': return { bg: '#FEF2F2', text: '#DC2626', border: '#FECACA' };
-      default: return { bg: '#FFFBEB', text: '#D97706', border: '#FDE68A' };
+  const openHistory = () => {
+    setShowHistory(true);
+  };
+
+  const fetchExpenseDetail = useCallback(
+    async (requestId: string) => {
+      if (!driverId) {
+        showErrorAlert(
+          "Missing driver",
+          "Driver information is not available.",
+        );
+        return;
+      }
+
+      setShowDetail(true);
+      setSelectedExpense(null);
+      setDetailError(null);
+      setDetailLoading(true);
+
+      try {
+        const response = await authenticatedFetch(
+          `${API_BASE_URL}/expenses/${requestId}`,
+          {
+            method: "GET",
+            headers: {
+              "X-Driver-Id": driverId,
+            },
+          },
+        );
+
+        const result =
+          await parseApiResponseWithSoftError<ExpenseItem>(response);
+        if (!result.ok) {
+          setDetailError(result.error);
+          return;
+        }
+
+        setSelectedExpense(normalizeExpenseItem(result.data));
+      } catch (error) {
+        setDetailError(
+          error instanceof Error
+            ? error.message
+            : "Could not load expense details.",
+        );
+      } finally {
+        setDetailLoading(false);
+      }
+    },
+    [driverId],
+  );
+
+  const openAttachmentUrl = async (url: string | null) => {
+    const normalizedUrl = resolveResourceUrl(url);
+    if (!normalizedUrl) {
+      showWarningAlert(
+        "Unavailable",
+        "No attachment URL is currently available.",
+      );
+      return;
+    }
+
+    try {
+      const supported = await Linking.canOpenURL(normalizedUrl);
+      if (!supported) {
+        showWarningAlert(
+          "Cannot open",
+          "This attachment URL cannot be opened on this device.",
+        );
+        return;
+      }
+      await Linking.openURL(normalizedUrl);
+    } catch {
+      showErrorAlert("Open failed", "Could not open the attachment URL.");
     }
   };
+
+  const detailStatus = selectedExpense
+    ? getStatusStyle(selectedExpense.status, selectedExpense.paid)
+    : null;
 
   return (
     <View style={[styles.container, { paddingTop: insets.top }]}>
       <ApiErrorText error={apiError} />
-      {/* Header */}
+
       <View style={styles.header}>
         <View>
           <Text style={styles.headerTitle}>Expenses</Text>
-          <Text style={styles.headerSubtitle}>Submit reimbursement requests</Text>
-          </View>
-        <TouchableOpacity style={styles.historyButton} onPress={() => setShowHistory(true)}>
+          <Text style={styles.headerSubtitle}>
+            Create and track reimbursement requests
+          </Text>
+        </View>
+        <TouchableOpacity
+          style={styles.historyButton}
+          onPress={openHistory}
+          activeOpacity={0.75}
+        >
           <Ionicons name="time-outline" size={20} color="#1E40AF" />
-          </TouchableOpacity>
+        </TouchableOpacity>
       </View>
 
-      <KeyboardAvoidingView 
-        style={{ flex: 1 }} 
-        behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+      <KeyboardAvoidingView
+        style={styles.flex}
+        behavior={Platform.OS === "ios" ? "padding" : undefined}
       >
-      <ScrollView 
+        <ScrollView
           style={styles.content}
           contentContainerStyle={styles.contentContainer}
-        showsVerticalScrollIndicator={false}
+          showsVerticalScrollIndicator={false}
           keyboardShouldPersistTaps="handled"
-      >
-          {/* Expense Type Selection */}
+        >
           <View style={styles.section}>
-            <Text style={styles.sectionLabel}>Type</Text>
-            <View style={styles.typeGrid}>
-              {EXPENSE_TYPES.map((type) => (
-          <TouchableOpacity
-                  key={type.id}
-                  style={[
-                    styles.typeCard,
-                    selectedType === type.label && styles.typeCardSelected
-                  ]}
-                  onPress={() => setSelectedType(type.label)}
-                  activeOpacity={0.7}
-          >
-                  <View style={[
-                    styles.typeIcon,
-                    selectedType === type.label && styles.typeIconSelected
-                  ]}>
-                    <Ionicons 
-                      name={type.icon} 
-                      size={20} 
-                      color={selectedType === type.label ? '#FFFFFF' : '#64748B'} 
+            <Text style={styles.sectionLabel}>Template</Text>
+            <View style={styles.templateGrid}>
+              {EXPENSE_TEMPLATES.map((template) => {
+                const selected = selectedTemplateId === template.id;
+                return (
+                  <TouchableOpacity
+                    key={template.id}
+                    style={[
+                      styles.templateChip,
+                      selected && styles.templateChipSelected,
+                    ]}
+                    onPress={() =>
+                      handleSelectTemplate(template.id, template.label)
+                    }
+                    activeOpacity={0.75}
+                  >
+                    <Ionicons
+                      name={template.icon}
+                      size={16}
+                      color={selected ? "#FFFFFF" : "#475569"}
                     />
-                  </View>
-                  <Text style={[
-                    styles.typeLabel,
-                    selectedType === type.label && styles.typeLabelSelected
-                  ]}>
-                    {type.label}
-            </Text>
-          </TouchableOpacity>
-              ))}
-        </View>
+                    <Text
+                      style={[
+                        styles.templateText,
+                        selected && styles.templateTextSelected,
+                      ]}
+                    >
+                      {template.label}
+                    </Text>
+                  </TouchableOpacity>
+                );
+              })}
+            </View>
           </View>
-          
-          {/* Amount Input */}
+
           <View style={styles.section}>
-            <Text style={styles.sectionLabel}>Amount</Text>
-            <View style={styles.amountContainer}>
-              <Text style={styles.currency}>AED</Text>
+            <Text style={styles.sectionLabel}>Title</Text>
             <TextInput
-                style={styles.amountInput}
-              placeholder="0.00"
-                placeholderTextColor="#CBD5E1"
-              keyboardType="decimal-pad"
-              value={formattedAmount}
-              onChangeText={setAmount}
+              style={styles.input}
+              placeholder="e.g., Fuel refill at station"
+              placeholderTextColor="#94A3B8"
+              value={title}
+              onChangeText={setTitle}
+              maxLength={120}
             />
           </View>
-        </View>
 
-          {/* Receipt Upload */}
-          <View style={styles.section}>
-            <Text style={styles.sectionLabel}>Receipt <Text style={styles.optional}>(optional)</Text></Text>
-          {receiptUri ? (
-              <View style={styles.receiptPreview}>
-                <Image source={{ uri: receiptUri }} style={styles.receiptImage} />
-                <TouchableOpacity 
-                  style={styles.removeReceipt}
-                  onPress={() => { setReceiptUri(undefined); setReceiptBase64(undefined); }}
-                >
-                  <Ionicons name="close" size={16} color="#FFFFFF" />
-                </TouchableOpacity>
+          <View style={styles.rowSection}>
+            <View style={[styles.section, styles.rowItem]}>
+              <Text style={styles.sectionLabel}>Amount</Text>
+              <View style={styles.amountInputWrap}>
+                <Text style={styles.currency}>AED</Text>
+                <TextInput
+                  style={styles.amountInput}
+                  placeholder="0.00"
+                  placeholderTextColor="#94A3B8"
+                  keyboardType="decimal-pad"
+                  value={formattedAmount}
+                  onChangeText={setAmount}
+                />
+              </View>
             </View>
-          ) : (
-              <TouchableOpacity style={styles.uploadButton} onPress={pickReceipt}>
-                <Ionicons name="cloud-upload-outline" size={24} color="#94A3B8" />
-                <Text style={styles.uploadText}>Upload receipt</Text>
-            </TouchableOpacity>
-          )}
-        </View>
 
-          {/* Description */}
+            <View style={[styles.section, styles.rowItem]}>
+              <View style={styles.dateHeader}>
+                <Text style={styles.sectionLabel}>Date</Text>
+                <TouchableOpacity
+                  style={styles.todayChip}
+                  onPress={() => setExpenseDate(getTodayDateInput())}
+                  activeOpacity={0.8}
+                >
+                  <Text style={styles.todayChipText}>Today</Text>
+                </TouchableOpacity>
+              </View>
+              <TextInput
+                style={styles.input}
+                placeholder="YYYY-MM-DD"
+                placeholderTextColor="#94A3B8"
+                value={expenseDate}
+                onChangeText={setExpenseDate}
+                maxLength={10}
+                autoCapitalize="none"
+                autoCorrect={false}
+              />
+              <Text style={styles.dateHint}>
+                Pre-filled with today. You can change it anytime.
+              </Text>
+            </View>
+          </View>
+
           <View style={styles.section}>
-            <Text style={styles.sectionLabel}>Note <Text style={styles.optional}>(optional)</Text></Text>
+            <Text style={styles.sectionLabel}>Description (Optional)</Text>
             <TextInput
               style={styles.descriptionInput}
-              placeholder="Add a note..."
-              placeholderTextColor="#CBD5E1"
+              placeholder="Add details about this expense"
+              placeholderTextColor="#94A3B8"
               multiline
-              numberOfLines={3}
+              numberOfLines={4}
               value={description}
               onChangeText={setDescription}
               textAlignVertical="top"
+              maxLength={800}
             />
           </View>
 
-          {/* Submit Button */}
+          <View style={styles.section}>
+            <View style={styles.attachmentHeader}>
+              <Text style={styles.sectionLabel}>Attachments (Optional)</Text>
+              <Text style={styles.attachmentCount}>
+                {attachments.length}/10
+              </Text>
+            </View>
+
+            {attachments.length > 0 ? (
+              <ScrollView
+                horizontal
+                showsHorizontalScrollIndicator={false}
+                contentContainerStyle={styles.attachmentRow}
+              >
+                {attachments.map((item) => (
+                  <View key={item.id} style={styles.attachmentCard}>
+                    <Image
+                      source={{ uri: item.uri }}
+                      style={styles.attachmentImage}
+                    />
+                    <TouchableOpacity
+                      style={styles.removeAttachmentButton}
+                      onPress={() => removeAttachment(item.id)}
+                      hitSlop={{ top: 8, right: 8, left: 8, bottom: 8 }}
+                    >
+                      <Ionicons name="close" size={14} color="#FFFFFF" />
+                    </TouchableOpacity>
+                    <Text style={styles.attachmentName} numberOfLines={1}>
+                      {item.originalName}
+                    </Text>
+                  </View>
+                ))}
+              </ScrollView>
+            ) : (
+              <View style={styles.emptyAttachmentBox}>
+                <Ionicons name="images-outline" size={24} color="#94A3B8" />
+                <Text style={styles.emptyAttachmentText}>
+                  No attachments added
+                </Text>
+              </View>
+            )}
+
+            <TouchableOpacity
+              style={styles.addAttachmentButton}
+              onPress={pickAttachments}
+              activeOpacity={0.8}
+            >
+              <Ionicons name="cloud-upload-outline" size={18} color="#1E40AF" />
+              <Text style={styles.addAttachmentText}>Add images</Text>
+            </TouchableOpacity>
+          </View>
+
           <View style={styles.actionSection}>
-          <TouchableOpacity
-              style={[styles.submitButton, !isFormValid && styles.submitButtonDisabled]}
-            onPress={handleSubmit}
+            <TouchableOpacity
+              style={[
+                styles.submitButton,
+                (!isFormValid || submitting) && styles.submitButtonDisabled,
+              ]}
+              onPress={handleSubmitExpense}
               disabled={!isFormValid || submitting}
               activeOpacity={0.8}
-          >
-            {submitting ? (
+            >
+              {submitting ? (
                 <ActivityIndicator size="small" color="#FFFFFF" />
               ) : (
                 <>
-                  <Ionicons name="paper-plane-outline" size={20} color="#FFFFFF" />
-                  <Text style={styles.submitText}>Submit Expense</Text>
+                  <Ionicons
+                    name="paper-plane-outline"
+                    size={18}
+                    color="#FFFFFF"
+                  />
+                  <Text style={styles.submitText}>Submit Expense Request</Text>
                 </>
-            )}
-          </TouchableOpacity>
-        </View>
+              )}
+            </TouchableOpacity>
+          </View>
 
-          <View style={{ height: Math.max(insets.bottom, 16) + 80 }} />
-      </ScrollView>
+          <View style={{ height: Math.max(insets.bottom, 18) + 80 }} />
+        </ScrollView>
       </KeyboardAvoidingView>
 
-      {/* History Modal */}
-      <Modal visible={showHistory} animationType="slide" presentationStyle="pageSheet">
-        <View style={[styles.modalContainer, { paddingTop: Platform.OS === 'ios' ? 20 : insets.top }]}>
+      <Modal
+        visible={showHistory}
+        animationType="slide"
+        presentationStyle="pageSheet"
+        onRequestClose={() => setShowHistory(false)}
+      >
+        <View
+          style={[
+            styles.modalContainer,
+            { paddingTop: Platform.OS === "ios" ? 20 : insets.top },
+          ]}
+        >
           <View style={styles.modalHeader}>
             <View>
-              <Text style={styles.modalTitle}>History</Text>
-              <Text style={styles.modalSubtitle}>{expenseHistory.length} requests</Text>
+              <Text style={styles.modalTitle}>Expense History</Text>
+              <Text style={styles.modalSubtitle}>
+                {filteredExpenses.length} visible / {expenseStats.total} total
+              </Text>
             </View>
-            <TouchableOpacity style={styles.closeButton} onPress={() => setShowHistory(false)}>
+            <TouchableOpacity
+              style={styles.closeButton}
+              onPress={() => setShowHistory(false)}
+            >
               <Ionicons name="close" size={22} color="#64748B" />
-              </TouchableOpacity>
-            </View>
+            </TouchableOpacity>
+          </View>
 
-            {/* Tabs */}
+          <View style={styles.statsRow}>
+            <View style={styles.statChip}>
+              <Text style={styles.statChipLabel}>Pending</Text>
+              <Text style={styles.statChipValue}>{expenseStats.pending}</Text>
+            </View>
+            <View style={styles.statChip}>
+              <Text style={styles.statChipLabel}>Paid</Text>
+              <Text style={styles.statChipValue}>{expenseStats.paid}</Text>
+            </View>
+            <View style={styles.statChip}>
+              <Text style={styles.statChipLabel}>Total</Text>
+              <Text style={styles.statChipValue}>{expenseStats.total}</Text>
+            </View>
+          </View>
+
           <View style={styles.tabContainer}>
-              <TouchableOpacity
-              style={[styles.tab, activeTab === 'pending' && styles.tabActive]}
-                onPress={() => setActiveTab('pending')}
+            <TouchableOpacity
+              style={[styles.tab, activeTab === "pending" && styles.tabActive]}
+              onPress={() => setActiveTab("pending")}
+            >
+              <Text
+                style={[
+                  styles.tabText,
+                  activeTab === "pending" && styles.tabTextActive,
+                ]}
               >
-              <Text style={[styles.tabText, activeTab === 'pending' && styles.tabTextActive]}>
-                  Pending
-                </Text>
-              </TouchableOpacity>
-              <TouchableOpacity
-              style={[styles.tab, activeTab === 'all' && styles.tabActive]}
-                onPress={() => setActiveTab('all')}
+                Pending
+              </Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={[styles.tab, activeTab === "paid" && styles.tabActive]}
+              onPress={() => setActiveTab("paid")}
+            >
+              <Text
+                style={[
+                  styles.tabText,
+                  activeTab === "paid" && styles.tabTextActive,
+                ]}
               >
-              <Text style={[styles.tabText, activeTab === 'all' && styles.tabTextActive]}>
+                Paid
+              </Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={[styles.tab, activeTab === "all" && styles.tabActive]}
+              onPress={() => setActiveTab("all")}
+            >
+              <Text
+                style={[
+                  styles.tabText,
+                  activeTab === "all" && styles.tabTextActive,
+                ]}
+              >
                 All
-                </Text>
-              </TouchableOpacity>
-            </View>
+              </Text>
+            </TouchableOpacity>
+          </View>
 
-          <ScrollView style={styles.historyList} showsVerticalScrollIndicator={false}>
-              {loadingHistory ? (
+          <ApiErrorText error={apiError} className="px-6" />
+
+          <ScrollView
+            style={styles.historyList}
+            showsVerticalScrollIndicator={false}
+            refreshControl={
+              <RefreshControl
+                refreshing={historyRefreshing}
+                onRefresh={() => void fetchExpenseHistory(true)}
+                tintColor="#1E40AF"
+                colors={["#1E40AF"]}
+              />
+            }
+          >
+            {historyLoading ? (
               <View style={styles.emptyState}>
                 <ActivityIndicator size="large" color="#1E40AF" />
-                </View>
-              ) : expenseHistory.length === 0 ? (
+              </View>
+            ) : filteredExpenses.length === 0 ? (
               <View style={styles.emptyState}>
                 <View style={styles.emptyIcon}>
-                  <Ionicons name="receipt-outline" size={32} color="#CBD5E1" />
-                  </View>
-                <Text style={styles.emptyTitle}>No expenses yet</Text>
-                <Text style={styles.emptySubtitle}>Your submitted expenses will appear here</Text>
+                  <Ionicons name="receipt-outline" size={32} color="#94A3B8" />
                 </View>
-              ) : (
-              expenseHistory
-                .filter((expense) => expense !== null && expense !== undefined)
-                .map((expense) => {
-                  if (!expense || !expense.id) return null;
-                  const statusStyle = getStatusStyle(expense.status || 'pending');
-                  return (
-                    <View key={expense.id} style={styles.historyCard}>
-                    <View style={styles.historyCardHeader}>
-                      <View style={styles.historyType}>
-                        <Text style={styles.historyTypeText}>{expense.type}</Text>
-                        <Text style={styles.historyDate}>
-                          {(() => {
-                            const dateStr = expense.submission_date;
-                            if (!dateStr) return 'N/A';
-                            try {
-                              const date = new Date(dateStr);
-                              if (isNaN(date.getTime())) return 'N/A';
-                              return date.toLocaleDateString('en-US', { 
-                                month: 'short', 
-                                day: 'numeric' 
-                              });
-                            } catch {
-                              return 'N/A';
-                            }
-                          })()}
+                <Text style={styles.emptyTitle}>No expenses found</Text>
+                <Text style={styles.emptySubtitle}>
+                  Try another tab or submit a new expense request.
+                </Text>
+              </View>
+            ) : (
+              filteredExpenses.map((expense) => {
+                const statusStyle = getStatusStyle(
+                  expense.status,
+                  expense.paid,
+                );
+                return (
+                  <TouchableOpacity
+                    key={expense.requestId}
+                    style={styles.historyCard}
+                    activeOpacity={0.8}
+                    onPress={() => void fetchExpenseDetail(expense.requestId)}
+                  >
+                    <View style={styles.historyCardTop}>
+                      <View style={styles.historyTitleWrap}>
+                        <Text style={styles.historyTitle} numberOfLines={1}>
+                          {expense.title || "Untitled expense"}
+                        </Text>
+                        <Text style={styles.historyMetaLine}>
+                          Request ID: {expense.requestId}
                         </Text>
                       </View>
-                      <View style={[styles.statusBadge, { backgroundColor: statusStyle.bg, borderColor: statusStyle.border }]}>
-                        <Text style={[styles.statusText, { color: statusStyle.text }]}>
-                          {expense.status || 'pending'}
+                      <View
+                        style={[
+                          styles.statusBadge,
+                          {
+                            backgroundColor: statusStyle.bg,
+                            borderColor: statusStyle.border,
+                          },
+                        ]}
+                      >
+                        <Text
+                          style={[
+                            styles.statusText,
+                            { color: statusStyle.text },
+                          ]}
+                        >
+                          {statusStyle.label}
                         </Text>
                       </View>
                     </View>
+
                     <Text style={styles.historyAmount}>
-                      AED {expense.amount ? expense.amount.toFixed(2) : '0.00'}
+                      AED {Number(expense.amount || 0).toFixed(2)}
                     </Text>
-                    {expense.description && (
-                      <Text style={styles.historyDescription} numberOfLines={2}>
-                          {expense.description}
+
+                    <View style={styles.historyInfoRow}>
+                      <Text style={styles.historyInfoText}>
+                        Expense Date: {formatDate(expense.date, false)}
                       </Text>
-                    )}
-                  </View>
-                  );
-                })
-                .filter(Boolean)
-              )}
+                      <Text style={styles.historyInfoText}>
+                        Created: {formatDate(expense.createdAt, true)}
+                      </Text>
+                    </View>
+
+                    {expense.description ? (
+                      <Text style={styles.historyDescription} numberOfLines={2}>
+                        {expense.description}
+                      </Text>
+                    ) : null}
+
+                    <View style={styles.historyFooterRow}>
+                      <View style={styles.inlineMetaPill}>
+                        <Ionicons
+                          name="images-outline"
+                          size={13}
+                          color="#475569"
+                        />
+                        <Text style={styles.inlineMetaText}>
+                          {expense.attachments.length} attachment
+                          {expense.attachments.length === 1 ? "" : "s"}
+                        </Text>
+                      </View>
+
+                      {expense.approvedBy ? (
+                        <View style={styles.inlineMetaPill}>
+                          <Ionicons
+                            name="checkmark-circle-outline"
+                            size={13}
+                            color="#1D4ED8"
+                          />
+                          <Text style={styles.inlineMetaText}>
+                            Approved by {expense.approvedBy.name}
+                          </Text>
+                        </View>
+                      ) : null}
+
+                      <TouchableOpacity
+                        style={styles.detailButton}
+                        onPress={() =>
+                          void fetchExpenseDetail(expense.requestId)
+                        }
+                      >
+                        <Text style={styles.detailButtonText}>Details</Text>
+                        <Ionicons
+                          name="chevron-forward"
+                          size={14}
+                          color="#1E40AF"
+                        />
+                      </TouchableOpacity>
+                    </View>
+                  </TouchableOpacity>
+                );
+              })
+            )}
             <View style={{ height: 40 }} />
+          </ScrollView>
+        </View>
+      </Modal>
+
+      <Modal
+        visible={showDetail}
+        animationType="slide"
+        presentationStyle="pageSheet"
+        onRequestClose={() => setShowDetail(false)}
+      >
+        <View
+          style={[
+            styles.modalContainer,
+            { paddingTop: Platform.OS === "ios" ? 20 : insets.top },
+          ]}
+        >
+          <View style={styles.modalHeader}>
+            <View>
+              <Text style={styles.modalTitle}>Expense Details</Text>
+              <Text style={styles.modalSubtitle}>
+                {selectedExpense?.requestId || "Loading..."}
+              </Text>
+            </View>
+            <TouchableOpacity
+              style={styles.closeButton}
+              onPress={() => setShowDetail(false)}
+            >
+              <Ionicons name="close" size={22} color="#64748B" />
+            </TouchableOpacity>
+          </View>
+
+          {detailLoading ? (
+            <View style={styles.emptyState}>
+              <ActivityIndicator size="large" color="#1E40AF" />
+            </View>
+          ) : detailError ? (
+            <View style={styles.detailErrorWrap}>
+              <ApiErrorText error={detailError} />
+            </View>
+          ) : selectedExpense ? (
+            <ScrollView
+              style={styles.historyList}
+              showsVerticalScrollIndicator={false}
+            >
+              <View style={styles.detailSummaryCard}>
+                <Text style={styles.detailAmount}>
+                  AED {Number(selectedExpense.amount || 0).toFixed(2)}
+                </Text>
+                {detailStatus ? (
+                  <View
+                    style={[
+                      styles.statusBadge,
+                      {
+                        backgroundColor: detailStatus.bg,
+                        borderColor: detailStatus.border,
+                      },
+                    ]}
+                  >
+                    <Text
+                      style={[styles.statusText, { color: detailStatus.text }]}
+                    >
+                      {detailStatus.label}
+                    </Text>
+                  </View>
+                ) : null}
+              </View>
+
+              <View style={styles.detailSection}>
+                <Text style={styles.detailSectionTitle}>Basic Info</Text>
+                <Text style={styles.detailLine}>
+                  <Text style={styles.detailLineLabel}>Title:</Text>{" "}
+                  {selectedExpense.title || "Untitled expense"}
+                </Text>
+                <Text style={styles.detailLine}>
+                  <Text style={styles.detailLineLabel}>Description:</Text>{" "}
+                  {selectedExpense.description || "N/A"}
+                </Text>
+                <Text style={styles.detailLine}>
+                  <Text style={styles.detailLineLabel}>Expense Date:</Text>{" "}
+                  {formatDate(selectedExpense.date)}
+                </Text>
+                <Text style={styles.detailLine}>
+                  <Text style={styles.detailLineLabel}>Created At:</Text>{" "}
+                  {formatDate(selectedExpense.createdAt, true)}
+                </Text>
+              </View>
+
+              <View style={styles.detailSection}>
+                <Text style={styles.detailSectionTitle}>Approval</Text>
+                <Text style={styles.detailLine}>
+                  <Text style={styles.detailLineLabel}>Approved At:</Text>{" "}
+                  {formatDate(selectedExpense.approvedAt, true)}
+                </Text>
+                <Text style={styles.detailLine}>
+                  <Text style={styles.detailLineLabel}>Approved By:</Text>{" "}
+                  {selectedExpense.approvedBy
+                    ? `${selectedExpense.approvedBy.name}${selectedExpense.approvedBy.email ? ` (${selectedExpense.approvedBy.email})` : ""}`
+                    : "N/A"}
+                </Text>
+              </View>
+
+              <View style={styles.detailSection}>
+                <Text style={styles.detailSectionTitle}>Payment</Text>
+                <Text style={styles.detailLine}>
+                  <Text style={styles.detailLineLabel}>Paid:</Text>{" "}
+                  {selectedExpense.paid ? "Yes" : "No"}
+                </Text>
+                <Text style={styles.detailLine}>
+                  <Text style={styles.detailLineLabel}>Paid At:</Text>{" "}
+                  {formatDate(selectedExpense.paidAt, true)}
+                </Text>
+                <Text style={styles.detailLine}>
+                  <Text style={styles.detailLineLabel}>Paid By:</Text>{" "}
+                  {selectedExpense.paidBy
+                    ? `${selectedExpense.paidBy.name}${selectedExpense.paidBy.email ? ` (${selectedExpense.paidBy.email})` : ""}`
+                    : "N/A"}
+                </Text>
+              </View>
+
+              <View style={styles.detailSection}>
+                <Text style={styles.detailSectionTitle}>Attachments</Text>
+                {selectedExpense.attachments.length === 0 ? (
+                  <Text style={styles.detailEmptyText}>
+                    No attachments for this request.
+                  </Text>
+                ) : (
+                  selectedExpense.attachments.map((attachment) => (
+                    <View
+                      key={attachment.id}
+                      style={styles.attachmentDetailRow}
+                    >
+                      <View style={styles.attachmentDetailMeta}>
+                        <Text
+                          style={styles.attachmentDetailName}
+                          numberOfLines={1}
+                        >
+                          {attachment.name}
+                        </Text>
+                        <Text style={styles.attachmentDetailType}>
+                          {attachment.type || "image"}
+                        </Text>
+                      </View>
+                      <TouchableOpacity
+                        style={[
+                          styles.detailButton,
+                          !attachment.url && styles.detailButtonDisabled,
+                        ]}
+                        onPress={() => void openAttachmentUrl(attachment.url)}
+                        disabled={!attachment.url}
+                      >
+                        <Text
+                          style={[
+                            styles.detailButtonText,
+                            !attachment.url && styles.detailButtonTextDisabled,
+                          ]}
+                        >
+                          Open
+                        </Text>
+                        <Ionicons
+                          name="open-outline"
+                          size={14}
+                          color={attachment.url ? "#1E40AF" : "#94A3B8"}
+                        />
+                      </TouchableOpacity>
+                    </View>
+                  ))
+                )}
+              </View>
+
+              <View style={{ height: Math.max(insets.bottom, 18) + 40 }} />
             </ScrollView>
+          ) : (
+            <View style={styles.emptyState}>
+              <Text style={styles.emptySubtitle}>No expense selected.</Text>
+            </View>
+          )}
         </View>
       </Modal>
     </View>
@@ -478,328 +1240,550 @@ const Expenses = () => {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: '#FFFFFF',
+    backgroundColor: "#FFFFFF",
+  },
+  flex: {
+    flex: 1,
   },
   header: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    paddingHorizontal: 24,
-    paddingTop: 16,
-    paddingBottom: 24,
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
+    paddingHorizontal: 20,
+    paddingTop: 12,
+    paddingBottom: 18,
+    borderBottomWidth: 1,
+    borderBottomColor: "#E2E8F0",
   },
   headerTitle: {
-    fontSize: 28,
-    fontWeight: '700',
-    color: '#1E40AF',
-    letterSpacing: -0.5,
+    fontSize: 26,
+    fontWeight: "700",
+    color: "#1E40AF",
+    letterSpacing: -0.4,
   },
   headerSubtitle: {
-    fontSize: 14,
-    color: '#64748B',
+    fontSize: 13,
+    color: "#64748B",
     marginTop: 2,
   },
   historyButton: {
     width: 44,
     height: 44,
     borderRadius: 22,
-    backgroundColor: '#F8FAFC',
-    justifyContent: 'center',
-    alignItems: 'center',
+    backgroundColor: "#F1F5F9",
+    justifyContent: "center",
+    alignItems: "center",
   },
   content: {
     flex: 1,
   },
   contentContainer: {
-    paddingHorizontal: 24,
-    paddingBottom: 24,
+    paddingHorizontal: 20,
+    paddingTop: 20,
   },
   section: {
-    marginBottom: 28,
+    marginBottom: 20,
+  },
+  rowSection: {
+    flexDirection: "row",
+    gap: 12,
+  },
+  rowItem: {
+    flex: 1,
   },
   sectionLabel: {
-    fontSize: 13,
-    fontWeight: '600',
-    color: '#64748B',
-    marginBottom: 12,
-    textTransform: 'uppercase',
+    fontSize: 12,
+    fontWeight: "700",
+    color: "#64748B",
+    marginBottom: 10,
+    textTransform: "uppercase",
     letterSpacing: 0.5,
   },
-  optional: {
-    fontWeight: '400',
-    textTransform: 'none',
-    color: '#94A3B8',
+  dateHeader: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
+    marginBottom: 10,
   },
-  typeGrid: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    marginHorizontal: -6,
+  todayChip: {
+    backgroundColor: "#EFF6FF",
+    borderWidth: 1,
+    borderColor: "#BFDBFE",
+    borderRadius: 999,
+    paddingHorizontal: 10,
+    paddingVertical: 4,
   },
-  typeCard: {
-    width: (width - 48 - 24) / 3,
-    marginHorizontal: 6,
-    marginBottom: 12,
-    paddingVertical: 16,
-    alignItems: 'center',
-    backgroundColor: '#F8FAFC',
-    borderRadius: 16,
-    borderWidth: 2,
-    borderColor: 'transparent',
+  todayChipText: {
+    fontSize: 11,
+    fontWeight: "700",
+    color: "#1D4ED8",
   },
-  typeCardSelected: {
-    backgroundColor: '#F0F9FF',
-    borderColor: '#0EA5E9',
+  dateHint: {
+    marginTop: 6,
+    fontSize: 11,
+    color: "#64748B",
   },
-  typeIcon: {
-    width: 44,
-    height: 44,
-    borderRadius: 12,
-    backgroundColor: '#FFFFFF',
-    justifyContent: 'center',
-    alignItems: 'center',
-    marginBottom: 8,
+  templateGrid: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    gap: 8,
   },
-  typeIconSelected: {
-    backgroundColor: '#0EA5E9',
+  templateChip: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
+    backgroundColor: "#F8FAFC",
+    borderWidth: 1,
+    borderColor: "#E2E8F0",
+    borderRadius: 999,
+    paddingHorizontal: 12,
+    paddingVertical: 8,
   },
-  typeLabel: {
+  templateChipSelected: {
+    backgroundColor: "#0284C7",
+    borderColor: "#0284C7",
+  },
+  templateText: {
     fontSize: 12,
-    fontWeight: '600',
-    color: '#64748B',
+    fontWeight: "600",
+    color: "#334155",
   },
-  typeLabelSelected: {
-    color: '#0369A1',
+  templateTextSelected: {
+    color: "#FFFFFF",
   },
-  amountContainer: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: '#F8FAFC',
-    borderRadius: 16,
-    paddingHorizontal: 20,
-    height: 64,
+  input: {
+    height: 50,
+    borderRadius: 14,
+    borderWidth: 1,
+    borderColor: "#E2E8F0",
+    backgroundColor: "#F8FAFC",
+    paddingHorizontal: 14,
+    fontSize: 15,
+    color: "#0F172A",
+  },
+  amountInputWrap: {
+    height: 50,
+    borderRadius: 14,
+    borderWidth: 1,
+    borderColor: "#E2E8F0",
+    backgroundColor: "#F8FAFC",
+    flexDirection: "row",
+    alignItems: "center",
+    paddingHorizontal: 12,
   },
   currency: {
-    fontSize: 18,
-    fontWeight: '600',
-    color: '#94A3B8',
-    marginRight: 12,
+    fontSize: 14,
+    fontWeight: "700",
+    color: "#64748B",
+    marginRight: 8,
   },
   amountInput: {
     flex: 1,
-    fontSize: 32,
-    fontWeight: '700',
-    color: '#1E40AF',
-    letterSpacing: -1,
-  },
-  uploadButton: {
-    height: 120,
-    backgroundColor: '#F8FAFC',
-    borderRadius: 16,
-    borderWidth: 2,
-    borderColor: '#E2E8F0',
-    borderStyle: 'dashed',
-    justifyContent: 'center',
-    alignItems: 'center',
-    gap: 8,
-  },
-  uploadText: {
-    fontSize: 14,
-    fontWeight: '500',
-    color: '#94A3B8',
-  },
-  receiptPreview: {
-    position: 'relative',
-    height: 180,
-    borderRadius: 16,
-    overflow: 'hidden',
-  },
-  receiptImage: {
-    width: '100%',
-    height: '100%',
-  },
-  removeReceipt: {
-    position: 'absolute',
-    top: 12,
-    right: 12,
-    width: 32,
-    height: 32,
-    borderRadius: 16,
-    backgroundColor: 'rgba(0,0,0,0.6)',
-    justifyContent: 'center',
-    alignItems: 'center',
+    fontSize: 22,
+    fontWeight: "700",
+    color: "#1E40AF",
+    letterSpacing: -0.5,
   },
   descriptionInput: {
-    backgroundColor: '#F8FAFC',
-    borderRadius: 16,
-    padding: 16,
-    fontSize: 16,
-    color: '#1E40AF',
-    minHeight: 88,
+    minHeight: 96,
+    borderRadius: 14,
+    borderWidth: 1,
+    borderColor: "#E2E8F0",
+    backgroundColor: "#F8FAFC",
+    paddingHorizontal: 14,
+    paddingVertical: 12,
+    fontSize: 15,
+    color: "#0F172A",
+  },
+  attachmentHeader: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
+  },
+  attachmentCount: {
+    fontSize: 12,
+    fontWeight: "600",
+    color: "#64748B",
+  },
+  attachmentRow: {
+    gap: 10,
+    paddingBottom: 4,
+  },
+  attachmentCard: {
+    width: 120,
+    backgroundColor: "#F8FAFC",
+    borderWidth: 1,
+    borderColor: "#E2E8F0",
+    borderRadius: 12,
+    overflow: "hidden",
+  },
+  attachmentImage: {
+    width: "100%",
+    height: 90,
+  },
+  attachmentName: {
+    fontSize: 11,
+    color: "#334155",
+    paddingHorizontal: 8,
+    paddingVertical: 6,
+  },
+  removeAttachmentButton: {
+    position: "absolute",
+    top: 6,
+    right: 6,
+    width: 22,
+    height: 22,
+    borderRadius: 11,
+    backgroundColor: "rgba(15, 23, 42, 0.75)",
+    justifyContent: "center",
+    alignItems: "center",
+  },
+  emptyAttachmentBox: {
+    height: 90,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: "#E2E8F0",
+    backgroundColor: "#F8FAFC",
+    justifyContent: "center",
+    alignItems: "center",
+    gap: 6,
+  },
+  emptyAttachmentText: {
+    fontSize: 12,
+    color: "#64748B",
+  },
+  addAttachmentButton: {
+    marginTop: 10,
+    height: 44,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: "#BFDBFE",
+    backgroundColor: "#EFF6FF",
+    flexDirection: "row",
+    justifyContent: "center",
+    alignItems: "center",
+    gap: 8,
+  },
+  addAttachmentText: {
+    fontSize: 14,
+    fontWeight: "600",
+    color: "#1E40AF",
   },
   actionSection: {
-    backgroundColor: '#FFFFFF',
-    borderRadius: 16,
-    padding: 16,
-    marginTop: 16,
-    shadowColor: '#1E40AF',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.04,
-    shadowRadius: 8,
-    elevation: 2,
+    marginTop: 6,
+    marginBottom: 6,
   },
   submitButton: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    backgroundColor: '#2563EB',
-    height: 56,
-    borderRadius: 16,
-    gap: 10,
+    height: 54,
+    borderRadius: 14,
+    backgroundColor: "#2563EB",
+    flexDirection: "row",
+    justifyContent: "center",
+    alignItems: "center",
+    gap: 8,
   },
   submitButtonDisabled: {
-    backgroundColor: '#CBD5E1',
+    backgroundColor: "#94A3B8",
   },
   submitText: {
-    fontSize: 16,
-    fontWeight: '600',
-    color: '#FFFFFF',
+    fontSize: 15,
+    fontWeight: "700",
+    color: "#FFFFFF",
   },
   modalContainer: {
     flex: 1,
-    backgroundColor: '#FFFFFF',
+    backgroundColor: "#FFFFFF",
   },
   modalHeader: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    paddingHorizontal: 24,
-    paddingTop: 8,
-    paddingBottom: 20,
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
+    paddingHorizontal: 20,
+    paddingBottom: 14,
+    borderBottomWidth: 1,
+    borderBottomColor: "#E2E8F0",
   },
   modalTitle: {
-    fontSize: 28,
-    fontWeight: '700',
-    color: '#1E40AF',
-    letterSpacing: -0.5,
+    fontSize: 22,
+    fontWeight: "700",
+    color: "#0F172A",
+    letterSpacing: -0.3,
   },
   modalSubtitle: {
-    fontSize: 14,
-    color: '#64748B',
     marginTop: 2,
+    fontSize: 12,
+    color: "#64748B",
   },
   closeButton: {
     width: 40,
     height: 40,
     borderRadius: 20,
-    backgroundColor: '#F8FAFC',
-    justifyContent: 'center',
-    alignItems: 'center',
+    backgroundColor: "#F1F5F9",
+    justifyContent: "center",
+    alignItems: "center",
+  },
+  statsRow: {
+    flexDirection: "row",
+    gap: 8,
+    paddingHorizontal: 20,
+    paddingTop: 14,
+    paddingBottom: 10,
+  },
+  statChip: {
+    flex: 1,
+    backgroundColor: "#F8FAFC",
+    borderWidth: 1,
+    borderColor: "#E2E8F0",
+    borderRadius: 12,
+    paddingVertical: 8,
+    alignItems: "center",
+  },
+  statChipLabel: {
+    fontSize: 11,
+    color: "#64748B",
+    fontWeight: "600",
+  },
+  statChipValue: {
+    fontSize: 16,
+    fontWeight: "700",
+    color: "#0F172A",
+    marginTop: 2,
   },
   tabContainer: {
-    flexDirection: 'row',
-    marginHorizontal: 24,
-    backgroundColor: '#F1F5F9',
+    flexDirection: "row",
+    marginHorizontal: 20,
+    marginTop: 2,
+    marginBottom: 12,
+    backgroundColor: "#F1F5F9",
     borderRadius: 12,
     padding: 4,
-    marginBottom: 20,
+    gap: 4,
   },
   tab: {
     flex: 1,
-    paddingVertical: 10,
-    alignItems: 'center',
     borderRadius: 8,
+    alignItems: "center",
+    paddingVertical: 9,
   },
   tabActive: {
-    backgroundColor: '#FFFFFF',
-    shadowColor: '#1E40AF',
-    shadowOffset: { width: 0, height: 1 },
-    shadowOpacity: 0.05,
-    shadowRadius: 2,
-    elevation: 1,
+    backgroundColor: "#FFFFFF",
   },
   tabText: {
-    fontSize: 14,
-    fontWeight: '600',
-    color: '#64748B',
+    fontSize: 13,
+    fontWeight: "700",
+    color: "#64748B",
   },
   tabTextActive: {
-    color: '#1E40AF',
+    color: "#1E40AF",
   },
   historyList: {
     flex: 1,
-    paddingHorizontal: 24,
+    paddingHorizontal: 20,
   },
   historyCard: {
-    backgroundColor: '#F8FAFC',
-    borderRadius: 16,
-    padding: 16,
-    marginBottom: 12,
+    backgroundColor: "#F8FAFC",
+    borderWidth: 1,
+    borderColor: "#E2E8F0",
+    borderRadius: 14,
+    padding: 14,
+    marginBottom: 10,
   },
-  historyCardHeader: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'flex-start',
-    marginBottom: 8,
+  historyCardTop: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "flex-start",
+    gap: 10,
   },
-  historyType: {
+  historyTitleWrap: {
     flex: 1,
   },
-  historyTypeText: {
-    fontSize: 16,
-    fontWeight: '600',
-    color: '#1E40AF',
+  historyTitle: {
+    fontSize: 15,
+    fontWeight: "700",
+    color: "#0F172A",
   },
-  historyDate: {
-    fontSize: 13,
-    color: '#64748B',
-    marginTop: 2,
+  historyMetaLine: {
+    marginTop: 3,
+    fontSize: 11,
+    color: "#64748B",
   },
   statusBadge: {
+    borderRadius: 999,
+    borderWidth: 1,
     paddingHorizontal: 10,
     paddingVertical: 4,
-    borderRadius: 8,
-    borderWidth: 1,
   },
   statusText: {
-    fontSize: 12,
-    fontWeight: '600',
-    textTransform: 'capitalize',
+    fontSize: 11,
+    fontWeight: "700",
+    textTransform: "uppercase",
   },
   historyAmount: {
-    fontSize: 24,
-    fontWeight: '700',
-    color: '#1E40AF',
-    letterSpacing: -0.5,
+    marginTop: 8,
+    fontSize: 21,
+    fontWeight: "700",
+    color: "#1E40AF",
+    letterSpacing: -0.4,
+  },
+  historyInfoRow: {
+    marginTop: 8,
+    gap: 4,
+  },
+  historyInfoText: {
+    fontSize: 12,
+    color: "#475569",
   },
   historyDescription: {
-    fontSize: 14,
-    color: '#64748B',
     marginTop: 8,
-    lineHeight: 20,
+    fontSize: 13,
+    lineHeight: 18,
+    color: "#334155",
+  },
+  historyFooterRow: {
+    marginTop: 10,
+    flexDirection: "row",
+    flexWrap: "wrap",
+    alignItems: "center",
+    gap: 8,
+  },
+  inlineMetaPill: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 4,
+    backgroundColor: "#FFFFFF",
+    borderWidth: 1,
+    borderColor: "#E2E8F0",
+    borderRadius: 999,
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+  },
+  inlineMetaText: {
+    fontSize: 11,
+    color: "#334155",
+    fontWeight: "600",
+  },
+  detailButton: {
+    marginLeft: "auto",
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 4,
+    backgroundColor: "#EFF6FF",
+    borderWidth: 1,
+    borderColor: "#BFDBFE",
+    borderRadius: 999,
+    paddingHorizontal: 10,
+    paddingVertical: 5,
+  },
+  detailButtonDisabled: {
+    backgroundColor: "#F1F5F9",
+    borderColor: "#E2E8F0",
+  },
+  detailButtonText: {
+    fontSize: 11,
+    fontWeight: "700",
+    color: "#1E40AF",
+  },
+  detailButtonTextDisabled: {
+    color: "#94A3B8",
   },
   emptyState: {
-    alignItems: 'center',
-    justifyContent: 'center',
+    alignItems: "center",
+    justifyContent: "center",
     paddingVertical: 60,
   },
   emptyIcon: {
-    width: 72,
-    height: 72,
-    borderRadius: 36,
-    backgroundColor: '#F8FAFC',
-    justifyContent: 'center',
-    alignItems: 'center',
-    marginBottom: 16,
+    width: 68,
+    height: 68,
+    borderRadius: 34,
+    backgroundColor: "#F8FAFC",
+    justifyContent: "center",
+    alignItems: "center",
+    marginBottom: 12,
   },
   emptyTitle: {
-    fontSize: 18,
-    fontWeight: '600',
-    color: '#1E40AF',
-    marginBottom: 4,
+    fontSize: 17,
+    fontWeight: "700",
+    color: "#0F172A",
   },
   emptySubtitle: {
+    marginTop: 6,
+    fontSize: 13,
+    color: "#64748B",
+    textAlign: "center",
+  },
+  detailErrorWrap: {
+    paddingHorizontal: 20,
+    paddingTop: 20,
+  },
+  detailSummaryCard: {
+    marginTop: 4,
+    marginBottom: 12,
+    padding: 14,
+    borderRadius: 14,
+    borderWidth: 1,
+    borderColor: "#E2E8F0",
+    backgroundColor: "#F8FAFC",
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
+  },
+  detailAmount: {
+    fontSize: 28,
+    fontWeight: "700",
+    color: "#1E40AF",
+    letterSpacing: -0.6,
+  },
+  detailSection: {
+    borderWidth: 1,
+    borderColor: "#E2E8F0",
+    borderRadius: 14,
+    backgroundColor: "#FFFFFF",
+    padding: 14,
+    marginBottom: 10,
+  },
+  detailSectionTitle: {
     fontSize: 14,
-    color: '#94A3B8',
+    fontWeight: "700",
+    color: "#0F172A",
+    marginBottom: 8,
+  },
+  detailLine: {
+    fontSize: 13,
+    color: "#334155",
+    marginBottom: 6,
+    lineHeight: 18,
+  },
+  detailLineLabel: {
+    fontWeight: "700",
+    color: "#0F172A",
+  },
+  detailEmptyText: {
+    fontSize: 13,
+    color: "#64748B",
+  },
+  attachmentDetailRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 10,
+    borderWidth: 1,
+    borderColor: "#E2E8F0",
+    borderRadius: 12,
+    backgroundColor: "#F8FAFC",
+    padding: 10,
+    marginBottom: 8,
+  },
+  attachmentDetailMeta: {
+    flex: 1,
+  },
+  attachmentDetailName: {
+    fontSize: 13,
+    fontWeight: "700",
+    color: "#0F172A",
+  },
+  attachmentDetailType: {
+    marginTop: 2,
+    fontSize: 11,
+    color: "#64748B",
   },
 });
 

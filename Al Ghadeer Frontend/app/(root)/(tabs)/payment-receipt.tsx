@@ -102,10 +102,10 @@ const PaymentReceipt: React.FC = () => {
     : (orderDetail?.invoice_number ?? '');
   const invoiceNumber = generatedInvoiceNumber || baseInvoiceNumber;
   const invoiceDisplay = invoiceNumber || '—';
-  // For credit flow: invoice_number present → Invoice, absent → Delivery Note
-  const isCreditFlow = ['credit', 'invoice', 'credit_invoice'].includes(selectedPaymentMethod ?? '');
-  const hasInvoiceNumber = !!invoiceNumber;
-  const isDeliveryNote = isCreditFlow ? !hasInvoiceNumber : false;
+  // Invoice number is the source of truth:
+  // invoice_number present -> Invoice, absent -> Delivery Note
+  const hasInvoiceNumber = typeof invoiceNumber === 'string' && invoiceNumber.trim().length > 0;
+  const isDeliveryNote = !hasInvoiceNumber;
   
   // Get sale ID for invoice generation - use sale_id from lastConfirmPaymentResponse (delivery_report_id from normal sales, sale_id from direct sales)
   const saleId = lastConfirmPaymentResponse?.sale_id || '';
@@ -113,7 +113,7 @@ const PaymentReceipt: React.FC = () => {
   // Debug: log delivery note determination and sale_id
   console.log('Payment Receipt - lastConfirmPaymentResponse:', JSON.stringify(lastConfirmPaymentResponse, null, 2));
   console.log('Payment Receipt - saleId for invoice generation:', saleId);
-  console.log('Payment Receipt - isDeliveryNote:', isDeliveryNote, 'isCreditFlow:', isCreditFlow, 'hasInvoiceNumber:', hasInvoiceNumber, 'invoiceNumber:', invoiceNumber, 'matchesConfirmOrder:', matchesConfirmOrder, 'selectedPaymentMethod:', selectedPaymentMethod);
+  console.log('Payment Receipt - isDeliveryNote:', isDeliveryNote, 'hasInvoiceNumber:', hasInvoiceNumber, 'invoiceNumber:', invoiceNumber, 'matchesConfirmOrder:', matchesConfirmOrder, 'selectedPaymentMethod:', selectedPaymentMethod);
   const paymentDate = new Date().toLocaleDateString('en-GB', {
     day: '2-digit',
     month: '2-digit',

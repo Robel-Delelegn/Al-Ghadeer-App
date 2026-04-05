@@ -45,6 +45,14 @@ const DeliveryCard = ({ item, onPress }: { item: Order; onPress?: () => void }) 
   // Handle both nested and flat structures for backward compatibility
   const customerName =  item.customer_name || 'N/A';
   const customerAddress = item.customer_address || 'N/A';
+  const displayId = item.display_id || item.order_number || item.id;
+  const routeName = item.route_name || item.delivery_zone || 'Unassigned route';
+  const earlierVisits = Math.max(0, item.earlier_visits_today_count || 0);
+  const hasNewItems = item.has_new_items === true;
+  const hasExactLocation = item.has_exact_location === true;
+  const taskCount = Array.isArray(item.tasks) ? item.tasks.length : 0;
+  const requiresSignature = item.requires_signature === true;
+  const requiresImmediateInvoice = item.requires_immediate_invoice === true;
   // Ensure totalAmount is always a number (handle string values from API like "0.00")
   const totalAmountRaw = item.total_amount || 0;
   const totalAmount = typeof totalAmountRaw === 'string' ? parseFloat(totalAmountRaw) || 0 : (typeof totalAmountRaw === 'number' ? totalAmountRaw : 0);
@@ -222,11 +230,61 @@ const DeliveryCard = ({ item, onPress }: { item: Order; onPress?: () => void }) 
           </Text>
         </View>
       </View>
+
+      <View className="flex-row items-center justify-between mb-1">
+        <Text className="text-[11px] text-gray-500 font-JakartaMedium" numberOfLines={1}>
+          Stop ID: {displayId}
+        </Text>
+        <Text className="text-[11px] text-sky-700 font-JakartaSemiBold" numberOfLines={1}>
+          {routeName}
+        </Text>
+      </View>
       
       {/* Address Row */}
       <View className="flex-row items-center gap-2 mb-1">
         <Image source={icons.pin} className="w-4 h-4 mr-1" />
         <Text className="text-gray-700 text-sm justify-start flex-1" numberOfLines={1}>{customerAddress}</Text>
+      </View>
+
+      <View className="flex-row items-center gap-2 mb-1 flex-wrap">
+        <View className="px-2 py-1 rounded-full border border-slate-200 bg-slate-50">
+          <Text className="text-[10px] text-slate-600 font-JakartaSemiBold">
+            {taskCount} task{taskCount === 1 ? '' : 's'}
+          </Text>
+        </View>
+        {earlierVisits > 0 ? (
+          <View className="px-2 py-1 rounded-full border border-orange-200 bg-orange-50">
+            <Text className="text-[10px] text-orange-700 font-JakartaSemiBold">
+              {earlierVisits} earlier visit{earlierVisits === 1 ? '' : 's'}
+            </Text>
+          </View>
+        ) : null}
+        {hasNewItems ? (
+          <View className="px-2 py-1 rounded-full border border-emerald-200 bg-emerald-50">
+            <Text className="text-[10px] text-emerald-700 font-JakartaSemiBold">
+              New items
+            </Text>
+          </View>
+        ) : null}
+        <View className={`px-2 py-1 rounded-full border ${hasExactLocation ? 'border-green-200 bg-green-50' : 'border-amber-200 bg-amber-50'}`}>
+          <Text className={`text-[10px] font-JakartaSemiBold ${hasExactLocation ? 'text-green-700' : 'text-amber-700'}`}>
+            {hasExactLocation ? 'Exact location' : 'Approx location'}
+          </Text>
+        </View>
+        {requiresSignature ? (
+          <View className="px-2 py-1 rounded-full border border-violet-200 bg-violet-50">
+            <Text className="text-[10px] text-violet-700 font-JakartaSemiBold">
+              Signature required
+            </Text>
+          </View>
+        ) : null}
+        {requiresImmediateInvoice ? (
+          <View className="px-2 py-1 rounded-full border border-indigo-200 bg-indigo-50">
+            <Text className="text-[10px] text-indigo-700 font-JakartaSemiBold">
+              Immediate invoice
+            </Text>
+          </View>
+        ) : null}
       </View>
       
       {/* Time & Items Row */}
@@ -240,7 +298,9 @@ const DeliveryCard = ({ item, onPress }: { item: Order; onPress?: () => void }) 
       
       {/* Footer Row */}
       <View className="flex-row items-center justify-between mt-1">
-        <Text className="text-gray-800 text-sm font-JakartaSemiBold">AED {displayPrice.toFixed(2)}</Text>
+        <Text className="text-gray-800 text-sm font-JakartaSemiBold">
+          {displayPrice > 0 ? `AED ${displayPrice.toFixed(2)}` : 'Planned stop'}
+        </Text>
         {customerType === 'organization' ? (
           <View className="flex-row items-center gap-1">
             <Text className="text-gray-500 text-xs">Wallet:</Text>

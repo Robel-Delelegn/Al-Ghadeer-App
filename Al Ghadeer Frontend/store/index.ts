@@ -57,6 +57,8 @@ export const useExpenseStore = create<ExpenseStore>()(persist(
 // Cart Item for product management
 interface CartItem {
   id: string;
+  item_id?: string;
+  item_type?: 'asset' | 'retail' | 'refill';
   name: string;
   image: any;
   price: number;
@@ -261,6 +263,8 @@ export const useOrderStore = create<OrderStore>()(persist(
         return {
           cartItems: [...state.cartItems, {
             id: product.id,
+            item_id: product.item_id,
+            item_type: product.item_type,
             name: product.name,
             image: { uri: product.image_url || 'https://via.placeholder.com/150' },
             price: typeof product.pricing === 'number' ? product.pricing : 0,

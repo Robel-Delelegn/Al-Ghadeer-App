@@ -2,6 +2,7 @@ import ApiErrorText from '@/components/ApiErrorText';
 import { useOrderStore } from '@/store/index';
 import { authenticatedFetch } from '@/store/auth';
 import { parseApiResponseWithSoftError } from '@/utils/api';
+import { buildDeliveryTaskOutcomes } from '@/utils/deliveries';
 import { Ionicons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
 import React, { useState, useCallback, useMemo } from 'react';
@@ -57,34 +58,43 @@ const FailedDeliveries = () => {
     setIsSubmitting(true);
     setApiError(null);
     try {
-      // Prepare failure details
-      const failureDetails = {
-        order_id: order.id,
-        customer_id: order.customer_id,
-        reason: selectedReason,
-        additional_notes: additionalNotes,
-        reasons: order.reasons || [],
-        submitted_at: new Date().toISOString()
+      const remark = additionalNotes.trim()
+        ? `${selectedReason}. ${additionalNotes.trim()}`
+        : selectedReason;
+
+      const payload = {
+        status: 'failure' as const,
+        displayId: order.display_id || order.order_number || order.id,
+        tasks: buildDeliveryTaskOutcomes(order.tasks || [], 'failure'),
+        remark,
       };
 
-      // Send to server
-      const url = `${IP_ADDRESS}/failed-deliveries/submit?driver_id=${currentDriver.id}`;
+      console.log('[delivery-failure] request payload', {
+        deliveryId: order.id,
+        displayId: payload.displayId,
+        tasks: payload.tasks,
+      });
       
+      const url = `${IP_ADDRESS}/deliveries/${encodeURIComponent(order.id)}`;
       const response = await authenticatedFetch(url, {
         method: 'POST',
-        body: JSON.stringify(failureDetails)
+        headers: {
+          'Content-Type': 'application/json',
+          'X-Driver-Id': currentDriver.id,
+        },
+        body: JSON.stringify(payload),
       });
 
-      const parseResult = await parseApiResponseWithSoftError<{ message?: string }>(response);
+      const parseResult = await parseApiResponseWithSoftError<{ deliveryNoteId: string }>(response);
       if (!parseResult.ok) {
+        console.error('[delivery-failure] failed response', parseResult.error);
         setApiError(parseResult.error);
         return;
       }
-      const data = parseResult.data;
-      updateOrderStatus(order.id, 'failed', selectedReason, JSON.stringify(failureDetails));
+      updateOrderStatus(order.id, 'failed', selectedReason, remark);
       showSuccessAlert(
         'Failed Delivery Reported',
-        data.message || 'Your failed delivery report has been submitted successfully.',
+        `Failure submitted successfully. Note ID: ${parseResult.data.deliveryNoteId}`,
         [{ text: 'OK', onPress: () => router.push('/(root)/(tabs)/home') }]
       );
     } catch (error) {
@@ -217,7 +227,7 @@ const FailedDeliveries = () => {
             <View style={{ flexDirection: 'row', justifyContent: 'space-between' }}>
               <Text style={{ color: '#6C757D', fontSize: 14, fontWeight: '500' }}>Order ID:</Text>
               <Text style={{ color: '#212529', fontSize: 14, fontWeight: '600' }}>
-                {order.order_number || order.id}
+                {order.display_id || order.order_number || order.id}
               </Text>
             </View>
             

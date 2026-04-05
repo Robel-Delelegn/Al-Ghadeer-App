@@ -1,7 +1,7 @@
 import ApiErrorText from '@/components/ApiErrorText';
 import { useOrderStore } from '@/store/index';
 import { useAuthStore, authenticatedFetch } from '@/store/auth';
-import { ConfirmPaymentRequest, ConfirmPaymentResponse, Order } from '@/types/order';
+import { Order } from '@/types/order';
 import { Ionicons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
@@ -19,13 +19,41 @@ import {
   Modal,
   Image,
 } from 'react-native';
-import { showWarningAlert, showErrorAlert, showSuccessAlert } from '@/store/utils/alert';
+import { showWarningAlert, showErrorAlert } from '@/store/utils/alert';
 import { parseApiResponseWithSoftError } from '@/utils/api';
+import {
+  buildDeliveryTaskOutcomes,
+  toDeliverySaleItemType,
+  toMoney,
+} from '@/utils/deliveries';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import type { SignatureViewRef } from 'react-native-signature-canvas';
 
 const { width, height } = Dimensions.get('window');
 const IP_ADDRESS = process.env.EXPO_PUBLIC_IP_ADDRESS;
+
+const getDepositReturnType = (
+  actionType?: string,
+): 'deposit' | 'deposit_return' => {
+  const normalized = (actionType || '').toLowerCase();
+  if (
+    normalized.includes('refund') ||
+    normalized.includes('return') ||
+    normalized.includes('from-customer')
+  ) {
+    return 'deposit_return';
+  }
+  return 'deposit';
+};
+
+const getDepositKind = (
+  value?: string,
+  fallbackCategory?: string,
+): 'asset' | 'bottle' => {
+  const normalized = (value || fallbackCategory || '').toLowerCase();
+  return normalized.includes('bottle') ? 'bottle' : 'asset';
+};
+
 type SignatureCanvasComponent = typeof import('react-native-signature-canvas').default;
 
 let signatureCanvasComponent: SignatureCanvasComponent | null | undefined;
@@ -231,7 +259,6 @@ const OrganizationSignature: React.FC = () => {
       const vatAmount = sub * 0.05;
       const total = sub + vatAmount;
 
-      const reasonsList = orderDetail?.reasons ?? [];
       const rentItems = (orderDetail?.rent_items || [])
         .filter(item => item.in_truck === true)
         .map(item => ({
@@ -240,82 +267,85 @@ const OrganizationSignature: React.FC = () => {
         }))
         .filter(item => item.quantity > 0);
 
-      const mapProductCategory = (cat?: string): 'bulk_item' | 'asset' | 'refill' => {
-        if (cat === 'refill') return 'refill';
-        if (cat === 'assets') return 'asset';
-        return 'bulk_item';
-      };
-
-      type OtherActionType = NonNullable<ConfirmPaymentRequest['other_actions']>[0]['type'];
-      const getFallbackOtherActionType = (category: string, inTruck: boolean): OtherActionType => {
-        if (category === 'deposit') return inTruck ? 'deposit' : 'deposit-refund';
-        if (category === 'borrow') return inTruck ? 'asset-movement-to-customer' : 'asset-movement-from-customer';
-        return 'asset-movement-to-customer';
-      };
-
-      const requestData: ConfirmPaymentRequest = {
-        customer_site_id: orderDetail.customer_site_id || '',
-        customer_id: orderDetail.customer_id || '',
-        customer_name: orderDetail.customer_name || 'N/A',
-        customer_phone: orderDetail.customer_phone || 'N/A',
-        products: cartItems.filter(item => item?.name).map(item => ({
-          id: item.id,
-          name: item.name,
+      const saleItems = cartItems
+        .filter(item => item?.name && item.quantity > 0)
+        .map(item => ({
+          itemId: item.item_id || item.id,
+          itemType: toDeliverySaleItemType(item.item_type || item.category),
           quantity: item.quantity,
-          price: item.price,
-          category: mapProductCategory(item.category),
-        })),
-        subtotal: sub,
-        vat: vatAmount,
-        total_amount: total,
-        payment_method: selectedPaymentMethod || 'cash',
-        order_type: 'site',
-        reasons: reasonsList,
-        signature_data: signatureData,
-        receiver_name: receiverName.trim(),
-        receiver_position: receiverPosition.trim() || undefined,
-        remark: notes.trim() || undefined,
-        ...(rentItems.length > 0 && {
-          other_actions: rentItems.map(item => {
-            const actionType = item.other_action_type ?? getFallbackOtherActionType(item.category, item.in_truck ?? true);
-            return {
-              id: item.id,
-              name: item.name,
-              type: actionType,
-              price: item.price,
-              quantity: item.quantity,
-              ...(item.other_action_item_type ? { item_type: item.other_action_item_type } : {}),
-            };
-          }),
-        }),
+          unitPrice: toMoney(item.price),
+        }));
+
+      const depositsReturns = rentItems.map(item => ({
+        type: getDepositReturnType(item.other_action_type),
+        depositKind: getDepositKind(item.other_action_item_type, item.category),
+        itemId: item.id,
+        quantity: item.quantity,
+        unitPrice: toMoney(item.price),
+      }));
+
+      const requestData = {
+        status: 'success' as const,
+        displayId: orderDetail.display_id || orderDetail.order_number || orderDetail.id,
+        tasks: buildDeliveryTaskOutcomes(orderDetail.tasks || [], 'success'),
+        ...(saleItems.length > 0
+          ? {
+              sale: {
+                items: saleItems,
+                totals: {
+                  subtotal: toMoney(sub),
+                  vat: toMoney(vatAmount),
+                  total: toMoney(total),
+                },
+                payment: {
+                  method: selectedPaymentMethod || 'cash',
+                  amount: toMoney(total),
+                },
+              },
+            }
+          : {}),
+        ...(depositsReturns.length > 0 ? { depositsReturns } : {}),
+        receiver: {
+          name: receiverName.trim(),
+          ...(receiverPosition.trim()
+            ? { position: receiverPosition.trim() }
+            : {}),
+          signatureData,
+        },
+        ...(notes.trim() ? { remark: notes.trim() } : {}),
       };
 
-      let url = `${IP_ADDRESS}/driver/orders/confirm-payment`;
-      if (user?.id) {
-        url += `?driver_id=${user.id}`;
+      console.log('[delivery-confirm-signature] request payload', {
+        deliveryId: orderDetail.id,
+        displayId: requestData.displayId,
+        tasks: requestData.tasks,
+        saleItems: saleItems.length,
+        depositsReturns: depositsReturns.length,
+      });
+
+      const headers: Record<string, string> = {
+        'Content-Type': 'application/json',
+      };
+      if (user?.id || orderDetail.driver_id) {
+        headers['X-Driver-Id'] = (user?.id || orderDetail.driver_id) as string;
       }
       
       const response = await authenticatedFetch(
-        url,
+        `${IP_ADDRESS}/deliveries/${encodeURIComponent(orderDetail.id)}`,
         {
           method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-          },
+          headers,
           body: JSON.stringify(requestData),
         }
       );
 
-      const parseResult = await parseApiResponseWithSoftError<ConfirmPaymentResponse['data']>(response);
+      const parseResult = await parseApiResponseWithSoftError<{ deliveryNoteId: string }>(response);
       if (!parseResult.ok) {
+        console.error('[delivery-confirm-signature] failed response', parseResult.error);
         setApiError(parseResult.error);
         return;
       }
       const result = parseResult.data;
-      
-      // Log full response to debug sale_id
-      console.log('Organization Signature - Full server response:', JSON.stringify(result, null, 2));
-      console.log('Organization Signature - sale_id from server:', result.sale_id);
 
       // Mark order as delivered and store confirm payment response for receipt
       if (orderDetail) {
@@ -340,32 +370,15 @@ const OrganizationSignature: React.FC = () => {
           useOrderStore.setState({ assignedOrders: updatedAssignedOrders });
         }
 
-        // Store confirm response - use sale_id from server for invoice generation
         setLastConfirmPaymentResponse({
           orderId: orderDetail.id,
-          sale_id: result.sale_id,
-          invoice_number: result.invoice_number,
-          order_number: result.order_number,
+          sale_id: result.deliveryNoteId,
+          order_number: orderDetail.display_id || orderDetail.order_number || orderDetail.id,
         });
         updateOrderStatus(orderDetail.id, 'delivered');
-        if (result.invoice_number) {
-          const store = useOrderStore.getState();
-          const updatedCompletedOrders = store.completedOrders.map(o =>
-            o.id === orderDetail.id ? { ...o, invoice_number: result.invoice_number } : o
-          );
-          useOrderStore.setState({ completedOrders: updatedCompletedOrders });
-        }
       }
 
-      // Document type from response: invoice_number present → Invoice, absent → Delivery Note
-      const hasInvoice = !!result.invoice_number;
-      const documentType = hasInvoice ? 'Invoice' : 'Delivery Note';
-      
-      showSuccessAlert(
-        'Payment Successful',
-        result.message || `Order ${result.order_number} confirmed.`,
-        [{ text: `View ${documentType}`, onPress: () => router.push('/(root)/(tabs)/payment-receipt') }]
-      );
+      router.replace('/(root)/(tabs)/payment-receipt');
 
     } catch (error) {
       setApiError(error instanceof Error ? error.message : 'Failed to process delivery.');

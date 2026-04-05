@@ -147,7 +147,9 @@ const Checkout: React.FC = () => {
         <View style={styles.headerCenter}>
           <Text style={styles.headerTitle}>Checkout</Text>
           {orderDetail && (
-            <Text style={styles.headerSubtitle}>{orderDetail.order_number}</Text>
+            <Text style={styles.headerSubtitle}>
+              {orderDetail.display_id || orderDetail.order_number}
+            </Text>
           )}
         </View>
         <View style={styles.cartBadge}>

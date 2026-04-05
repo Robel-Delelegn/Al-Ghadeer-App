@@ -2,6 +2,7 @@ import ApiErrorText from '@/components/ApiErrorText';
 import { useLocationStore, useOrderStore } from '@/store/index';
 import { authenticatedFetch } from '@/store/auth';
 import { parseApiResponseWithSoftError } from '@/utils/api';
+import { parseDeliveryTasks } from '@/utils/deliveries';
 import { getTotalItemsCount, normalizeOrderProducts } from '@/utils/orderUtils';
 import { Ionicons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
@@ -266,8 +267,15 @@ const OrderDetails = () => {
   const customerName = order.customer_name || 'Unknown';
   const customerPhone = order.customer_phone || '—';
   const customerAddress =  order.customer_address || '—';
+  const stopDisplayId = order.display_id || order.order_number || order.id;
   const totalAmount = order.total_amount || 0;
   const deliveryInstructions = order.delivery_instructions;
+  const routeName = order.route_name || order.delivery_zone || 'Unassigned route';
+  const routeId = order.route_id || 'N/A';
+  const earlierVisitsCount = Math.max(0, order.earlier_visits_today_count || 0);
+  const hasNewItems = order.has_new_items === true;
+  const hasExactLocation = order.has_exact_location === true;
+  const parsedTasks = parseDeliveryTasks(Array.isArray(order.tasks) ? order.tasks : []);
 
   const statusConfig: Record<string, { color: string; bgColor: string; label: string }> = {
     pending: { color: '#D97706', bgColor: '#FFFBEB', label: 'Pending' },
@@ -293,7 +301,7 @@ const OrderDetails = () => {
           <Ionicons name="chevron-back" size={20} color="#1E40AF" />
         </TouchableOpacity>
         <View style={styles.headerCenter}>
-          <Text style={styles.headerTitle}>{order.order_number}</Text>
+          <Text style={styles.headerTitle}>{stopDisplayId}</Text>
           <View style={[styles.statusPill, { backgroundColor: currentStatus.bgColor }]}>
             <View style={[styles.statusDot, { backgroundColor: currentStatus.color }]} />
             <Text style={[styles.statusPillText, { color: currentStatus.color }]}>
@@ -349,6 +357,52 @@ const OrderDetails = () => {
           </View>
         </View>
 
+        <View style={styles.card}>
+          <Text style={styles.sectionLabel}>STOP DETAILS</Text>
+          <View style={styles.detailRow}>
+            <Text style={styles.detailLabel}>Route</Text>
+            <Text style={styles.detailValue}>{routeName}</Text>
+          </View>
+          <View style={styles.detailRowDivider} />
+          <View style={styles.detailRow}>
+            <Text style={styles.detailLabel}>Route ID</Text>
+            <Text style={styles.detailValue}>{routeId}</Text>
+          </View>
+          <View style={styles.detailRowDivider} />
+          <View style={styles.detailRow}>
+            <Text style={styles.detailLabel}>Earlier Visits Today</Text>
+            <Text style={styles.detailValue}>{earlierVisitsCount}</Text>
+          </View>
+          <View style={styles.detailRowDivider} />
+          <View style={styles.detailRow}>
+            <Text style={styles.detailLabel}>Location Precision</Text>
+            <Text style={[styles.detailValue, hasExactLocation ? styles.goodText : styles.warnText]}>
+              {hasExactLocation ? 'Exact location' : 'Approximate location'}
+            </Text>
+          </View>
+          <View style={styles.detailRowDivider} />
+          <View style={styles.detailRow}>
+            <Text style={styles.detailLabel}>Has New Items</Text>
+            <Text style={[styles.detailValue, hasNewItems ? styles.goodText : styles.neutralText]}>
+              {hasNewItems ? 'Yes' : 'No'}
+            </Text>
+          </View>
+          <View style={styles.detailRowDivider} />
+          <View style={styles.detailRow}>
+            <Text style={styles.detailLabel}>Signature Required</Text>
+            <Text style={[styles.detailValue, order.requires_signature ? styles.warnText : styles.neutralText]}>
+              {order.requires_signature ? 'Yes' : 'No'}
+            </Text>
+          </View>
+          <View style={styles.detailRowDivider} />
+          <View style={styles.detailRow}>
+            <Text style={styles.detailLabel}>Immediate Invoice</Text>
+            <Text style={[styles.detailValue, order.requires_immediate_invoice ? styles.warnText : styles.neutralText]}>
+              {order.requires_immediate_invoice ? 'Yes' : 'No'}
+            </Text>
+          </View>
+        </View>
+
         {/* Route Card */}
         {(isCalculatingDistance || distanceInfo) && (
           <View style={styles.card}>
@@ -399,19 +453,23 @@ const OrderDetails = () => {
         )}
 
         {/* Order Info Card */}
-        <View style={styles.card}>
-          <Text style={styles.sectionLabel}>ORDER DETAILS</Text>
+          <View style={styles.card}>
+            <Text style={styles.sectionLabel}>ORDER DETAILS</Text>
           <View style={styles.detailRow}>
-            <Text style={styles.detailLabel}>Order ID</Text>
-            <Text style={styles.detailValue}>{order.order_number}</Text>
+            <Text style={styles.detailLabel}>Display ID</Text>
+            <Text style={styles.detailValue}>{stopDisplayId}</Text>
             </View>
           <View style={styles.detailRowDivider} />
           <View style={styles.detailRow}>
             <Text style={styles.detailLabel}>Payment</Text>
             <Text style={styles.detailValue}>
-                {['invoice', 'credit_invoice', 'credit_sale', 'credit'].includes(order.payment_method ?? '') ? 'Credit' :
-                 order.payment_method === 'credit_invoice' ? 'Credit Invoice' :
-                 (order.payment_method || 'Cash').charAt(0).toUpperCase() + (order.payment_method || 'cash').slice(1)}
+                {order.payment_method
+                  ? ['invoice', 'credit_invoice', 'credit_sale', 'credit'].includes(order.payment_method ?? '')
+                    ? 'Credit'
+                    : order.payment_method === 'credit_invoice'
+                      ? 'Credit Invoice'
+                      : order.payment_method.charAt(0).toUpperCase() + order.payment_method.slice(1)
+                  : 'Not set yet'}
               </Text>
             </View>
           <View style={styles.detailRowDivider} />
@@ -452,6 +510,26 @@ const OrderDetails = () => {
                   </View>
                 ));
               })()}
+          </View>
+        )}
+
+        {parsedTasks.length > 0 && (
+          <View style={styles.card}>
+            <Text style={styles.sectionLabel}>TASKS</Text>
+            {parsedTasks.map((task, index) => (
+              <View key={task.key}>
+                <View style={styles.taskRow}>
+                  <View style={styles.taskDot} />
+                  <View style={styles.taskContent}>
+                    <Text style={styles.taskTitle} numberOfLines={1}>{task.label}</Text>
+                    <Text style={styles.taskMeta}>
+                      {task.bucket.replace(/_/g, ' ')} • {task.id}
+                    </Text>
+                  </View>
+                </View>
+                {index < parsedTasks.length - 1 && <View style={styles.productDivider} />}
+              </View>
+            ))}
           </View>
         )}
 
@@ -807,10 +885,45 @@ const styles = StyleSheet.create({
     fontWeight: '500',
     color: '#1E40AF',
   },
+  goodText: {
+    color: '#059669',
+  },
+  warnText: {
+    color: '#D97706',
+  },
+  neutralText: {
+    color: '#475569',
+  },
   detailValueHighlight: {
     fontSize: 16,
     fontWeight: '700',
     color: '#059669',
+  },
+  taskRow: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    paddingVertical: 10,
+  },
+  taskDot: {
+    width: 8,
+    height: 8,
+    borderRadius: 4,
+    backgroundColor: '#0EA5E9',
+    marginTop: 6,
+    marginRight: 10,
+  },
+  taskContent: {
+    flex: 1,
+  },
+  taskTitle: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: '#1E40AF',
+  },
+  taskMeta: {
+    marginTop: 2,
+    fontSize: 12,
+    color: '#64748B',
   },
   productRow: {
     flexDirection: 'row',
