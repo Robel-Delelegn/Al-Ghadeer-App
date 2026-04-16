@@ -8,6 +8,7 @@ import {
   getRoutesSummary,
   getTruckLabel,
 } from "@/utils/assignments";
+import { getDriverRequestId } from "@/utils/driverIdentity";
 import { parseApiResponseWithSoftError } from "@/utils/api";
 import { Ionicons } from "@expo/vector-icons";
 import { useRouter } from "expo-router";
@@ -39,11 +40,17 @@ const AssignmentsScreen = () => {
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [apiError, setApiError] = useState<string | null>(null);
+  const driverId = useMemo(
+    () =>
+      getDriverRequestId({
+        user,
+        currentDriver,
+      }),
+    [user, currentDriver],
+  );
 
   const fetchAssignments = useCallback(
     async (initialLoad = false) => {
-      const driverId = user?.id || currentDriver?.id;
-
       if (!driverId) {
         setApiError("Driver ID not available.");
         setPayload(null);
@@ -103,7 +110,7 @@ const AssignmentsScreen = () => {
         }
       }
     },
-    [user?.id, currentDriver?.id],
+    [driverId],
   );
 
   useEffect(() => {

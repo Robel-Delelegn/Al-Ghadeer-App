@@ -10,6 +10,15 @@ export interface ApiResponse<T = unknown> {
 
 type ApiBody<T> = ApiResponse<T> & { message?: string };
 
+function hasApiEnvelope<T>(value: unknown): value is ApiBody<T> {
+  return (
+    !!value &&
+    typeof value === "object" &&
+    "success" in value &&
+    typeof (value as { success?: unknown }).success === "boolean"
+  );
+}
+
 async function readApiBody<T>(
   response: Response,
 ): Promise<{ json: ApiBody<T> | null; rawText: string }> {
@@ -67,6 +76,31 @@ export async function parseApiResponse<T>(response: Response): Promise<T> {
   return json.data as T;
 }
 
+/**
+ * Parses either the standard { success, data } API response or a raw JSON body.
+ * Use this for endpoints that may temporarily return a bare JSON object.
+ */
+export async function parseApiResponseOrRaw<T>(response: Response): Promise<T> {
+  const { json, rawText } = await readApiBody<T>(response);
+
+  if (!json) {
+    throw new Error(getApiErrorMessage(response, null, rawText));
+  }
+
+  if (hasApiEnvelope<T>(json)) {
+    if (!response.ok || !json.success) {
+      throw new Error(getApiErrorMessage(response, json, rawText));
+    }
+    return json.data as T;
+  }
+
+  if (!response.ok) {
+    throw new Error(getApiErrorMessage(response, null, rawText));
+  }
+
+  return json as T;
+}
+
 /** Result type for soft 4xx handling - no throw, error shown inline */
 export type ApiResult<T> =
   | { ok: true; data: T }
@@ -99,4 +133,42 @@ export async function parseApiResponseWithSoftError<T>(
   }
 
   return { ok: true, data: json.data as T };
+}
+
+/**
+ * Soft-error variant that accepts either the standard API envelope or a raw JSON body.
+ */
+export async function parseApiResponseOrRawWithSoftError<T>(
+  response: Response,
+): Promise<ApiResult<T>> {
+  const { json, rawText } = await readApiBody<T>(response);
+
+  if (response.status >= 400 && response.status < 500) {
+    return {
+      ok: false,
+      error: getApiErrorMessage(
+        response,
+        hasApiEnvelope<unknown>(json) ? json : null,
+        rawText,
+      ),
+      status: response.status,
+    };
+  }
+
+  if (!json) {
+    throw new Error(getApiErrorMessage(response, null, rawText));
+  }
+
+  if (hasApiEnvelope<T>(json)) {
+    if (!response.ok || !json.success) {
+      throw new Error(getApiErrorMessage(response, json, rawText));
+    }
+    return { ok: true, data: json.data as T };
+  }
+
+  if (!response.ok) {
+    throw new Error(getApiErrorMessage(response, null, rawText));
+  }
+
+  return { ok: true, data: json as T };
 }

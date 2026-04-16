@@ -13,6 +13,13 @@ import {
   getRoutesSummary,
   getTruckLabel,
 } from "@/utils/assignments";
+import { getDriverRequestId } from "@/utils/driverIdentity";
+import {
+  normalizeProfile,
+  type Profile as DriverProfile,
+  type ProfileEmail,
+  type ProfilePhone,
+} from "@/utils/profile";
 import { resolveResourceUrl } from "@/utils/resources";
 import { Ionicons } from "@expo/vector-icons";
 import * as FileSystem from "expo-file-system";
@@ -38,32 +45,6 @@ const API_BASE_URL = (
 )
   .trim()
   .replace(/\/+$/, "");
-
-interface ProfileEmail {
-  address: string;
-  isPrimary: boolean;
-  info: string | null;
-}
-
-interface ProfilePhone {
-  number: string;
-  isPrimary: boolean;
-  info: string | null;
-}
-
-interface DriverProfile {
-  id: string;
-  firstName: string;
-  lastName: string | null;
-  emails: ProfileEmail[];
-  phones: ProfilePhone[];
-  profileImageUrl: string | null;
-}
-
-const normalizeProfile = (profile: DriverProfile): DriverProfile => ({
-  ...profile,
-  profileImageUrl: resolveResourceUrl(profile.profileImageUrl),
-});
 
 interface ContactEditorState {
   visible: boolean;
@@ -173,7 +154,14 @@ const Profile = () => {
     useState<ContactEditorState>(EMPTY_EDITOR);
 
   const isBusy = !!busyAction;
-  const driverId = user?.id || currentDriver?.id;
+  const driverId = useMemo(
+    () =>
+      getDriverRequestId({
+        user,
+        currentDriver,
+      }),
+    [user, currentDriver],
+  );
 
   const displayName = useMemo(() => {
     if (profile) {

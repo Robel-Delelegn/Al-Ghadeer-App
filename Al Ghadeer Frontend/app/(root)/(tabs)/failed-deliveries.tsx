@@ -1,60 +1,68 @@
-import ApiErrorText from '@/components/ApiErrorText';
-import { useOrderStore } from '@/store/index';
-import { authenticatedFetch } from '@/store/auth';
-import { parseApiResponseWithSoftError } from '@/utils/api';
-import { buildDeliveryTaskOutcomes } from '@/utils/deliveries';
-import { Ionicons } from '@expo/vector-icons';
-import { useRouter } from 'expo-router';
-import React, { useState, useCallback, useMemo } from 'react';
-import { ScrollView, Text, TextInput, TouchableOpacity, View, ActivityIndicator, Modal, Image } from 'react-native';
-import { showErrorAlert, showSuccessAlert, showWarningAlert } from '@/store/utils/alert';
+import ApiErrorText from "@/components/ApiErrorText";
+import { useOrderStore } from "@/store/index";
+import { authenticatedFetch } from "@/store/auth";
+import { parseApiResponseOrRawWithSoftError } from "@/utils/api";
+import { buildDeliveryTaskOutcomes } from "@/utils/deliveries";
+import type { DriverHistoryDetail } from "@/utils/driverHistory";
+import { Ionicons } from "@expo/vector-icons";
+import { useRouter } from "expo-router";
+import React, { useState, useCallback } from "react";
+import {
+  ScrollView,
+  Text,
+  TextInput,
+  TouchableOpacity,
+  View,
+  ActivityIndicator,
+  Modal,
+} from "react-native";
+import {
+  showErrorAlert,
+  showSuccessAlert,
+  showWarningAlert,
+} from "@/store/utils/alert";
 
-const IP_ADDRESS = process.env.EXPO_PUBLIC_IP_ADDRESS || 'http://localhost:3000';
+const IP_ADDRESS =
+  process.env.EXPO_PUBLIC_IP_ADDRESS || "http://localhost:3000";
 
 const FAILURE_REASONS = [
-  'Customer not available',
-  'Wrong address provided',
-  'Customer refused delivery',
-  'Damaged goods',
-  'Incomplete order',
-  'Payment issue',
-  'Weather conditions',
-  'Vehicle breakdown',
-  'Security restrictions',
-  'Customer requested reschedule',
-  'Delivery location inaccessible',
-  'Customer phone unreachable',
-  'Building access denied',
-  'Package damaged during transport',
-  'Other',
+  "Customer not available",
+  "Wrong address provided",
+  "Customer refused delivery",
+  "Damaged goods",
+  "Incomplete order",
+  "Payment issue",
+  "Weather conditions",
+  "Vehicle breakdown",
+  "Security restrictions",
+  "Customer requested reschedule",
+  "Delivery location inaccessible",
+  "Customer phone unreachable",
+  "Building access denied",
+  "Package damaged during transport",
+  "Other",
 ];
 
 const FailedDeliveries = () => {
   const router = useRouter();
-  const { selectedOrder, assignedOrders, updateOrderStatus, currentDriver } = useOrderStore();
-  const [selectedReason, setSelectedReason] = useState<string>('');
-  const [additionalNotes, setAdditionalNotes] = useState<string>('');
+  const { selectedOrder, assignedOrders, updateOrderStatus } = useOrderStore();
+  const [selectedReason, setSelectedReason] = useState<string>("");
+  const [additionalNotes, setAdditionalNotes] = useState<string>("");
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [showReasonModal, setShowReasonModal] = useState(false);
   const [apiError, setApiError] = useState<string | null>(null);
 
-  const order = assignedOrders.find(item => selectedOrder === item.id);
-
+  const order = assignedOrders.find((item) => selectedOrder === item.id);
 
   const handleSubmitFailedDelivery = useCallback(async () => {
     if (!order) {
-      showErrorAlert('Error', 'Order information not found.');
+      showErrorAlert("Error", "Order information not found.");
       return;
     }
     if (!selectedReason) {
-      showErrorAlert('Error', 'Please select a reason for failed delivery.');
+      showErrorAlert("Error", "Please select a reason for failed delivery.");
       return;
     }
-    if (!currentDriver) {
-      showErrorAlert('Error', 'Driver information not found.');
-      return;
-    }
-
     setIsSubmitting(true);
     setApiError(null);
     try {
@@ -63,92 +71,118 @@ const FailedDeliveries = () => {
         : selectedReason;
 
       const payload = {
-        status: 'failure' as const,
+        status: "failure" as const,
         displayId: order.display_id || order.order_number || order.id,
-        tasks: buildDeliveryTaskOutcomes(order.tasks || [], 'failure'),
+        tasks: buildDeliveryTaskOutcomes(order.tasks || [], "failure"),
         remark,
       };
 
-      console.log('[delivery-failure] request payload', {
+      console.log("[delivery-failure] request payload", {
         deliveryId: order.id,
         displayId: payload.displayId,
         tasks: payload.tasks,
       });
-      
+
       const url = `${IP_ADDRESS}/deliveries/${encodeURIComponent(order.id)}`;
       const response = await authenticatedFetch(url, {
-        method: 'POST',
+        method: "POST",
         headers: {
-          'Content-Type': 'application/json',
-          'X-Driver-Id': currentDriver.id,
+          "Content-Type": "application/json",
         },
         body: JSON.stringify(payload),
       });
 
-      const parseResult = await parseApiResponseWithSoftError<{ deliveryNoteId: string }>(response);
+      const parseResult =
+        await parseApiResponseOrRawWithSoftError<DriverHistoryDetail>(response);
       if (!parseResult.ok) {
-        console.error('[delivery-failure] failed response', parseResult.error);
+        console.error("[delivery-failure] failed response", parseResult.error);
         setApiError(parseResult.error);
         return;
       }
-      updateOrderStatus(order.id, 'failed', selectedReason, remark);
+      updateOrderStatus(order.id, "failed", selectedReason, remark);
       showSuccessAlert(
-        'Failed Delivery Reported',
-        'Failure submitted successfully.',
-        [{ text: 'OK', onPress: () => router.push('/(root)/(tabs)/home') }]
+        "Failed Delivery Reported",
+        "Failure submitted successfully.",
+        [{ text: "OK", onPress: () => router.push("/(root)/(tabs)/home") }],
       );
     } catch (error) {
-      console.error('Error submitting failed delivery report:', error);
-      setApiError('Failed to submit report. Please try again.');
+      console.error("Error submitting failed delivery report:", error);
+      setApiError("Failed to submit report. Please try again.");
     } finally {
       setIsSubmitting(false);
     }
-  }, [order, selectedReason, additionalNotes, currentDriver, updateOrderStatus, router]);
+  }, [order, selectedReason, additionalNotes, updateOrderStatus, router]);
 
   const handleCancel = () => {
     showWarningAlert(
-      'Cancel Report',
-      'Are you sure you want to cancel this failed delivery report?',
+      "Cancel Report",
+      "Are you sure you want to cancel this failed delivery report?",
       [
-        { text: 'No', style: 'cancel' },
-        { text: 'Yes', onPress: () => router.back() }
-      ]
+        { text: "No", style: "cancel" },
+        { text: "Yes", onPress: () => router.back() },
+      ],
     );
   };
 
   if (!order) {
     return (
-      <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center', backgroundColor: '#F8F9FA' }}>
-        <View style={{
-          backgroundColor: 'white',
-          borderRadius: 16,
-          padding: 24,
-          alignItems: 'center',
-          shadowColor: '#1E40AF',
-          shadowOffset: { width: 0, height: 2 },
-          shadowOpacity: 0.1,
-          shadowRadius: 4,
-          elevation: 4,
-          margin: 20
-        }}>
+      <View
+        style={{
+          flex: 1,
+          justifyContent: "center",
+          alignItems: "center",
+          backgroundColor: "#F8F9FA",
+        }}
+      >
+        <View
+          style={{
+            backgroundColor: "white",
+            borderRadius: 16,
+            padding: 24,
+            alignItems: "center",
+            shadowColor: "#1E40AF",
+            shadowOffset: { width: 0, height: 2 },
+            shadowOpacity: 0.1,
+            shadowRadius: 4,
+            elevation: 4,
+            margin: 20,
+          }}
+        >
           <Ionicons name="alert-circle" size={48} color="#DC3545" />
-          <Text style={{ color: '#212529', fontSize: 18, fontWeight: '600', marginTop: 16, textAlign: 'center' }}>
+          <Text
+            style={{
+              color: "#212529",
+              fontSize: 18,
+              fontWeight: "600",
+              marginTop: 16,
+              textAlign: "center",
+            }}
+          >
             Order Not Found
           </Text>
-          <Text style={{ color: '#6C757D', fontSize: 14, marginTop: 8, textAlign: 'center' }}>
+          <Text
+            style={{
+              color: "#6C757D",
+              fontSize: 14,
+              marginTop: 8,
+              textAlign: "center",
+            }}
+          >
             The order information could not be retrieved.
           </Text>
-          <TouchableOpacity 
-            style={{ 
-              marginTop: 20, 
-              paddingVertical: 12, 
-              paddingHorizontal: 24, 
-              backgroundColor: '#1976D2', 
-              borderRadius: 8 
+          <TouchableOpacity
+            style={{
+              marginTop: 20,
+              paddingVertical: 12,
+              paddingHorizontal: 24,
+              backgroundColor: "#1976D2",
+              borderRadius: 8,
             }}
-            onPress={() => router.push('/(root)/(tabs)/home')}
+            onPress={() => router.push("/(root)/(tabs)/home")}
           >
-            <Text style={{ color: 'white', fontSize: 16, fontWeight: '600' }}>Back to Home</Text>
+            <Text style={{ color: "white", fontSize: 16, fontWeight: "600" }}>
+              Back to Home
+            </Text>
           </TouchableOpacity>
         </View>
       </View>
@@ -156,29 +190,37 @@ const FailedDeliveries = () => {
   }
 
   return (
-    <View style={{ flex: 1, backgroundColor: '#F8F9FA' }}>
+    <View style={{ flex: 1, backgroundColor: "#F8F9FA" }}>
       {/* Header */}
-      <View style={{ 
-        backgroundColor: '#FFFFFF', 
-        paddingHorizontal: 20, 
-        paddingTop: 16, 
-        paddingBottom: 20,
-        borderBottomWidth: 1,
-        borderBottomColor: '#E9ECEF',
-        shadowColor: '#000',
-        shadowOffset: { width: 0, height: 2 },
-        shadowOpacity: 0.05,
-        shadowRadius: 4,
-        elevation: 2
-      }}>
-        <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}>
-          <TouchableOpacity 
+      <View
+        style={{
+          backgroundColor: "#FFFFFF",
+          paddingHorizontal: 20,
+          paddingTop: 16,
+          paddingBottom: 20,
+          borderBottomWidth: 1,
+          borderBottomColor: "#E9ECEF",
+          shadowColor: "#000",
+          shadowOffset: { width: 0, height: 2 },
+          shadowOpacity: 0.05,
+          shadowRadius: 4,
+          elevation: 2,
+        }}
+      >
+        <View
+          style={{
+            flexDirection: "row",
+            alignItems: "center",
+            justifyContent: "space-between",
+          }}
+        >
+          <TouchableOpacity
             onPress={() => router.back()}
             style={{ padding: 8 }}
           >
             <Ionicons name="arrow-back" size={24} color="#495057" />
           </TouchableOpacity>
-          <Text style={{ color: '#212529', fontSize: 18, fontWeight: '600' }}>
+          <Text style={{ color: "#212529", fontSize: 18, fontWeight: "600" }}>
             Failed Delivery Report
           </Text>
           <View style={{ width: 40 }} />
@@ -187,167 +229,233 @@ const FailedDeliveries = () => {
 
       <ApiErrorText error={apiError} />
 
-      <ScrollView 
+      <ScrollView
         style={{ flex: 1 }}
         contentContainerStyle={{ padding: 20, paddingBottom: 150 }}
         showsVerticalScrollIndicator={false}
       >
         {/* Order Information Card */}
-        <View style={{ 
-          backgroundColor: '#FFFFFF', 
-          borderRadius: 12, 
-          padding: 20, 
-          marginBottom: 16,
-          borderWidth: 1,
-          borderColor: '#E9ECEF',
-          shadowColor: '#1E40AF',
-          shadowOffset: { width: 0, height: 2 },
-          shadowOpacity: 0.05,
-          shadowRadius: 8,
-          elevation: 2
-        }}>
-          <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 16 }}>
-            <View style={{ 
-              width: 40, 
-              height: 40, 
-              backgroundColor: '#FEF2F2', 
-              borderRadius: 20, 
-              alignItems: 'center', 
-              justifyContent: 'center', 
-              marginRight: 12 
-            }}>
+        <View
+          style={{
+            backgroundColor: "#FFFFFF",
+            borderRadius: 12,
+            padding: 20,
+            marginBottom: 16,
+            borderWidth: 1,
+            borderColor: "#E9ECEF",
+            shadowColor: "#1E40AF",
+            shadowOffset: { width: 0, height: 2 },
+            shadowOpacity: 0.05,
+            shadowRadius: 8,
+            elevation: 2,
+          }}
+        >
+          <View
+            style={{
+              flexDirection: "row",
+              alignItems: "center",
+              marginBottom: 16,
+            }}
+          >
+            <View
+              style={{
+                width: 40,
+                height: 40,
+                backgroundColor: "#FEF2F2",
+                borderRadius: 20,
+                alignItems: "center",
+                justifyContent: "center",
+                marginRight: 12,
+              }}
+            >
               <Ionicons name="alert-circle" size={20} color="#DC3545" />
             </View>
-            <Text style={{ color: '#212529', fontSize: 16, fontWeight: '600' }}>
+            <Text style={{ color: "#212529", fontSize: 16, fontWeight: "600" }}>
               Order Information
             </Text>
           </View>
-          
+
           <View style={{ gap: 12 }}>
-            <View style={{ flexDirection: 'row', justifyContent: 'space-between' }}>
-              <Text style={{ color: '#6C757D', fontSize: 14, fontWeight: '500' }}>Customer:</Text>
-              <Text style={{ color: '#212529', fontSize: 14, fontWeight: '600' }}>
-                {order.customer_name || 'N/A'}
+            <View
+              style={{ flexDirection: "row", justifyContent: "space-between" }}
+            >
+              <Text
+                style={{ color: "#6C757D", fontSize: 14, fontWeight: "500" }}
+              >
+                Customer:
+              </Text>
+              <Text
+                style={{ color: "#212529", fontSize: 14, fontWeight: "600" }}
+              >
+                {order.customer_name || "N/A"}
               </Text>
             </View>
-            
-            <View style={{ flexDirection: 'row', justifyContent: 'space-between' }}>
-              <Text style={{ color: '#6C757D', fontSize: 14, fontWeight: '500' }}>Phone:</Text>
-              <Text style={{ color: '#212529', fontSize: 14, fontWeight: '600' }}>
-                {order.customer_phone || 'N/A'}
+
+            <View
+              style={{ flexDirection: "row", justifyContent: "space-between" }}
+            >
+              <Text
+                style={{ color: "#6C757D", fontSize: 14, fontWeight: "500" }}
+              >
+                Phone:
+              </Text>
+              <Text
+                style={{ color: "#212529", fontSize: 14, fontWeight: "600" }}
+              >
+                {order.customer_phone || "N/A"}
               </Text>
             </View>
-            
+
             <View>
-              <Text style={{ color: '#6C757D', fontSize: 14, fontWeight: '500', marginBottom: 4 }}>Address:</Text>
-              <Text style={{ color: '#212529', fontSize: 14, fontWeight: '600', lineHeight: 20 }}>
-                { order.customer_address || 'N/A'}
+              <Text
+                style={{
+                  color: "#6C757D",
+                  fontSize: 14,
+                  fontWeight: "500",
+                  marginBottom: 4,
+                }}
+              >
+                Address:
+              </Text>
+              <Text
+                style={{
+                  color: "#212529",
+                  fontSize: 14,
+                  fontWeight: "600",
+                  lineHeight: 20,
+                }}
+              >
+                {order.customer_address || "N/A"}
               </Text>
             </View>
           </View>
         </View>
 
         {/* Failure Reason Card */}
-        <View style={{ 
-          backgroundColor: '#FFFFFF', 
-          borderRadius: 12, 
-          padding: 20, 
-          marginBottom: 16,
-          borderWidth: 1,
-          borderColor: '#E9ECEF',
-          shadowColor: '#1E40AF',
-          shadowOffset: { width: 0, height: 2 },
-          shadowOpacity: 0.05,
-          shadowRadius: 8,
-          elevation: 2
-        }}>
-          <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 16 }}>
-            <View style={{ 
-              width: 40, 
-              height: 40, 
-              backgroundColor: '#FFF3E0', 
-              borderRadius: 20, 
-              alignItems: 'center', 
-              justifyContent: 'center', 
-              marginRight: 12 
-            }}>
+        <View
+          style={{
+            backgroundColor: "#FFFFFF",
+            borderRadius: 12,
+            padding: 20,
+            marginBottom: 16,
+            borderWidth: 1,
+            borderColor: "#E9ECEF",
+            shadowColor: "#1E40AF",
+            shadowOffset: { width: 0, height: 2 },
+            shadowOpacity: 0.05,
+            shadowRadius: 8,
+            elevation: 2,
+          }}
+        >
+          <View
+            style={{
+              flexDirection: "row",
+              alignItems: "center",
+              marginBottom: 16,
+            }}
+          >
+            <View
+              style={{
+                width: 40,
+                height: 40,
+                backgroundColor: "#FFF3E0",
+                borderRadius: 20,
+                alignItems: "center",
+                justifyContent: "center",
+                marginRight: 12,
+              }}
+            >
               <Ionicons name="list" size={20} color="#F59E0B" />
             </View>
-            <Text style={{ color: '#212529', fontSize: 16, fontWeight: '600' }}>
+            <Text style={{ color: "#212529", fontSize: 16, fontWeight: "600" }}>
               Reason for Failed Delivery
             </Text>
-            <Text style={{ color: '#DC3545', fontSize: 16, marginLeft: 4 }}>*</Text>
+            <Text style={{ color: "#DC3545", fontSize: 16, marginLeft: 4 }}>
+              *
+            </Text>
           </View>
-          
-          <TouchableOpacity 
-            style={{ 
-              backgroundColor: '#F8F9FA', 
-              borderRadius: 8, 
-              padding: 16, 
-              borderWidth: 1, 
-              borderColor: selectedReason ? '#1976D2' : '#E9ECEF',
-              flexDirection: 'row',
-              alignItems: 'center',
-              justifyContent: 'space-between'
+
+          <TouchableOpacity
+            style={{
+              backgroundColor: "#F8F9FA",
+              borderRadius: 8,
+              padding: 16,
+              borderWidth: 1,
+              borderColor: selectedReason ? "#1976D2" : "#E9ECEF",
+              flexDirection: "row",
+              alignItems: "center",
+              justifyContent: "space-between",
             }}
             onPress={() => setShowReasonModal(true)}
           >
-            <Text style={{ 
-              color: selectedReason ? '#212529' : '#6C757D', 
-              fontSize: 16, 
-              fontWeight: selectedReason ? '500' : '400' 
-            }}>
-              {selectedReason || 'Select a reason...'}
+            <Text
+              style={{
+                color: selectedReason ? "#212529" : "#6C757D",
+                fontSize: 16,
+                fontWeight: selectedReason ? "500" : "400",
+              }}
+            >
+              {selectedReason || "Select a reason..."}
             </Text>
             <Ionicons name="chevron-down" size={20} color="#6C757D" />
           </TouchableOpacity>
         </View>
 
         {/* Additional Details Card */}
-        <View style={{ 
-          backgroundColor: '#FFFFFF', 
-          borderRadius: 12, 
-          padding: 20, 
-          marginBottom: 16,
-          borderWidth: 1,
-          borderColor: '#E9ECEF',
-          shadowColor: '#1E40AF',
-          shadowOffset: { width: 0, height: 2 },
-          shadowOpacity: 0.05,
-          shadowRadius: 8,
-          elevation: 2
-        }}>
-          <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 16 }}>
-            <View style={{ 
-              width: 40, 
-              height: 40, 
-              backgroundColor: '#F3E8FF', 
-              borderRadius: 20, 
-              alignItems: 'center', 
-              justifyContent: 'center', 
-              marginRight: 12 
-            }}>
+        <View
+          style={{
+            backgroundColor: "#FFFFFF",
+            borderRadius: 12,
+            padding: 20,
+            marginBottom: 16,
+            borderWidth: 1,
+            borderColor: "#E9ECEF",
+            shadowColor: "#1E40AF",
+            shadowOffset: { width: 0, height: 2 },
+            shadowOpacity: 0.05,
+            shadowRadius: 8,
+            elevation: 2,
+          }}
+        >
+          <View
+            style={{
+              flexDirection: "row",
+              alignItems: "center",
+              marginBottom: 16,
+            }}
+          >
+            <View
+              style={{
+                width: 40,
+                height: 40,
+                backgroundColor: "#F3E8FF",
+                borderRadius: 20,
+                alignItems: "center",
+                justifyContent: "center",
+                marginRight: 12,
+              }}
+            >
               <Ionicons name="document-text" size={20} color="#8B5CF6" />
             </View>
-            <Text style={{ color: '#212529', fontSize: 16, fontWeight: '600' }}>
+            <Text style={{ color: "#212529", fontSize: 16, fontWeight: "600" }}>
               Additional Details
             </Text>
-            <Text style={{ color: '#94A3B8', fontSize: 14, marginLeft: 8 }}>
+            <Text style={{ color: "#94A3B8", fontSize: 14, marginLeft: 8 }}>
               (Optional)
             </Text>
           </View>
-          
+
           <TextInput
             style={{
-              backgroundColor: '#F8F9FA',
+              backgroundColor: "#F8F9FA",
               borderRadius: 8,
               padding: 16,
               borderWidth: 1,
-              borderColor: '#E9ECEF',
+              borderColor: "#E9ECEF",
               fontSize: 16,
-              color: '#212529',
+              color: "#212529",
               minHeight: 120,
-              textAlignVertical: 'top'
+              textAlignVertical: "top",
             }}
             placeholder="Provide additional details about the failed delivery attempt..."
             placeholderTextColor="#6C757D"
@@ -359,51 +467,54 @@ const FailedDeliveries = () => {
         </View>
 
         {/* Action Buttons */}
-        <View style={{ 
-          flexDirection: 'row', 
-          gap: 12, 
-          backgroundColor: '#FFFFFF',
-          borderRadius: 16,
-          padding: 16,
-          marginTop: 8,
-          shadowColor: '#1E40AF',
-          shadowOffset: { width: 0, height: 2 },
-          shadowOpacity: 0.04,
-          shadowRadius: 8,
-          elevation: 2
-        }}>
+        <View
+          style={{
+            flexDirection: "row",
+            gap: 12,
+            backgroundColor: "#FFFFFF",
+            borderRadius: 16,
+            padding: 16,
+            marginTop: 8,
+            shadowColor: "#1E40AF",
+            shadowOffset: { width: 0, height: 2 },
+            shadowOpacity: 0.04,
+            shadowRadius: 8,
+            elevation: 2,
+          }}
+        >
           <TouchableOpacity
-            style={{ 
-              flexDirection: 'row',
-              alignItems: 'center',
-              justifyContent: 'center',
+            style={{
+              flexDirection: "row",
+              alignItems: "center",
+              justifyContent: "center",
               height: 52,
               paddingHorizontal: 20,
-              backgroundColor: '#F8F9FA', 
+              backgroundColor: "#F8F9FA",
               borderRadius: 14,
               borderWidth: 1,
-              borderColor: '#E9ECEF',
-              gap: 8
+              borderColor: "#E9ECEF",
+              gap: 8,
             }}
             onPress={handleCancel}
             disabled={isSubmitting}
           >
             <Ionicons name="close" size={18} color="#6C757D" />
-            <Text style={{ color: '#6C757D', fontSize: 15, fontWeight: '600' }}>
+            <Text style={{ color: "#6C757D", fontSize: 15, fontWeight: "600" }}>
               Cancel
             </Text>
           </TouchableOpacity>
-          
+
           <TouchableOpacity
-            style={{ 
-              flex: 1, 
-              flexDirection: 'row',
-              alignItems: 'center',
-              justifyContent: 'center',
+            style={{
+              flex: 1,
+              flexDirection: "row",
+              alignItems: "center",
+              justifyContent: "center",
               height: 52,
-              backgroundColor: selectedReason && !isSubmitting ? '#DC3545' : '#94A3B8', 
+              backgroundColor:
+                selectedReason && !isSubmitting ? "#DC3545" : "#94A3B8",
               borderRadius: 14,
-              gap: 10
+              gap: 10,
             }}
             onPress={handleSubmitFailedDelivery}
             disabled={!selectedReason || isSubmitting}
@@ -411,23 +522,29 @@ const FailedDeliveries = () => {
             {isSubmitting ? (
               <>
                 <ActivityIndicator size="small" color="white" />
-                <Text style={{ color: 'white', fontSize: 15, fontWeight: '600' }}>
+                <Text
+                  style={{ color: "white", fontSize: 15, fontWeight: "600" }}
+                >
                   Submitting...
                 </Text>
               </>
             ) : (
               <>
-                <Text style={{ color: 'white', fontSize: 15, fontWeight: '600' }}>
-                Submit Report
-              </Text>
-                <View style={{ 
-                  width: 26, 
-                  height: 26, 
-                  borderRadius: 7, 
-                  backgroundColor: 'rgba(255,255,255,0.2)',
-                  justifyContent: 'center',
-                  alignItems: 'center'
-                }}>
+                <Text
+                  style={{ color: "white", fontSize: 15, fontWeight: "600" }}
+                >
+                  Submit Report
+                </Text>
+                <View
+                  style={{
+                    width: 26,
+                    height: 26,
+                    borderRadius: 7,
+                    backgroundColor: "rgba(255,255,255,0.2)",
+                    justifyContent: "center",
+                    alignItems: "center",
+                  }}
+                >
                   <Ionicons name="arrow-forward" size={16} color="#FFFFFF" />
                 </View>
               </>
@@ -439,23 +556,41 @@ const FailedDeliveries = () => {
       </ScrollView>
 
       {/* Reason Selection Modal */}
-      <Modal visible={showReasonModal} transparent animationType="fade" onRequestClose={() => setShowReasonModal(false)}>
-        <View style={{ 
-          flex: 1, 
-          backgroundColor: 'rgba(0, 0, 0, 0.4)', 
-          alignItems: 'center', 
-          justifyContent: 'flex-end' 
-        }}>
-          <View style={{ 
-            backgroundColor: 'white', 
-            width: '100%', 
-            borderTopLeftRadius: 16, 
-            borderTopRightRadius: 16, 
-            padding: 16, 
-            maxHeight: '70%' 
-          }}>
-            <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 16 }}>
-              <Text style={{ fontSize: 18, fontWeight: '600', color: '#1E40AF' }}>
+      <Modal
+        visible={showReasonModal}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setShowReasonModal(false)}
+      >
+        <View
+          style={{
+            flex: 1,
+            backgroundColor: "rgba(0, 0, 0, 0.4)",
+            alignItems: "center",
+            justifyContent: "flex-end",
+          }}
+        >
+          <View
+            style={{
+              backgroundColor: "white",
+              width: "100%",
+              borderTopLeftRadius: 16,
+              borderTopRightRadius: 16,
+              padding: 16,
+              maxHeight: "70%",
+            }}
+          >
+            <View
+              style={{
+                flexDirection: "row",
+                alignItems: "center",
+                justifyContent: "space-between",
+                marginBottom: 16,
+              }}
+            >
+              <Text
+                style={{ fontSize: 18, fontWeight: "600", color: "#1E40AF" }}
+              >
                 Select Failure Reason
               </Text>
               <TouchableOpacity onPress={() => setShowReasonModal(false)}>
@@ -469,21 +604,23 @@ const FailedDeliveries = () => {
                   style={{
                     paddingVertical: 14,
                     borderBottomWidth: 1,
-                    borderBottomColor: '#F3F4F6',
-                    flexDirection: 'row',
-                    alignItems: 'center',
-                    justifyContent: 'space-between'
+                    borderBottomColor: "#F3F4F6",
+                    flexDirection: "row",
+                    alignItems: "center",
+                    justifyContent: "space-between",
                   }}
                   onPress={() => {
                     setSelectedReason(reason);
                     setShowReasonModal(false);
                   }}
                 >
-                  <Text style={{ 
-                    fontSize: 15, 
-                    color: selectedReason === reason ? '#DC3545' : '#1E40AF',
-                    fontWeight: selectedReason === reason ? '600' : '400'
-                  }}>
+                  <Text
+                    style={{
+                      fontSize: 15,
+                      color: selectedReason === reason ? "#DC3545" : "#1E40AF",
+                      fontWeight: selectedReason === reason ? "600" : "400",
+                    }}
+                  >
                     {reason}
                   </Text>
                   {selectedReason === reason && (

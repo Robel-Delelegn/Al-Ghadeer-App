@@ -37,6 +37,8 @@ export interface DeliveryStop {
   tasks: unknown[];
 }
 
+export type Delivery = DeliveryStop;
+
 type DeliveryTaskBucket =
   | "pay_on_delivery_orders"
   | "prepaid_orders"
@@ -71,6 +73,24 @@ export interface ParsedDeliveryTask {
   id: string;
   bucket: DeliveryTaskBucket;
   label: string;
+  type: string;
+  earlierAttemptsTodayCount: number;
+  lines: ParsedDeliveryTaskLine[];
+  raw: unknown;
+}
+
+export interface ParsedDeliveryTaskLine {
+  key: string;
+  id: string;
+  itemId: string;
+  kind: string;
+  label: string;
+  itemType: "asset" | "retail" | "refill";
+  unit: string | null;
+  imageUrl: string | null;
+  quantity: number;
+  unitPrice: number;
+  totalPrice: number;
   raw: unknown;
 }
 
@@ -98,7 +118,9 @@ const asObject = (value: unknown): Record<string, unknown> | null => {
     : null;
 };
 
-const addressPartsFromDeliveryAddress = (address: DeliveryAddress): string[] => {
+const addressPartsFromDeliveryAddress = (
+  address: DeliveryAddress,
+): string[] => {
   return [
     address.label,
     address.street,
@@ -120,7 +142,143 @@ export const formatDeliveryAddress = (
   return "No address";
 };
 
+const normalizeItemType = (value: unknown): "asset" | "retail" | "refill" => {
+  const text = toText(value).toLowerCase();
+  if (text.includes("asset")) return "asset";
+  if (text.includes("refill")) return "refill";
+  return "retail";
+};
+
+const isSaleTaskLine = (value: unknown): boolean => {
+  const kind = toText(value).toLowerCase();
+  return kind.length === 0 || kind === "sale";
+};
+
+const parseDeliveryTaskLines = (
+  task: Record<string, unknown>,
+  taskKey: string,
+): ParsedDeliveryTaskLine[] => {
+  const lines = Array.isArray(task.lines) ? task.lines : [];
+
+  return lines
+    .map((lineValue, index) => {
+      const line = asObject(lineValue);
+      if (!line) return null;
+
+      const item = asObject(line.item);
+      const id =
+        toText(line.id) ||
+        toText(line.itemId) ||
+        toText(line.item_id) ||
+        `${taskKey}:line:${index}`;
+      const itemId =
+        toText(line.itemId) || toText(line.item_id) || toText(item?.id) || id;
+      const label =
+        pickFirstText(item || line, ["label", "name", "title"]) ||
+        `Item ${index + 1}`;
+      const quantity = Math.max(0, toNumber(line.quantity) ?? 0);
+      const unitPrice = toMoney(
+        line.unit_price ??
+          line.unitPrice ??
+          line.price_per_unit ??
+          line.price ??
+          0,
+      );
+
+      return {
+        key: `${taskKey}:line:${itemId}:${index}`,
+        id,
+        itemId,
+        kind: toText(line.kind) || "sale",
+        label,
+        itemType: normalizeItemType(
+          line.item_type ?? line.itemType ?? item?.type,
+        ),
+        unit: toNullableText(line.unit ?? line.unit_name ?? item?.unit) ?? null,
+        imageUrl:
+          toNullableText(
+            line.image_url ??
+              line.imageUrl ??
+              item?.image_url ??
+              item?.imageUrl,
+          ) ?? null,
+        quantity,
+        unitPrice,
+        totalPrice: toMoney(quantity * unitPrice),
+        raw: lineValue,
+      };
+    })
+    .filter((line): line is ParsedDeliveryTaskLine => line !== null);
+};
+
+interface PlannedOrderProduct {
+  id: string;
+  item_id: string;
+  name: string;
+  quantity: number;
+  price: number;
+  unit: string | null;
+  image_url: string | null;
+  type: "asset" | "retail" | "refill";
+  category: string;
+}
+
+const derivePlannedOrderProducts = (
+  tasks: unknown[],
+): { products: PlannedOrderProduct[]; totalAmount: number } => {
+  const parsedTasks = parseDeliveryTasks(tasks);
+  const productsByKey = new Map<string, PlannedOrderProduct>();
+
+  parsedTasks.forEach((task) => {
+    task.lines.forEach((line) => {
+      if (!isSaleTaskLine(line.kind) || line.quantity <= 0) {
+        return;
+      }
+
+      const key = `${line.itemType}:${line.itemId}`;
+      const existing = productsByKey.get(key);
+      if (existing) {
+        existing.quantity += line.quantity;
+        if (!existing.image_url && line.imageUrl) {
+          existing.image_url = line.imageUrl;
+        }
+        if (!existing.unit && line.unit) {
+          existing.unit = line.unit;
+        }
+        if (existing.price <= 0 && line.unitPrice > 0) {
+          existing.price = line.unitPrice;
+        }
+        return;
+      }
+
+      productsByKey.set(key, {
+        id: key,
+        item_id: line.itemId,
+        name: line.label,
+        quantity: line.quantity,
+        price: line.unitPrice,
+        unit: line.unit,
+        image_url: line.imageUrl,
+        type: line.itemType,
+        category: line.itemType,
+      });
+    });
+  });
+
+  const products = Array.from(productsByKey.values());
+  const totalAmount = toMoney(
+    products.reduce(
+      (sum, product) => sum + (product.price || 0) * (product.quantity || 0),
+      0,
+    ),
+  );
+
+  return { products, totalAmount };
+};
+
 export const mapDeliveryToOrder = (delivery: DeliveryStop): Order => {
+  const { products, totalAmount } = derivePlannedOrderProducts(delivery.tasks);
+
   return {
     id: delivery.id,
     order_number: delivery.display_id || delivery.id,
@@ -151,14 +309,16 @@ export const mapDeliveryToOrder = (delivery: DeliveryStop): Order => {
       delivery.customer.requires_immediate_invoice,
     ),
     tasks: Array.isArray(delivery.tasks) ? delivery.tasks : [],
-    total_amount: 0,
+    ...(products.length > 0 ? { products } : {}),
+    total_amount: totalAmount,
   };
 };
 
-const detectBucketFromType = (
-  typeText: string,
-): DeliveryTaskBucket | null => {
-  const normalized = typeText.trim().toLowerCase().replace(/[\s-]+/g, "_");
+const detectBucketFromType = (typeText: string): DeliveryTaskBucket | null => {
+  const normalized = typeText
+    .trim()
+    .toLowerCase()
+    .replace(/[\s-]+/g, "_");
   if (!normalized) return null;
 
   if (normalized.includes("prepaid")) return "prepaid_orders";
@@ -212,11 +372,11 @@ const getTaskIdForBucket = (
         "payOnDeliveryOrderId",
         "pay_on_delivery_order_id",
       ]) ||
-      pickFromNested(task, ["order", "task", "payload", "data"], [
-        "orderId",
-        "order_id",
-        "id",
-      ]) ||
+      pickFromNested(
+        task,
+        ["order", "task", "payload", "data"],
+        ["orderId", "order_id", "id"],
+      ) ||
       toText(task.id) ||
       null
     );
@@ -242,7 +402,12 @@ const getTaskIdForBucket = (
 
   if (bucket === "staff_orders") {
     return (
-      pickFirstText(task, ["staffOrderId", "staff_order_id", "orderId", "order_id"]) ||
+      pickFirstText(task, [
+        "staffOrderId",
+        "staff_order_id",
+        "orderId",
+        "order_id",
+      ]) ||
       pickFromNested(
         task,
         ["staffOrder", "staff_order", "order", "task", "payload", "data"],
@@ -329,6 +494,7 @@ const getTaskLabel = (
   task: Record<string, unknown>,
   fallbackId: string,
   fallbackBucket: DeliveryTaskBucket,
+  lines: ParsedDeliveryTaskLine[],
 ): string => {
   const explicit =
     toText(task.label) ||
@@ -338,6 +504,13 @@ const getTaskLabel = (
     toText(task.displayId);
 
   if (explicit) return explicit;
+
+  if (lines.length === 1) {
+    return lines[0].label;
+  }
+  if (lines.length > 1) {
+    return `${lines[0].label} +${lines.length - 1} more`;
+  }
 
   if (fallbackBucket === "prepaid_orders") {
     return `Prepaid Order ${fallbackId}`;
@@ -366,12 +539,23 @@ export const parseDeliveryTasks = (tasks: unknown[]): ParsedDeliveryTask[] => {
 
     const taskId = getTaskIdForBucket(task, bucket);
     if (!taskId) return;
+    const lines = parseDeliveryTaskLines(task, `${bucket}:${taskId}:${index}`);
 
     parsed.push({
       key: `${bucket}:${taskId}:${index}`,
       id: taskId,
       bucket,
-      label: getTaskLabel(task, taskId, bucket),
+      label: getTaskLabel(task, taskId, bucket, lines),
+      type: toText(task.type) || bucket,
+      earlierAttemptsTodayCount: Math.max(
+        0,
+        Math.floor(
+          toNumber(
+            task.earlierAttemptsTodayCount ?? task.earlier_attempts_today_count,
+          ) ?? 0,
+        ),
+      ),
+      lines,
       raw: taskValue,
     });
   });
@@ -446,14 +630,8 @@ export const buildDeliveryTaskOutcomes = (
   return outcomes;
 };
 
-const normalizeItemType = (value: unknown): "asset" | "retail" | "refill" => {
-  const text = toText(value).toLowerCase();
-  if (text.includes("asset")) return "asset";
-  if (text.includes("refill")) return "refill";
-  return "retail";
-};
-
-export const toDeliverySaleItemType = (value: unknown) => normalizeItemType(value);
+export const toDeliverySaleItemType = (value: unknown) =>
+  normalizeItemType(value);
 
 export const toMoney = (value: unknown): number => {
   const parsed = toNumber(value);

@@ -1,17 +1,24 @@
-import { useOrderStore } from '@/store/index';
-import { Order } from '@/types/order';
-import { authenticatedFetch } from '@/store/auth';
-import { parseApiResponseWithSoftError } from '@/utils/api';
-import { Ionicons } from '@expo/vector-icons';
-import * as FileSystem from 'expo-file-system';
-import { useRouter } from 'expo-router';
-import * as Sharing from 'expo-sharing';
-import React, { useCallback, useState, useEffect, useMemo } from 'react';
-import { ActivityIndicator, ScrollView, Text, TouchableOpacity, View } from 'react-native';
-import { showSuccessAlert, showErrorAlert } from '@/store/utils/alert';
+import { useOrderStore } from "@/store/index";
+import { Order } from "@/types/order";
+import { authenticatedFetch } from "@/store/auth";
+import { parseApiResponseWithSoftError } from "@/utils/api";
+import type { DriverSaleInvoiceResponse } from "@/utils/driverHistory";
+import { Ionicons } from "@expo/vector-icons";
+import * as FileSystem from "expo-file-system";
+import { useRouter } from "expo-router";
+import * as Sharing from "expo-sharing";
+import React, { useCallback, useState, useEffect, useMemo } from "react";
+import {
+  ActivityIndicator,
+  ScrollView,
+  Text,
+  TouchableOpacity,
+  View,
+} from "react-native";
+import { showSuccessAlert, showErrorAlert } from "@/store/utils/alert";
 
 const IP_ADDRESS = process.env.EXPO_PUBLIC_IP_ADDRESS;
-type PrintModule = typeof import('expo-print');
+type PrintModule = typeof import("expo-print");
 
 let printModule: PrintModule | null | undefined;
 
@@ -21,62 +28,78 @@ const getPrintModule = (): PrintModule | null => {
   }
 
   try {
-    printModule = require('expo-print') as PrintModule;
+    printModule = require("expo-print") as PrintModule;
   } catch (error) {
     printModule = null;
-    console.error('expo-print is unavailable in this build:', error);
+    console.error("expo-print is unavailable in this build:", error);
   }
 
   return printModule;
 };
 
-// Response structure for generate invoice API
-interface GenerateInvoiceResponse {
-  invoice_id: string;
-  invoice_number: string;
-  total_amount: number;
-  customer_id: string;
-  customer_name: string;
-  created_at: string;
-}
-
 const PaymentReceipt: React.FC = () => {
   const router = useRouter();
-  const { selectedOrder, assignedOrders, completedOrders, cartItems, selectedPaymentMethod, lastConfirmPaymentResponse } = useOrderStore();
+  const {
+    selectedOrder,
+    assignedOrders,
+    completedOrders,
+    cartItems,
+    selectedPaymentMethod,
+    lastConfirmPaymentResponse,
+  } = useOrderStore();
   // Check both assignedOrders and completedOrders since order might have been marked as delivered
-  const orderDetail = assignedOrders.find(item => selectedOrder === item.id) || 
-                      completedOrders.find(item => selectedOrder === item.id) as Order | undefined;
+  const orderDetail =
+    assignedOrders.find((item) => selectedOrder === item.id) ||
+    (completedOrders.find((item) => selectedOrder === item.id) as
+      | Order
+      | undefined);
 
   // Check if this is rent-items-only (no cart items)
-  const isRentItemsOnly = cartItems.length === 0 && orderDetail?.rent_items?.some(item => item.in_truck === true);
+  const isRentItemsOnly =
+    cartItems.length === 0 &&
+    orderDetail?.rent_items?.some((item) => item.in_truck === true);
 
   // Loading states for buttons
   const [isDownloading, setIsDownloading] = useState(false);
   const [isPrinting, setIsPrinting] = useState(false);
   const [isNavigating, setIsNavigating] = useState(false);
   const [isGeneratingInvoice, setIsGeneratingInvoice] = useState(false);
-  const [generatedInvoiceNumber, setGeneratedInvoiceNumber] = useState<string | null>(null);
+  const [generatedInvoiceNumber, setGeneratedInvoiceNumber] = useState<
+    string | null
+  >(null);
   const printNativeModule = useMemo(() => getPrintModule(), []);
 
   // customer_id = customer.id from OrdersResponse (customer dictionary)
-  const shippingDetails = orderDetail ? {
-    name: orderDetail.customer_name || 'N/A',
-    address: orderDetail.customer_address || 'N/A',
-    contact: orderDetail.customer_phone || 'N/A',
-  } : { name: 'N/A', address: 'N/A', contact: 'N/A' };
-  const paymentMethodDisplay = selectedPaymentMethod === 'wallet' ? 'Wallet' : 
-                                selectedPaymentMethod === 'credit' ? 'Credit' :
-                                ['invoice', 'credit_invoice'].includes(selectedPaymentMethod ?? '') ? 'Credit' :
-                                'Cash';
+  const shippingDetails = orderDetail
+    ? {
+        name: orderDetail.customer_name || "N/A",
+        address: orderDetail.customer_address || "N/A",
+        contact: orderDetail.customer_phone || "N/A",
+      }
+    : { name: "N/A", address: "N/A", contact: "N/A" };
+  const paymentMethodDisplay =
+    selectedPaymentMethod === "wallet"
+      ? "Wallet"
+      : selectedPaymentMethod === "check"
+        ? "Check"
+        : selectedPaymentMethod === "credit"
+          ? "Credit"
+          : ["invoice", "credit_invoice"].includes(selectedPaymentMethod ?? "")
+            ? "Credit"
+            : "Cash";
   // Debug logging
-  console.log('Payment Receipt - orderDetail:', orderDetail);
-  console.log('Payment Receipt - cartItems:', cartItems);
-  console.log('Payment Receipt - shippingDetails:', shippingDetails);
-  
+  console.log("Payment Receipt - orderDetail:", orderDetail);
+  console.log("Payment Receipt - cartItems:", cartItems);
+  console.log("Payment Receipt - shippingDetails:", shippingDetails);
+
   // Calculate totals with safety checks
   const productsSubtotal = cartItems.reduce((sum, item) => {
-    if (!item || typeof item.price !== 'number' || typeof item.quantity !== 'number') {
-      console.error('Invalid cart item for calculation in receipt:', item);
+    if (
+      !item ||
+      typeof item.price !== "number" ||
+      typeof item.quantity !== "number"
+    ) {
+      console.error("Invalid cart item for calculation in receipt:", item);
       return sum;
     }
     return sum + item.price * item.quantity;
@@ -85,56 +108,75 @@ const PaymentReceipt: React.FC = () => {
   const vat = (Number(subtotal) * 0.05).toFixed(2);
   // Rent items are not included in receipt totals
   const totalWithVat = (Number(subtotal) + Number(vat)).toFixed(2);
-  const orderId = orderDetail?.order_number || 'N/A';
+  const orderId = orderDetail?.order_number || "N/A";
   // Use invoice_number from ConfirmPaymentResponse - if we have a matching confirm response, use ONLY that
   // Don't fall back to orderDetail.invoice_number when confirm response explicitly has no invoice_number
-  const matchesConfirmOrder = orderDetail && lastConfirmPaymentResponse && (
-    lastConfirmPaymentResponse.orderId === orderDetail.id ||
-    lastConfirmPaymentResponse.order_number === orderDetail.order_number
-  );
+  const matchesConfirmOrder =
+    orderDetail &&
+    lastConfirmPaymentResponse &&
+    (lastConfirmPaymentResponse.orderId === orderDetail.id ||
+      lastConfirmPaymentResponse.order_number === orderDetail.order_number);
   // If confirm response matches, use its invoice_number (may be undefined = no invoice = delivery note)
   // Only fall back to orderDetail.invoice_number if no matching confirm response
   // Also check for dynamically generated invoice number
-  const baseInvoiceNumber = matchesConfirmOrder 
-    ? (lastConfirmPaymentResponse?.invoice_number || '')
-    : (orderDetail?.invoice_number ?? '');
+  const baseInvoiceNumber = matchesConfirmOrder
+    ? lastConfirmPaymentResponse?.invoice_number || ""
+    : (orderDetail?.invoice_number ?? "");
   const invoiceNumber = generatedInvoiceNumber || baseInvoiceNumber;
-  const invoiceDisplay = invoiceNumber || '—';
+  const invoiceDisplay = invoiceNumber || "—";
   // Invoice number is the source of truth:
   // invoice_number present -> Invoice, absent -> Delivery Note
-  const hasInvoiceNumber = typeof invoiceNumber === 'string' && invoiceNumber.trim().length > 0;
+  const hasInvoiceNumber =
+    typeof invoiceNumber === "string" && invoiceNumber.trim().length > 0;
   const isDeliveryNote = !hasInvoiceNumber;
-  
+
   // Get sale ID for invoice generation - use sale_id from lastConfirmPaymentResponse (delivery_report_id from normal sales, sale_id from direct sales)
-  const saleId = lastConfirmPaymentResponse?.sale_id || '';
-  
+  const saleId = lastConfirmPaymentResponse?.sale_id || "";
+
   // Debug: log delivery note determination and sale_id
-  console.log('Payment Receipt - lastConfirmPaymentResponse:', JSON.stringify(lastConfirmPaymentResponse, null, 2));
-  console.log('Payment Receipt - saleId for invoice generation:', saleId);
-  console.log('Payment Receipt - isDeliveryNote:', isDeliveryNote, 'hasInvoiceNumber:', hasInvoiceNumber, 'invoiceNumber:', invoiceNumber, 'matchesConfirmOrder:', matchesConfirmOrder, 'selectedPaymentMethod:', selectedPaymentMethod);
-  const paymentDate = new Date().toLocaleDateString('en-GB', {
-    day: '2-digit',
-    month: '2-digit',
-    year: 'numeric',
-    hour: '2-digit',
-    minute: '2-digit'
+  console.log(
+    "Payment Receipt - lastConfirmPaymentResponse:",
+    JSON.stringify(lastConfirmPaymentResponse, null, 2),
+  );
+  console.log("Payment Receipt - saleId for invoice generation:", saleId);
+  console.log(
+    "Payment Receipt - isDeliveryNote:",
+    isDeliveryNote,
+    "hasInvoiceNumber:",
+    hasInvoiceNumber,
+    "invoiceNumber:",
+    invoiceNumber,
+    "matchesConfirmOrder:",
+    matchesConfirmOrder,
+    "selectedPaymentMethod:",
+    selectedPaymentMethod,
+  );
+  const paymentDate = new Date().toLocaleDateString("en-GB", {
+    day: "2-digit",
+    month: "2-digit",
+    year: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
   });
 
   const generateDeliveryNoteHTML = useCallback(() => {
     // Delivery note: simple list of items delivered, no invoice number, no payment, no amounts
     const itemsWithNumbers = cartItems
-      .filter(item => item?.name)
+      .filter((item) => item?.name)
       .map((item, index) => ({
-        itemNo: String(index + 1).padStart(2, '0'),
+        itemNo: String(index + 1).padStart(2, "0"),
         name: item.name,
         quantity: item.quantity,
       }));
 
-    const itemsHTML = itemsWithNumbers.map(item => {
-      const checkboxHTML = Array.from({ length: item.quantity }, () => 
-        '<span style="display: inline-block; width: 12px; height: 12px; border: 1px solid #000; margin: 2px;"></span>'
-      ).join('');
-      return `
+    const itemsHTML = itemsWithNumbers
+      .map((item) => {
+        const checkboxHTML = Array.from(
+          { length: item.quantity },
+          () =>
+            '<span style="display: inline-block; width: 12px; height: 12px; border: 1px solid #000; margin: 2px;"></span>',
+        ).join("");
+        return `
         <tr style="border-bottom: 1px solid #e5e7eb;">
           <td style="padding: 6px; text-align: center; font-size: 11px;">${item.itemNo}</td>
           <td style="padding: 6px; text-align: center; font-size: 11px;"></td>
@@ -142,13 +184,14 @@ const PaymentReceipt: React.FC = () => {
           <td style="padding: 6px; text-align: center; font-size: 11px;">${checkboxHTML}</td>
         </tr>
       `;
-    }).join('');
+      })
+      .join("");
 
     const currentDate = new Date();
-    const dateStr = currentDate.toLocaleDateString('en-GB', {
-      day: '2-digit',
-      month: '2-digit',
-      year: 'numeric'
+    const dateStr = currentDate.toLocaleDateString("en-GB", {
+      day: "2-digit",
+      month: "2-digit",
+      year: "numeric",
     });
 
     return `
@@ -288,22 +331,26 @@ const PaymentReceipt: React.FC = () => {
               </div>
               <div class="info-row">
                 <span class="info-label">Delivered to:</span>
-                <span>${shippingDetails.name || ''}</span>
+                <span>${shippingDetails.name || ""}</span>
               </div>
               <div class="info-row">
                 <span class="info-label">Address:</span>
-                <span>${shippingDetails.address || ''}</span>
+                <span>${shippingDetails.address || ""}</span>
               </div>
               <div class="info-row">
                 <span class="info-label">Contact:</span>
-                <span>${shippingDetails.contact || ''}</span>
+                <span>${shippingDetails.contact || ""}</span>
               </div>
-              ${orderDetail?.delivery_instructions ? `
+              ${
+                orderDetail?.delivery_instructions
+                  ? `
               <div class="info-row">
                 <span class="info-label">Instructions:</span>
                 <span>${orderDetail.delivery_instructions}</span>
               </div>
-              ` : ''}
+              `
+                  : ""
+              }
               <div class="info-row" style="margin-top: 8px;">
                 <span class="info-label" style="color: #6b7280; font-style: italic;">Payment due (not paid)</span>
               </div>
@@ -354,34 +401,37 @@ const PaymentReceipt: React.FC = () => {
   }, [cartItems, shippingDetails, orderId, orderDetail]);
 
   const generateReceiptHTML = useCallback(() => {
-    const itemsHTML = cartItems.map(item => {
-      if (!item || !item.name) {
-        console.error('Invalid cart item in HTML generation:', item);
-        return '';
-      }
-      // Calculate price breakdown
-      const priceExVat = item.price;
-      const vatAmount = priceExVat * 0.05;
-      const itemVatTotal = (vatAmount * item.quantity).toFixed(2);
-      const itemTotal = ((priceExVat + vatAmount) * item.quantity).toFixed(2);
-      
-      return `
+    const itemsHTML = cartItems
+      .map((item) => {
+        if (!item || !item.name) {
+          console.error("Invalid cart item in HTML generation:", item);
+          return "";
+        }
+        // Calculate price breakdown
+        const priceExVat = item.price;
+        const vatAmount = priceExVat * 0.05;
+        const itemVatTotal = (vatAmount * item.quantity).toFixed(2);
+        const itemTotal = ((priceExVat + vatAmount) * item.quantity).toFixed(2);
+
+        return `
         <tr style="border-bottom: 1px solid #e5e7eb;">
-          <td style="padding: 6px; text-align: left; font-size: 11px;">${item.name || 'Unknown Product'}</td>
+          <td style="padding: 6px; text-align: left; font-size: 11px;">${item.name || "Unknown Product"}</td>
           <td style="padding: 6px; text-align: center; font-size: 11px;">${item.quantity || 0}</td>
           <td style="padding: 6px; text-align: right; font-size: 11px;">${priceExVat.toFixed(2)}</td>
           <td style="padding: 6px; text-align: right; font-size: 11px;">${itemVatTotal}</td>
           <td style="padding: 6px; text-align: right; font-size: 11px; font-weight: bold;">${itemTotal}</td>
         </tr>
       `;
-    }).filter(Boolean).join('');
+      })
+      .filter(Boolean)
+      .join("");
 
     // Rent items are not shown in receipt
-    const rentItemsHTML = '';
+    const rentItemsHTML = "";
 
     const currentDate = new Date();
-    const dateStr = currentDate.toISOString().split('T')[0];
-    const timeStr = currentDate.toTimeString().split(' ')[0];
+    const dateStr = currentDate.toISOString().split("T")[0];
+    const timeStr = currentDate.toTimeString().split(" ")[0];
 
     return `
       <!DOCTYPE html>
@@ -517,7 +567,7 @@ const PaymentReceipt: React.FC = () => {
               </div>
               <div class="info-row">
                 <span class="info-label">Customer:</span>
-                <span>${shippingDetails.name || 'N/A'}</span>
+                <span>${shippingDetails.name || "N/A"}</span>
               </div>
             </div>
 
@@ -572,59 +622,85 @@ const PaymentReceipt: React.FC = () => {
         </body>
       </html>
     `;
-  }, [cartItems, shippingDetails, selectedPaymentMethod, subtotal, vat, totalWithVat, orderId, invoiceDisplay, orderDetail]);
+  }, [
+    cartItems,
+    shippingDetails,
+    selectedPaymentMethod,
+    subtotal,
+    vat,
+    totalWithVat,
+    orderId,
+    invoiceDisplay,
+    orderDetail,
+  ]);
 
   // Handle generating invoice from delivery note
   const handleGenerateInvoice = useCallback(async () => {
-    console.log('Generate Invoice clicked - saleId:', saleId, 'isGeneratingInvoice:', isGeneratingInvoice);
-    console.log('Generate Invoice - lastConfirmPaymentResponse:', JSON.stringify(lastConfirmPaymentResponse, null, 2));
-    
+    console.log(
+      "Generate Invoice clicked - saleId:",
+      saleId,
+      "isGeneratingInvoice:",
+      isGeneratingInvoice,
+    );
+    console.log(
+      "Generate Invoice - lastConfirmPaymentResponse:",
+      JSON.stringify(lastConfirmPaymentResponse, null, 2),
+    );
+
     if (isGeneratingInvoice || !saleId) {
-      console.log('Generate Invoice aborted - isGeneratingInvoice:', isGeneratingInvoice, 'saleId empty:', !saleId);
+      console.log(
+        "Generate Invoice aborted - isGeneratingInvoice:",
+        isGeneratingInvoice,
+        "saleId empty:",
+        !saleId,
+      );
       return;
     }
-    
+
     setIsGeneratingInvoice(true);
     try {
-      const requestBody = { sale_id: saleId };
-      console.log('Generating invoice - URL:', `${IP_ADDRESS}/driver/invoices/generate`);
-      console.log('Generating invoice - Request body:', JSON.stringify(requestBody));
-      
-      const url = `${IP_ADDRESS}/driver/invoices/generate`;
+      const url = `${IP_ADDRESS}/sales/${encodeURIComponent(saleId)}/invoice`;
+      console.log("Generating invoice - URL:", url);
+
       const response = await authenticatedFetch(url, {
-        method: 'POST',
-        body: JSON.stringify(requestBody),
+        method: "POST",
       });
-      
-      const result = await parseApiResponseWithSoftError<GenerateInvoiceResponse>(response);
-      
+
+      const result =
+        await parseApiResponseWithSoftError<DriverSaleInvoiceResponse>(
+          response,
+        );
+
       if (!result.ok) {
-        showErrorAlert('Error', result.error || 'Failed to generate invoice. Please try again.');
+        showErrorAlert(
+          "Error",
+          result.error || "Failed to generate invoice. Please try again.",
+        );
         return;
       }
-      
+
       const data = result.data;
-      console.log('Invoice generated:', data);
-      
+      console.log("Invoice generated:", data);
+
       // Update the invoice number state
-      setGeneratedInvoiceNumber(data.invoice_number);
-      
+      setGeneratedInvoiceNumber(data.displayId);
+
       // Also update the store if needed
       const { setLastConfirmPaymentResponse } = useOrderStore.getState();
       if (lastConfirmPaymentResponse) {
         setLastConfirmPaymentResponse({
           ...lastConfirmPaymentResponse,
-          invoice_number: data.invoice_number,
+          invoice_number: data.displayId,
         });
       }
-      
+
       showSuccessAlert(
-        'Invoice Generated',
-        `Invoice ${data.invoice_number} has been generated successfully.`
+        "Invoice Generated",
+        `Invoice ${data.displayId} has been generated successfully.`,
       );
     } catch (error) {
-      console.error('Error generating invoice:', error);
-      showErrorAlert('Error', 'Failed to generate invoice. Please try again.');
+      console.error("Error generating invoice:", error);
+      showErrorAlert("Error", "Failed to generate invoice. Please try again.");
     } finally {
       setIsGeneratingInvoice(false);
     }
@@ -634,129 +710,148 @@ const PaymentReceipt: React.FC = () => {
     if (isDownloading) return; // Prevent multiple simultaneous downloads
     if (!printNativeModule) {
       showErrorAlert(
-        'Download Unavailable',
-        'This app build is missing Expo Print. Rebuild and reinstall the Android app.'
+        "Download Unavailable",
+        "This app build is missing Expo Print. Rebuild and reinstall the Android app.",
       );
       return;
     }
-    
+
     setIsDownloading(true);
     try {
-      console.log('Starting document download...');
-      const html = isDeliveryNote ? generateDeliveryNoteHTML() : generateReceiptHTML();
-      const documentType = isDeliveryNote ? 'Delivery_Note' : 'Invoice';
-      
+      console.log("Starting document download...");
+      const html = isDeliveryNote
+        ? generateDeliveryNoteHTML()
+        : generateReceiptHTML();
+      const documentType = isDeliveryNote ? "Delivery_Note" : "Invoice";
+
       // Generate PDF
-      const { uri } = await printNativeModule.printToFileAsync({ 
+      const { uri } = await printNativeModule.printToFileAsync({
         html,
         base64: false,
         width: 300, // Thermal receipt width
-        height: 400 // Estimated height
+        height: 400, // Estimated height
       });
-      
+
       // Create a unique filename
-      const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
+      const timestamp = new Date().toISOString().replace(/[:.]/g, "-");
       const newPath = `${FileSystem.documentDirectory}${documentType}_${orderId}_${timestamp}.pdf`;
-      
+
       // Move file to permanent location
       await FileSystem.moveAsync({
         from: uri,
-        to: newPath
+        to: newPath,
       });
 
-      console.log('PDF generated successfully:', newPath);
+      console.log("PDF generated successfully:", newPath);
 
       // Check if sharing is available
       if (await Sharing.isAvailableAsync()) {
         await Sharing.shareAsync(newPath, {
-          mimeType: 'application/pdf',
+          mimeType: "application/pdf",
           dialogTitle: `Download ${documentType}`,
-          UTI: 'com.adobe.pdf'
+          UTI: "com.adobe.pdf",
         });
         console.log(`${documentType} shared successfully`);
       } else {
         showSuccessAlert(
-          `${documentType} Saved`, 
-          `${documentType} has been saved to your device.\nLocation: ${newPath}`
+          `${documentType} Saved`,
+          `${documentType} has been saved to your device.\nLocation: ${newPath}`,
         );
       }
     } catch (error) {
-      console.error('Download error:', error);
+      console.error("Download error:", error);
       showErrorAlert(
-        'Download Failed', 
-        `Unable to download the ${isDeliveryNote ? 'delivery note' : 'invoice'}. Please check your device storage and try again.`
+        "Download Failed",
+        `Unable to download the ${isDeliveryNote ? "delivery note" : "invoice"}. Please check your device storage and try again.`,
       );
     } finally {
       setIsDownloading(false);
     }
-  }, [generateReceiptHTML, generateDeliveryNoteHTML, isDeliveryNote, orderId, isDownloading, printNativeModule]);
+  }, [
+    generateReceiptHTML,
+    generateDeliveryNoteHTML,
+    isDeliveryNote,
+    orderId,
+    isDownloading,
+    printNativeModule,
+  ]);
 
   const handlePrintInvoice = useCallback(async () => {
     if (isPrinting) return; // Prevent multiple simultaneous print requests
     if (!printNativeModule) {
       showErrorAlert(
-        'Print Unavailable',
-        'This app build is missing Expo Print. Rebuild and reinstall the Android app.'
+        "Print Unavailable",
+        "This app build is missing Expo Print. Rebuild and reinstall the Android app.",
       );
       return;
     }
-    
+
     setIsPrinting(true);
     try {
-      console.log('Starting document print...');
-      const html = isDeliveryNote ? generateDeliveryNoteHTML() : generateReceiptHTML();
-      
+      console.log("Starting document print...");
+      const html = isDeliveryNote
+        ? generateDeliveryNoteHTML()
+        : generateReceiptHTML();
+
       // Try different approaches based on platform
       try {
         // First try: Direct HTML print (should open system print dialog)
-        await printNativeModule.printAsync({ 
-          html: html
-        });
-        console.log('System print dialog opened successfully');
-      } catch (directPrintError) {
-        console.log('Direct print failed, trying PDF approach:', directPrintError);
-        
-        // Second try: Generate PDF and print with URI
-        const { uri } = await printNativeModule.printToFileAsync({ 
+        await printNativeModule.printAsync({
           html: html,
-          base64: false
         });
-        
-        await printNativeModule.printAsync({ 
-          uri: uri
+        console.log("System print dialog opened successfully");
+      } catch (directPrintError) {
+        console.log(
+          "Direct print failed, trying PDF approach:",
+          directPrintError,
+        );
+
+        // Second try: Generate PDF and print with URI
+        const { uri } = await printNativeModule.printToFileAsync({
+          html: html,
+          base64: false,
         });
-        console.log('PDF print dialog opened successfully');
+
+        await printNativeModule.printAsync({
+          uri: uri,
+        });
+        console.log("PDF print dialog opened successfully");
       }
-      
     } catch (error) {
-      console.error('Print error:', error);
+      console.error("Print error:", error);
       showErrorAlert(
-        'Print Failed', 
-        'Unable to open print dialog. Please check your printer connection and try again.'
+        "Print Failed",
+        "Unable to open print dialog. Please check your printer connection and try again.",
       );
     } finally {
       setIsPrinting(false);
     }
-  }, [generateReceiptHTML, generateDeliveryNoteHTML, isDeliveryNote, isPrinting, printNativeModule]);
+  }, [
+    generateReceiptHTML,
+    generateDeliveryNoteHTML,
+    isDeliveryNote,
+    isPrinting,
+    printNativeModule,
+  ]);
 
   const handleBackToHome = useCallback(async () => {
     if (isNavigating) return; // Prevent multiple navigation attempts
-    
+
     setIsNavigating(true);
     try {
-      console.log('Navigating back to home...');
-      
+      console.log("Navigating back to home...");
+
       // Clear any order-related state if needed
       // This ensures a clean state when returning to home
-      
+
       // Navigate to home
-      router.replace('/(root)/(tabs)/home');
-      
-      console.log('Navigation to home completed');
+      router.replace("/(root)/(tabs)/home");
+
+      console.log("Navigation to home completed");
     } catch (error) {
-      console.error('Navigation error:', error);
+      console.error("Navigation error:", error);
       // Fallback navigation method
-    router.push('/(root)/(tabs)/home');
+      router.push("/(root)/(tabs)/home");
     } finally {
       setIsNavigating(false);
     }
@@ -766,156 +861,392 @@ const PaymentReceipt: React.FC = () => {
   useEffect(() => {
     if (isRentItemsOnly) {
       showSuccessAlert(
-        'Delivery Confirmed',
-        'This delivery contains only rent items. No receipt is available.',
-        [{ text: 'OK', onPress: () => router.push('/(root)/(tabs)/home') }]
+        "Delivery Confirmed",
+        "This delivery contains only rent items. No receipt is available.",
+        [{ text: "OK", onPress: () => router.push("/(root)/(tabs)/home") }],
       );
     }
   }, [isRentItemsOnly, router]);
 
   if (isRentItemsOnly) {
-    
     return (
-      <View style={{ flex: 1, backgroundColor: '#F8F9FA', justifyContent: 'center', alignItems: 'center', padding: 20 }}>
+      <View
+        style={{
+          flex: 1,
+          backgroundColor: "#F8F9FA",
+          justifyContent: "center",
+          alignItems: "center",
+          padding: 20,
+        }}
+      >
         <Ionicons name="checkmark-circle" size={64} color="#28A745" />
-        <Text style={{ color: '#212529', fontSize: 18, fontWeight: '600', marginTop: 16, textAlign: 'center' }}>
+        <Text
+          style={{
+            color: "#212529",
+            fontSize: 18,
+            fontWeight: "600",
+            marginTop: 16,
+            textAlign: "center",
+          }}
+        >
           Delivery Confirmed
         </Text>
-        <Text style={{ color: '#6C757D', fontSize: 14, marginTop: 8, textAlign: 'center' }}>
-          This delivery contains only rent items.{'\n'}No receipt is available.
+        <Text
+          style={{
+            color: "#6C757D",
+            fontSize: 14,
+            marginTop: 8,
+            textAlign: "center",
+          }}
+        >
+          This delivery contains only rent items.{"\n"}No receipt is available.
         </Text>
       </View>
     );
   }
 
   return (
-    <View style={{ flex: 1, backgroundColor: '#F8F9FA' }}>
-          {/* Header */}
-      <View style={{ 
-        backgroundColor: '#FFFFFF', 
-        paddingHorizontal: 20, 
-        paddingTop: 16, 
-        paddingBottom: 20,
-        borderBottomWidth: 1,
-        borderBottomColor: '#E9ECEF'
-      }}>
-        <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 12 }}>
+    <View style={{ flex: 1, backgroundColor: "#F8F9FA" }}>
+      {/* Header */}
+      <View
+        style={{
+          backgroundColor: "#FFFFFF",
+          paddingHorizontal: 20,
+          paddingTop: 16,
+          paddingBottom: 20,
+          borderBottomWidth: 1,
+          borderBottomColor: "#E9ECEF",
+        }}
+      >
+        <View
+          style={{
+            flexDirection: "row",
+            alignItems: "center",
+            justifyContent: "space-between",
+            marginBottom: 12,
+          }}
+        >
           <TouchableOpacity onPress={handleBackToHome} style={{ padding: 8 }}>
             <Ionicons name="home" size={24} color="#495057" />
-            </TouchableOpacity>
-          <Text style={{ color: '#212529', fontSize: 18, fontWeight: '600' }}>
-            {isDeliveryNote ? 'Delivery Note' : 'Payment Receipt'}
+          </TouchableOpacity>
+          <Text style={{ color: "#212529", fontSize: 18, fontWeight: "600" }}>
+            {isDeliveryNote ? "Delivery Note" : "Payment Receipt"}
           </Text>
           <View style={{ width: 40 }} />
-          </View>
-    
+        </View>
+
         {orderDetail && (
-          <View style={{ 
-            backgroundColor: isDeliveryNote ? '#FFF8E6' : '#E8F5E8', 
-            borderRadius: 8, 
-            padding: 12,
-            borderWidth: 1,
-            borderColor: isDeliveryNote ? '#FFE082' : '#C8E6C9'
-          }}>
-            <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 4 }}>
-              <Ionicons name={isDeliveryNote ? 'document-text' : 'checkmark-circle'} size={16} color={isDeliveryNote ? '#F57C00' : '#28A745'} />
-              <Text style={{ color: isDeliveryNote ? '#E65100' : '#28A745', fontSize: 14, fontWeight: '600', marginLeft: 6 }}>
-                {isDeliveryNote ? 'Delivery note ready' : 'Receipt ready'}
+          <View
+            style={{
+              backgroundColor: isDeliveryNote ? "#FFF8E6" : "#E8F5E8",
+              borderRadius: 8,
+              padding: 12,
+              borderWidth: 1,
+              borderColor: isDeliveryNote ? "#FFE082" : "#C8E6C9",
+            }}
+          >
+            <View
+              style={{
+                flexDirection: "row",
+                alignItems: "center",
+                marginBottom: 4,
+              }}
+            >
+              <Ionicons
+                name={isDeliveryNote ? "document-text" : "checkmark-circle"}
+                size={16}
+                color={isDeliveryNote ? "#F57C00" : "#28A745"}
+              />
+              <Text
+                style={{
+                  color: isDeliveryNote ? "#E65100" : "#28A745",
+                  fontSize: 14,
+                  fontWeight: "600",
+                  marginLeft: 6,
+                }}
+              >
+                {isDeliveryNote ? "Delivery note ready" : "Receipt ready"}
               </Text>
             </View>
-            <View style={{ flexDirection: 'row', alignItems: 'center' }}>
-              <Ionicons name="time" size={14} color={isDeliveryNote ? '#F57C00' : '#28A745'} />
-              <Text style={{ color: isDeliveryNote ? '#E65100' : '#28A745', fontSize: 12, marginLeft: 6 }}>
-                {isDeliveryNote ? 'Items delivered – Payment due' : 'Payment completed successfully'}
+            <View style={{ flexDirection: "row", alignItems: "center" }}>
+              <Ionicons
+                name="time"
+                size={14}
+                color={isDeliveryNote ? "#F57C00" : "#28A745"}
+              />
+              <Text
+                style={{
+                  color: isDeliveryNote ? "#E65100" : "#28A745",
+                  fontSize: 12,
+                  marginLeft: 6,
+                }}
+              >
+                {isDeliveryNote
+                  ? "Items delivered – Payment due"
+                  : "Payment completed successfully"}
               </Text>
             </View>
           </View>
         )}
-              </View>
-    
+      </View>
+
       {/* Content */}
-      <ScrollView 
-        contentContainerStyle={{ padding: 20, paddingBottom: 150 }} 
+      <ScrollView
+        contentContainerStyle={{ padding: 20, paddingBottom: 150 }}
         showsVerticalScrollIndicator={false}
       >
         {/* Receipt Preview */}
-        <View style={{ 
-          backgroundColor: '#FFFFFF', 
-          borderRadius: 8, 
-          padding: 20, 
-          marginBottom: 16,
-          borderWidth: 1,
-          borderColor: '#E9ECEF',
-          shadowColor: '#1E40AF',
-          shadowOffset: { width: 0, height: 2 },
-          shadowOpacity: 0.05,
-          shadowRadius: 8,
-          elevation: 2
-        }}>
-              {/* Company Header */}
-          <View style={{ alignItems: 'center', marginBottom: 16, borderBottomWidth: 1, borderBottomColor: '#E9ECEF', paddingBottom: 12 }}>
-            <Text style={{ color: '#212529', fontSize: 16, fontWeight: '700', marginBottom: 2 }}>
+        <View
+          style={{
+            backgroundColor: "#FFFFFF",
+            borderRadius: 8,
+            padding: 20,
+            marginBottom: 16,
+            borderWidth: 1,
+            borderColor: "#E9ECEF",
+            shadowColor: "#1E40AF",
+            shadowOffset: { width: 0, height: 2 },
+            shadowOpacity: 0.05,
+            shadowRadius: 8,
+            elevation: 2,
+          }}
+        >
+          {/* Company Header */}
+          <View
+            style={{
+              alignItems: "center",
+              marginBottom: 16,
+              borderBottomWidth: 1,
+              borderBottomColor: "#E9ECEF",
+              paddingBottom: 12,
+            }}
+          >
+            <Text
+              style={{
+                color: "#212529",
+                fontSize: 16,
+                fontWeight: "700",
+                marginBottom: 2,
+              }}
+            >
               AL GHADEER DRINKING WATER
             </Text>
-            <Text style={{ color: '#212529', fontSize: 16, fontWeight: '700', marginBottom: 2 }}>
-             FACTORY L.L.C
+            <Text
+              style={{
+                color: "#212529",
+                fontSize: 16,
+                fontWeight: "700",
+                marginBottom: 2,
+              }}
+            >
+              FACTORY L.L.C
             </Text>
-            <Text style={{ color: '#6C757D', fontSize: 12, marginBottom: 8 }}>
+            <Text style={{ color: "#6C757D", fontSize: 12, marginBottom: 8 }}>
               Al Ain, UAE
             </Text>
-            <Text style={{ color: '#212529', fontSize: 14, fontWeight: '600' }}>
-              {isDeliveryNote ? 'Delivery Note' : 'Tax Invoice'}
+            <Text style={{ color: "#212529", fontSize: 14, fontWeight: "600" }}>
+              {isDeliveryNote ? "Delivery Note" : "Tax Invoice"}
             </Text>
             {!isDeliveryNote && (
-              <Text style={{ color: '#6C757D', fontSize: 10 }}>
+              <Text style={{ color: "#6C757D", fontSize: 10 }}>
                 TRN: 100234134300003
               </Text>
             )}
           </View>
-    
+
           {isDeliveryNote ? (
             /* Delivery Note: simple summary - items only, no invoice/amounts/payment */
             <>
               <View style={{ marginBottom: 16 }}>
-                <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginBottom: 4 }}>
-                  <Text style={{ color: '#6C757D', fontSize: 11, fontWeight: '600' }}>Date:</Text>
-                  <Text style={{ color: '#212529', fontSize: 11 }}>{new Date().toISOString().split('T')[0]}</Text>
+                <View
+                  style={{
+                    flexDirection: "row",
+                    justifyContent: "space-between",
+                    marginBottom: 4,
+                  }}
+                >
+                  <Text
+                    style={{
+                      color: "#6C757D",
+                      fontSize: 11,
+                      fontWeight: "600",
+                    }}
+                  >
+                    Date:
+                  </Text>
+                  <Text style={{ color: "#212529", fontSize: 11 }}>
+                    {new Date().toISOString().split("T")[0]}
+                  </Text>
                 </View>
-                <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginBottom: 4 }}>
-                  <Text style={{ color: '#6C757D', fontSize: 11, fontWeight: '600' }}>Delivered to:</Text>
-                  <Text style={{ color: '#212529', fontSize: 11 }}>{shippingDetails.name || 'N/A'}</Text>
+                <View
+                  style={{
+                    flexDirection: "row",
+                    justifyContent: "space-between",
+                    marginBottom: 4,
+                  }}
+                >
+                  <Text
+                    style={{
+                      color: "#6C757D",
+                      fontSize: 11,
+                      fontWeight: "600",
+                    }}
+                  >
+                    Delivered to:
+                  </Text>
+                  <Text style={{ color: "#212529", fontSize: 11 }}>
+                    {shippingDetails.name || "N/A"}
+                  </Text>
                 </View>
-                <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginBottom: 4 }}>
-                  <Text style={{ color: '#6C757D', fontSize: 11, fontWeight: '600' }}>Address:</Text>
-                  <Text style={{ color: '#212529', fontSize: 11, flex: 1, textAlign: 'right' }}>{shippingDetails.address || 'N/A'}</Text>
+                <View
+                  style={{
+                    flexDirection: "row",
+                    justifyContent: "space-between",
+                    marginBottom: 4,
+                  }}
+                >
+                  <Text
+                    style={{
+                      color: "#6C757D",
+                      fontSize: 11,
+                      fontWeight: "600",
+                    }}
+                  >
+                    Address:
+                  </Text>
+                  <Text
+                    style={{
+                      color: "#212529",
+                      fontSize: 11,
+                      flex: 1,
+                      textAlign: "right",
+                    }}
+                  >
+                    {shippingDetails.address || "N/A"}
+                  </Text>
                 </View>
-                <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginBottom: 4 }}>
-                  <Text style={{ color: '#6C757D', fontSize: 11, fontWeight: '600' }}>Contact:</Text>
-                  <Text style={{ color: '#212529', fontSize: 11 }}>{shippingDetails.contact || '—'}</Text>
+                <View
+                  style={{
+                    flexDirection: "row",
+                    justifyContent: "space-between",
+                    marginBottom: 4,
+                  }}
+                >
+                  <Text
+                    style={{
+                      color: "#6C757D",
+                      fontSize: 11,
+                      fontWeight: "600",
+                    }}
+                  >
+                    Contact:
+                  </Text>
+                  <Text style={{ color: "#212529", fontSize: 11 }}>
+                    {shippingDetails.contact || "—"}
+                  </Text>
                 </View>
                 {orderDetail?.delivery_instructions ? (
-                  <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginBottom: 4 }}>
-                    <Text style={{ color: '#6C757D', fontSize: 11, fontWeight: '600' }}>Instructions:</Text>
-                    <Text style={{ color: '#212529', fontSize: 11, flex: 1, textAlign: 'right' }}>{orderDetail.delivery_instructions}</Text>
+                  <View
+                    style={{
+                      flexDirection: "row",
+                      justifyContent: "space-between",
+                      marginBottom: 4,
+                    }}
+                  >
+                    <Text
+                      style={{
+                        color: "#6C757D",
+                        fontSize: 11,
+                        fontWeight: "600",
+                      }}
+                    >
+                      Instructions:
+                    </Text>
+                    <Text
+                      style={{
+                        color: "#212529",
+                        fontSize: 11,
+                        flex: 1,
+                        textAlign: "right",
+                      }}
+                    >
+                      {orderDetail.delivery_instructions}
+                    </Text>
                   </View>
                 ) : null}
-                <View style={{ marginTop: 8, paddingTop: 8, borderTopWidth: 1, borderTopColor: '#F1F3F4' }}>
-                  <Text style={{ color: '#6b7280', fontSize: 11, fontStyle: 'italic' }}>
+                <View
+                  style={{
+                    marginTop: 8,
+                    paddingTop: 8,
+                    borderTopWidth: 1,
+                    borderTopColor: "#F1F3F4",
+                  }}
+                >
+                  <Text
+                    style={{
+                      color: "#6b7280",
+                      fontSize: 11,
+                      fontStyle: "italic",
+                    }}
+                  >
                     Payment due (not paid)
                   </Text>
                 </View>
               </View>
               <View style={{ marginBottom: 16 }}>
-                <View style={{ flexDirection: 'row', borderBottomWidth: 1, borderBottomColor: '#E9ECEF', paddingBottom: 6, marginBottom: 8 }}>
-                  <Text style={{ flex: 1, color: '#6C757D', fontSize: 10, fontWeight: '600', textTransform: 'uppercase' }}>Item</Text>
-                  <Text style={{ width: 50, color: '#6C757D', fontSize: 10, fontWeight: '600', textAlign: 'center', textTransform: 'uppercase' }}>Qty</Text>
+                <View
+                  style={{
+                    flexDirection: "row",
+                    borderBottomWidth: 1,
+                    borderBottomColor: "#E9ECEF",
+                    paddingBottom: 6,
+                    marginBottom: 8,
+                  }}
+                >
+                  <Text
+                    style={{
+                      flex: 1,
+                      color: "#6C757D",
+                      fontSize: 10,
+                      fontWeight: "600",
+                      textTransform: "uppercase",
+                    }}
+                  >
+                    Item
+                  </Text>
+                  <Text
+                    style={{
+                      width: 50,
+                      color: "#6C757D",
+                      fontSize: 10,
+                      fontWeight: "600",
+                      textAlign: "center",
+                      textTransform: "uppercase",
+                    }}
+                  >
+                    Qty
+                  </Text>
                 </View>
                 {cartItems.map((item, index) => {
                   if (!item || !item.name) return null;
                   return (
-                    <View key={item.id} style={{ flexDirection: 'row', marginBottom: 6 }}>
-                      <Text style={{ flex: 1, color: '#212529', fontSize: 11 }}>{item.name}</Text>
-                      <Text style={{ width: 50, color: '#212529', fontSize: 11, textAlign: 'center' }}>{item.quantity}</Text>
+                    <View
+                      key={item.id}
+                      style={{ flexDirection: "row", marginBottom: 6 }}
+                    >
+                      <Text style={{ flex: 1, color: "#212529", fontSize: 11 }}>
+                        {item.name}
+                      </Text>
+                      <Text
+                        style={{
+                          width: 50,
+                          color: "#212529",
+                          fontSize: 11,
+                          textAlign: "center",
+                        }}
+                      >
+                        {item.quantity}
+                      </Text>
                     </View>
                   );
                 })}
@@ -924,94 +1255,363 @@ const PaymentReceipt: React.FC = () => {
           ) : (
             /* Invoice: full receipt with amounts */
             <>
-          <View style={{ marginBottom: 16 }}>
-            <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginBottom: 4 }}>
-              <Text style={{ color: '#6C757D', fontSize: 11, fontWeight: '600' }}>Date:</Text>
-              <Text style={{ color: '#212529', fontSize: 11 }}>{new Date().toISOString().split('T')[0]}</Text>
-            </View>
-            <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginBottom: 4 }}>
-              <Text style={{ color: '#6C757D', fontSize: 11, fontWeight: '600' }}>Time:</Text>
-              <Text style={{ color: '#212529', fontSize: 11 }}>{new Date().toTimeString().split(' ')[0]}</Text>
-            </View>
-            <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginBottom: 4 }}>
-              <Text style={{ color: '#6C757D', fontSize: 11, fontWeight: '600' }}>Invoice No:</Text>
-              <Text style={{ color: '#212529', fontSize: 11 }}>{invoiceDisplay}</Text>
-            </View>
-            <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginBottom: 4 }}>
-              <Text style={{ color: '#6C757D', fontSize: 11, fontWeight: '600' }}>Customer:</Text>
-              <Text style={{ color: '#212529', fontSize: 11 }}>{shippingDetails.name || 'N/A'}</Text>
-            </View>
-          </View>
-          <View style={{ marginBottom: 16 }}>
-            <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginBottom: 4 }}>
-              <Text style={{ color: '#6C757D', fontSize: 11, fontWeight: '600' }}>Payment Mode:</Text>
-              <Text style={{ color: '#212529', fontSize: 11 }}>{paymentMethodDisplay}</Text>
-            </View>
-          </View>
-          <View style={{ marginBottom: 16 }}>
-            <View style={{ flexDirection: 'row', borderBottomWidth: 1, borderBottomColor: '#E9ECEF', paddingBottom: 6, marginBottom: 8 }}>
-              <Text style={{ flex: 1, color: '#6C757D', fontSize: 10, fontWeight: '600', textTransform: 'uppercase' }}>Product</Text>
-              <Text style={{ width: 35, color: '#6C757D', fontSize: 10, fontWeight: '600', textAlign: 'center', textTransform: 'uppercase' }}>Qty</Text>
-              <Text style={{ width: 65, color: '#6C757D', fontSize: 10, fontWeight: '600', textAlign: 'right', textTransform: 'uppercase' }}>Price (ex VAT)</Text>
-              <Text style={{ width: 60, color: '#6C757D', fontSize: 10, fontWeight: '600', textAlign: 'right', textTransform: 'uppercase' }}>VAT</Text>
-              <Text style={{ width: 65, color: '#6C757D', fontSize: 10, fontWeight: '600', textAlign: 'right', textTransform: 'uppercase' }}>Total</Text>
-            </View>
-            {cartItems.map((item, index) => {
-              if (!item || !item.name) return null;
-              const priceExVat = item.price;
-              const vatAmount = priceExVat * 0.05;
-              const itemVatTotal = vatAmount * item.quantity;
-              const itemTotal = (priceExVat + vatAmount) * item.quantity;
-              return (
-                <View key={item.id} style={{ flexDirection: 'row', marginBottom: 6, borderBottomWidth: index !== cartItems.length - 1 ? 1 : 0, borderBottomColor: '#F1F3F4', paddingBottom: index !== cartItems.length - 1 ? 6 : 0 }}>
-                  <Text style={{ flex: 1, color: '#212529', fontSize: 11 }}>{item.name}</Text>
-                  <Text style={{ width: 35, color: '#212529', fontSize: 11, textAlign: 'center' }}>{item.quantity}</Text>
-                  <Text style={{ width: 65, color: '#212529', fontSize: 11, textAlign: 'right' }}>AED {priceExVat.toFixed(2)}</Text>
-                  <Text style={{ width: 60, color: '#212529', fontSize: 11, textAlign: 'right' }}>AED {itemVatTotal.toFixed(2)}</Text>
-                  <Text style={{ width: 65, color: '#212529', fontSize: 11, fontWeight: '600', textAlign: 'right' }}>AED {itemTotal.toFixed(2)}</Text>
+              <View style={{ marginBottom: 16 }}>
+                <View
+                  style={{
+                    flexDirection: "row",
+                    justifyContent: "space-between",
+                    marginBottom: 4,
+                  }}
+                >
+                  <Text
+                    style={{
+                      color: "#6C757D",
+                      fontSize: 11,
+                      fontWeight: "600",
+                    }}
+                  >
+                    Date:
+                  </Text>
+                  <Text style={{ color: "#212529", fontSize: 11 }}>
+                    {new Date().toISOString().split("T")[0]}
+                  </Text>
                 </View>
-              );
-            })}
-          </View>
-          {/* Totals - Invoice only */}
-          <View style={{ borderTopWidth: 1, borderTopColor: '#E9ECEF', paddingTop: 12 }}>
-            <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginBottom: 4 }}>
-              <Text style={{ color: '#6C757D', fontSize: 11 }}>Subtotal (Excluding VAT):</Text>
-              <Text style={{ color: '#212529', fontSize: 11 }}>AED {subtotal}</Text>
-            </View>
-            <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginBottom: 4 }}>
-              <Text style={{ color: '#6C757D', fontSize: 11 }}>VAT (5%):</Text>
-              <Text style={{ color: '#212529', fontSize: 11 }}>AED {vat}</Text>
-            </View>
-            <View style={{ 
-              flexDirection: 'row', 
-              justifyContent: 'space-between', 
-              borderTopWidth: 1,
-              borderTopColor: '#E9ECEF',
-              paddingTop: 8,
-              marginTop: 4
-            }}>
-              <Text style={{ color: '#212529', fontSize: 13, fontWeight: '700' }}>Total (Including VAT):</Text>
-              <Text style={{ color: '#212529', fontSize: 13, fontWeight: '700' }}>AED {totalWithVat}</Text>
-            </View>
-          </View>
+                <View
+                  style={{
+                    flexDirection: "row",
+                    justifyContent: "space-between",
+                    marginBottom: 4,
+                  }}
+                >
+                  <Text
+                    style={{
+                      color: "#6C757D",
+                      fontSize: 11,
+                      fontWeight: "600",
+                    }}
+                  >
+                    Time:
+                  </Text>
+                  <Text style={{ color: "#212529", fontSize: 11 }}>
+                    {new Date().toTimeString().split(" ")[0]}
+                  </Text>
+                </View>
+                <View
+                  style={{
+                    flexDirection: "row",
+                    justifyContent: "space-between",
+                    marginBottom: 4,
+                  }}
+                >
+                  <Text
+                    style={{
+                      color: "#6C757D",
+                      fontSize: 11,
+                      fontWeight: "600",
+                    }}
+                  >
+                    Invoice No:
+                  </Text>
+                  <Text style={{ color: "#212529", fontSize: 11 }}>
+                    {invoiceDisplay}
+                  </Text>
+                </View>
+                <View
+                  style={{
+                    flexDirection: "row",
+                    justifyContent: "space-between",
+                    marginBottom: 4,
+                  }}
+                >
+                  <Text
+                    style={{
+                      color: "#6C757D",
+                      fontSize: 11,
+                      fontWeight: "600",
+                    }}
+                  >
+                    Customer:
+                  </Text>
+                  <Text style={{ color: "#212529", fontSize: 11 }}>
+                    {shippingDetails.name || "N/A"}
+                  </Text>
+                </View>
+              </View>
+              <View style={{ marginBottom: 16 }}>
+                <View
+                  style={{
+                    flexDirection: "row",
+                    justifyContent: "space-between",
+                    marginBottom: 4,
+                  }}
+                >
+                  <Text
+                    style={{
+                      color: "#6C757D",
+                      fontSize: 11,
+                      fontWeight: "600",
+                    }}
+                  >
+                    Payment Mode:
+                  </Text>
+                  <Text style={{ color: "#212529", fontSize: 11 }}>
+                    {paymentMethodDisplay}
+                  </Text>
+                </View>
+              </View>
+              <View style={{ marginBottom: 16 }}>
+                <View
+                  style={{
+                    flexDirection: "row",
+                    borderBottomWidth: 1,
+                    borderBottomColor: "#E9ECEF",
+                    paddingBottom: 6,
+                    marginBottom: 8,
+                  }}
+                >
+                  <Text
+                    style={{
+                      flex: 1,
+                      color: "#6C757D",
+                      fontSize: 10,
+                      fontWeight: "600",
+                      textTransform: "uppercase",
+                    }}
+                  >
+                    Product
+                  </Text>
+                  <Text
+                    style={{
+                      width: 35,
+                      color: "#6C757D",
+                      fontSize: 10,
+                      fontWeight: "600",
+                      textAlign: "center",
+                      textTransform: "uppercase",
+                    }}
+                  >
+                    Qty
+                  </Text>
+                  <Text
+                    style={{
+                      width: 65,
+                      color: "#6C757D",
+                      fontSize: 10,
+                      fontWeight: "600",
+                      textAlign: "right",
+                      textTransform: "uppercase",
+                    }}
+                  >
+                    Price (ex VAT)
+                  </Text>
+                  <Text
+                    style={{
+                      width: 60,
+                      color: "#6C757D",
+                      fontSize: 10,
+                      fontWeight: "600",
+                      textAlign: "right",
+                      textTransform: "uppercase",
+                    }}
+                  >
+                    VAT
+                  </Text>
+                  <Text
+                    style={{
+                      width: 65,
+                      color: "#6C757D",
+                      fontSize: 10,
+                      fontWeight: "600",
+                      textAlign: "right",
+                      textTransform: "uppercase",
+                    }}
+                  >
+                    Total
+                  </Text>
+                </View>
+                {cartItems.map((item, index) => {
+                  if (!item || !item.name) return null;
+                  const priceExVat = item.price;
+                  const vatAmount = priceExVat * 0.05;
+                  const itemVatTotal = vatAmount * item.quantity;
+                  const itemTotal = (priceExVat + vatAmount) * item.quantity;
+                  return (
+                    <View
+                      key={item.id}
+                      style={{
+                        flexDirection: "row",
+                        marginBottom: 6,
+                        borderBottomWidth:
+                          index !== cartItems.length - 1 ? 1 : 0,
+                        borderBottomColor: "#F1F3F4",
+                        paddingBottom: index !== cartItems.length - 1 ? 6 : 0,
+                      }}
+                    >
+                      <Text style={{ flex: 1, color: "#212529", fontSize: 11 }}>
+                        {item.name}
+                      </Text>
+                      <Text
+                        style={{
+                          width: 35,
+                          color: "#212529",
+                          fontSize: 11,
+                          textAlign: "center",
+                        }}
+                      >
+                        {item.quantity}
+                      </Text>
+                      <Text
+                        style={{
+                          width: 65,
+                          color: "#212529",
+                          fontSize: 11,
+                          textAlign: "right",
+                        }}
+                      >
+                        AED {priceExVat.toFixed(2)}
+                      </Text>
+                      <Text
+                        style={{
+                          width: 60,
+                          color: "#212529",
+                          fontSize: 11,
+                          textAlign: "right",
+                        }}
+                      >
+                        AED {itemVatTotal.toFixed(2)}
+                      </Text>
+                      <Text
+                        style={{
+                          width: 65,
+                          color: "#212529",
+                          fontSize: 11,
+                          fontWeight: "600",
+                          textAlign: "right",
+                        }}
+                      >
+                        AED {itemTotal.toFixed(2)}
+                      </Text>
+                    </View>
+                  );
+                })}
+              </View>
+              {/* Totals - Invoice only */}
+              <View
+                style={{
+                  borderTopWidth: 1,
+                  borderTopColor: "#E9ECEF",
+                  paddingTop: 12,
+                }}
+              >
+                <View
+                  style={{
+                    flexDirection: "row",
+                    justifyContent: "space-between",
+                    marginBottom: 4,
+                  }}
+                >
+                  <Text style={{ color: "#6C757D", fontSize: 11 }}>
+                    Subtotal (Excluding VAT):
+                  </Text>
+                  <Text style={{ color: "#212529", fontSize: 11 }}>
+                    AED {subtotal}
+                  </Text>
+                </View>
+                <View
+                  style={{
+                    flexDirection: "row",
+                    justifyContent: "space-between",
+                    marginBottom: 4,
+                  }}
+                >
+                  <Text style={{ color: "#6C757D", fontSize: 11 }}>
+                    VAT (5%):
+                  </Text>
+                  <Text style={{ color: "#212529", fontSize: 11 }}>
+                    AED {vat}
+                  </Text>
+                </View>
+                <View
+                  style={{
+                    flexDirection: "row",
+                    justifyContent: "space-between",
+                    borderTopWidth: 1,
+                    borderTopColor: "#E9ECEF",
+                    paddingTop: 8,
+                    marginTop: 4,
+                  }}
+                >
+                  <Text
+                    style={{
+                      color: "#212529",
+                      fontSize: 13,
+                      fontWeight: "700",
+                    }}
+                  >
+                    Total (Including VAT):
+                  </Text>
+                  <Text
+                    style={{
+                      color: "#212529",
+                      fontSize: 13,
+                      fontWeight: "700",
+                    }}
+                  >
+                    AED {totalWithVat}
+                  </Text>
+                </View>
+              </View>
 
-          {/* Contact Info - Invoice only */}
-          <View style={{ marginTop: 20, borderTopWidth: 1, borderTopColor: '#E9ECEF', paddingTop: 12, alignItems: 'center' }}>
-            <Text style={{ color: '#6C757D', fontSize: 10, marginBottom: 2 }}>Tel: +97137211353</Text>
-            <Text style={{ color: '#6C757D', fontSize: 10, marginBottom: 2 }}>Website: www.alghadeerwater.com</Text>
-            <Text style={{ color: '#6C757D', fontSize: 10 }}>Email: Info@alghadeerwater.com</Text>
-          </View>
+              {/* Contact Info - Invoice only */}
+              <View
+                style={{
+                  marginTop: 20,
+                  borderTopWidth: 1,
+                  borderTopColor: "#E9ECEF",
+                  paddingTop: 12,
+                  alignItems: "center",
+                }}
+              >
+                <Text
+                  style={{ color: "#6C757D", fontSize: 10, marginBottom: 2 }}
+                >
+                  Tel: +97137211353
+                </Text>
+                <Text
+                  style={{ color: "#6C757D", fontSize: 10, marginBottom: 2 }}
+                >
+                  Website: www.alghadeerwater.com
+                </Text>
+                <Text style={{ color: "#6C757D", fontSize: 10 }}>
+                  Email: Info@alghadeerwater.com
+                </Text>
+              </View>
             </>
           )}
-              </View>
-    
+        </View>
+
         {/* Action Buttons */}
         <View style={{ gap: 12 }}>
           {!printNativeModule && (
-            <View style={{ backgroundColor: '#FEF2F2', borderWidth: 1, borderColor: '#FECACA', borderRadius: 8, padding: 12 }}>
-              <Text style={{ color: '#991B1B', fontSize: 13, fontWeight: '600', textAlign: 'center' }}>
-                Print/download is unavailable in this app build. Rebuild and reinstall the Android app.
+            <View
+              style={{
+                backgroundColor: "#FEF2F2",
+                borderWidth: 1,
+                borderColor: "#FECACA",
+                borderRadius: 8,
+                padding: 12,
+              }}
+            >
+              <Text
+                style={{
+                  color: "#991B1B",
+                  fontSize: 13,
+                  fontWeight: "600",
+                  textAlign: "center",
+                }}
+              >
+                Print/download is unavailable in this app build. Rebuild and
+                reinstall the Android app.
               </Text>
             </View>
           )}
@@ -1019,21 +1619,21 @@ const PaymentReceipt: React.FC = () => {
           {/* Generate Invoice Button - Only for Delivery Notes */}
           {isDeliveryNote && saleId && (
             <TouchableOpacity
-              style={{ 
-                backgroundColor: isGeneratingInvoice ? '#E9ECEF' : '#FF9800',
-                paddingVertical: 16, 
-                paddingHorizontal: 24, 
+              style={{
+                backgroundColor: isGeneratingInvoice ? "#E9ECEF" : "#FF9800",
+                paddingVertical: 16,
+                paddingHorizontal: 24,
                 borderRadius: 8,
-                flexDirection: 'row',
-                alignItems: 'center',
-                justifyContent: 'center',
+                flexDirection: "row",
+                alignItems: "center",
+                justifyContent: "center",
                 borderWidth: 1,
-                borderColor: isGeneratingInvoice ? '#E9ECEF' : '#FF9800',
-                shadowColor: '#FF9800',
+                borderColor: isGeneratingInvoice ? "#E9ECEF" : "#FF9800",
+                shadowColor: "#FF9800",
                 shadowOffset: { width: 0, height: 2 },
                 shadowOpacity: isGeneratingInvoice ? 0.05 : 0.15,
                 shadowRadius: 8,
-                elevation: isGeneratingInvoice ? 2 : 4
+                elevation: isGeneratingInvoice ? 2 : 4,
               }}
               onPress={handleGenerateInvoice}
               disabled={isGeneratingInvoice}
@@ -1041,14 +1641,28 @@ const PaymentReceipt: React.FC = () => {
               {isGeneratingInvoice ? (
                 <>
                   <ActivityIndicator color="#6C757D" size="small" />
-                  <Text style={{ color: '#6C757D', fontSize: 16, fontWeight: '600', marginLeft: 8 }}>
+                  <Text
+                    style={{
+                      color: "#6C757D",
+                      fontSize: 16,
+                      fontWeight: "600",
+                      marginLeft: 8,
+                    }}
+                  >
                     Generating...
                   </Text>
                 </>
               ) : (
                 <>
                   <Ionicons name="receipt" size={20} color="white" />
-                  <Text style={{ color: 'white', fontSize: 16, fontWeight: '600', marginLeft: 8 }}>
+                  <Text
+                    style={{
+                      color: "white",
+                      fontSize: 16,
+                      fontWeight: "600",
+                      marginLeft: 8,
+                    }}
+                  >
                     Generate Invoice
                   </Text>
                 </>
@@ -1057,21 +1671,23 @@ const PaymentReceipt: React.FC = () => {
           )}
 
           <TouchableOpacity
-            style={{ 
-              backgroundColor: (isDownloading || !printNativeModule) ? '#E9ECEF' : '#1976D2',
-              paddingVertical: 16, 
-              paddingHorizontal: 24, 
+            style={{
+              backgroundColor:
+                isDownloading || !printNativeModule ? "#E9ECEF" : "#1976D2",
+              paddingVertical: 16,
+              paddingHorizontal: 24,
               borderRadius: 8,
-              flexDirection: 'row',
-              alignItems: 'center',
-              justifyContent: 'center',
+              flexDirection: "row",
+              alignItems: "center",
+              justifyContent: "center",
               borderWidth: 1,
-              borderColor: (isDownloading || !printNativeModule) ? '#E9ECEF' : '#1976D2',
-              shadowColor: '#1E40AF',
+              borderColor:
+                isDownloading || !printNativeModule ? "#E9ECEF" : "#1976D2",
+              shadowColor: "#1E40AF",
               shadowOffset: { width: 0, height: 2 },
               shadowOpacity: isDownloading ? 0.05 : 0.1,
               shadowRadius: 8,
-              elevation: isDownloading ? 2 : 4
+              elevation: isDownloading ? 2 : 4,
             }}
             onPress={handleDownloadInvoice}
             disabled={isDownloading || !printNativeModule}
@@ -1079,92 +1695,144 @@ const PaymentReceipt: React.FC = () => {
             {isDownloading ? (
               <>
                 <ActivityIndicator color="#6C757D" size="small" />
-                <Text style={{ color: '#6C757D', fontSize: 16, fontWeight: '600', marginLeft: 8 }}>
+                <Text
+                  style={{
+                    color: "#6C757D",
+                    fontSize: 16,
+                    fontWeight: "600",
+                    marginLeft: 8,
+                  }}
+                >
                   Downloading...
                 </Text>
               </>
             ) : (
               <>
-                <Ionicons name="download" size={20} color={printNativeModule ? 'white' : '#6C757D'} />
-                <Text style={{ color: printNativeModule ? 'white' : '#6C757D', fontSize: 16, fontWeight: '600', marginLeft: 8 }}>
-                  {printNativeModule ? `Download ${isDeliveryNote ? 'Delivery Note' : 'Invoice'}` : 'Download Unavailable'}
+                <Ionicons
+                  name="download"
+                  size={20}
+                  color={printNativeModule ? "white" : "#6C757D"}
+                />
+                <Text
+                  style={{
+                    color: printNativeModule ? "white" : "#6C757D",
+                    fontSize: 16,
+                    fontWeight: "600",
+                    marginLeft: 8,
+                  }}
+                >
+                  {printNativeModule
+                    ? `Download ${isDeliveryNote ? "Delivery Note" : "Invoice"}`
+                    : "Download Unavailable"}
                 </Text>
               </>
             )}
-              </TouchableOpacity>
-    
-              <TouchableOpacity
-            style={{ 
-              paddingVertical: 16, 
-              paddingHorizontal: 24, 
+          </TouchableOpacity>
+
+          <TouchableOpacity
+            style={{
+              paddingVertical: 16,
+              paddingHorizontal: 24,
               borderRadius: 8,
               borderWidth: 1,
-              borderColor: (isPrinting || !printNativeModule) ? '#E9ECEF' : '#E9ECEF',
-              backgroundColor: (isPrinting || !printNativeModule) ? '#F8F9FA' : '#FFFFFF',
-              flexDirection: 'row',
-              alignItems: 'center',
-              justifyContent: 'center',
-              shadowColor: '#1E40AF',
+              borderColor:
+                isPrinting || !printNativeModule ? "#E9ECEF" : "#E9ECEF",
+              backgroundColor:
+                isPrinting || !printNativeModule ? "#F8F9FA" : "#FFFFFF",
+              flexDirection: "row",
+              alignItems: "center",
+              justifyContent: "center",
+              shadowColor: "#1E40AF",
               shadowOffset: { width: 0, height: 1 },
               shadowOpacity: 0.05,
               shadowRadius: 4,
-              elevation: 2
+              elevation: 2,
             }}
-                onPress={handlePrintInvoice}
+            onPress={handlePrintInvoice}
             disabled={isPrinting || !printNativeModule}
           >
             {isPrinting ? (
               <>
                 <ActivityIndicator color="#6C757D" size="small" />
-                <Text style={{ color: '#6C757D', fontSize: 16, fontWeight: '600', marginLeft: 8 }}>
+                <Text
+                  style={{
+                    color: "#6C757D",
+                    fontSize: 16,
+                    fontWeight: "600",
+                    marginLeft: 8,
+                  }}
+                >
                   Printing...
                 </Text>
               </>
             ) : (
               <>
                 <Ionicons name="print" size={20} color="#6C757D" />
-                <Text style={{ color: '#6C757D', fontSize: 16, fontWeight: '600', marginLeft: 8 }}>
-                  {printNativeModule ? `Print ${isDeliveryNote ? 'Delivery Note' : 'Invoice'}` : 'Print Unavailable'}
+                <Text
+                  style={{
+                    color: "#6C757D",
+                    fontSize: 16,
+                    fontWeight: "600",
+                    marginLeft: 8,
+                  }}
+                >
+                  {printNativeModule
+                    ? `Print ${isDeliveryNote ? "Delivery Note" : "Invoice"}`
+                    : "Print Unavailable"}
                 </Text>
               </>
             )}
-              </TouchableOpacity>
-    
-              <TouchableOpacity
-            style={{ 
-              paddingVertical: 16, 
-              paddingHorizontal: 24, 
+          </TouchableOpacity>
+
+          <TouchableOpacity
+            style={{
+              paddingVertical: 16,
+              paddingHorizontal: 24,
               borderRadius: 8,
-              backgroundColor: isNavigating ? '#E9ECEF' : '#F8F9FA',
+              backgroundColor: isNavigating ? "#E9ECEF" : "#F8F9FA",
               borderWidth: 1,
-              borderColor: '#E9ECEF',
-              flexDirection: 'row',
-              alignItems: 'center',
-              justifyContent: 'center'
+              borderColor: "#E9ECEF",
+              flexDirection: "row",
+              alignItems: "center",
+              justifyContent: "center",
             }}
-                onPress={handleBackToHome}
+            onPress={handleBackToHome}
             disabled={isNavigating}
           >
             {isNavigating ? (
               <>
                 <ActivityIndicator color="#6C757D" size="small" />
-                <Text style={{ color: '#6C757D', fontSize: 16, fontWeight: '600', marginLeft: 8 }}>
+                <Text
+                  style={{
+                    color: "#6C757D",
+                    fontSize: 16,
+                    fontWeight: "600",
+                    marginLeft: 8,
+                  }}
+                >
                   Loading...
                 </Text>
               </>
             ) : (
               <>
                 <Ionicons name="home" size={20} color="#6C757D" />
-                <Text style={{ color: '#6C757D', fontSize: 16, fontWeight: '600', marginLeft: 8 }}>
+                <Text
+                  style={{
+                    color: "#6C757D",
+                    fontSize: 16,
+                    fontWeight: "600",
+                    marginLeft: 8,
+                  }}
+                >
                   Back to Home
                 </Text>
               </>
             )}
-              </TouchableOpacity>
-            </View>
-      </ScrollView>
+          </TouchableOpacity>
         </View>
-      );
-    };
+      </ScrollView>
+    </View>
+  );
+};
 
 export default PaymentReceipt;

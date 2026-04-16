@@ -1,92 +1,108 @@
-import DeliveryCard from '@/components/DeliveryCard';
-import MyMap from '@/components/map';
-import ProfileModal from '@/components/ProfileModal';
-import { icons, images } from '@/constants';
-import { useLocationStore, useOrderStore } from '@/store/index';
-import { Order } from '@/types/order';
-import ApiErrorText from '@/components/ApiErrorText';
-import { useAuthStore, authenticatedFetch } from '@/store/auth';
-import { parseApiResponseWithSoftError } from '@/utils/api';
-import { DeliveryStop, mapDeliveryToOrder } from '@/utils/deliveries';
-import { resolveResourceUrl } from '@/utils/resources';
-import * as Location from 'expo-location';
-import { useRouter } from 'expo-router';
-import React, { useEffect, useState, useCallback } from 'react';
-import { FlatList, Image, RefreshControl, Text, TextInput, TouchableOpacity, View } from 'react-native';
-import { GestureHandlerRootView } from 'react-native-gesture-handler';
-import { ActivityIndicator } from 'react-native-paper';
-import { Ionicons } from '@expo/vector-icons';
+import DeliveryCard from "@/components/DeliveryCard";
+import MyMap from "@/components/map";
+import ProfileModal from "@/components/ProfileModal";
+import { icons, images } from "@/constants";
+import { useLocationStore, useOrderStore } from "@/store/index";
+import { Order } from "@/types/order";
+import ApiErrorText from "@/components/ApiErrorText";
+import { useAuthStore, authenticatedFetch } from "@/store/auth";
+import { parseApiResponseWithSoftError } from "@/utils/api";
+import { DeliveryStop, mapDeliveryToOrder } from "@/utils/deliveries";
+import { getDriverRequestId } from "@/utils/driverIdentity";
+import { resolveResourceUrl } from "@/utils/resources";
+import * as Location from "expo-location";
+import { useRouter } from "expo-router";
+import React, { useEffect, useState, useCallback } from "react";
+import {
+  FlatList,
+  Image,
+  RefreshControl,
+  Text,
+  TextInput,
+  TouchableOpacity,
+  View,
+} from "react-native";
+import { GestureHandlerRootView } from "react-native-gesture-handler";
+import { ActivityIndicator } from "react-native-paper";
+import { Ionicons } from "@expo/vector-icons";
 
 const formatDate = (date: Date) =>
-  date.toLocaleDateString(undefined, { weekday: 'long', month: 'short', day: 'numeric' });
+  date.toLocaleDateString(undefined, {
+    weekday: "long",
+    month: "short",
+    day: "numeric",
+  });
 
 const IP_ADDRESS = process.env.EXPO_PUBLIC_IP_ADDRESS;
 
 const Home = () => {
   const { user } = useAuthStore();
-  const { setAssignedOrders, selectOrder, assignedOrders, updateDriverInfo, currentDriver } = useOrderStore();
+  const { setAssignedOrders, selectOrder, assignedOrders, currentDriver } =
+    useOrderStore();
   const router = useRouter();
   const { setUserLocation } = useLocationStore();
-  
+
   // Use useMemo to ensure these values update when currentDriver changes
   // Depend on currentDriver object itself, not nested properties, for proper reactivity
   const driverName = React.useMemo(
-    () => currentDriver?.name || user?.name || user?.phone || 'Driver',
-    [currentDriver, user?.name, user?.phone]
+    () => currentDriver?.name || user?.name || user?.phone || "Driver",
+    [currentDriver, user?.name, user?.phone],
   );
-  
+
   const helperName = React.useMemo(
-    () => currentDriver?.helper_name || user?.helper_name || '',
-    [currentDriver, user?.helper_name]
+    () => currentDriver?.helper_name || user?.helper_name || "",
+    [currentDriver, user?.helper_name],
   );
-  
-  const avatar = React.useMemo(
-    () => {
-      const url = resolveResourceUrl(currentDriver?.profile_image);
-      return url || icons.person;
-    },
-    [currentDriver]
-  );
+
+  const avatar = React.useMemo(() => {
+    const url = resolveResourceUrl(currentDriver?.profile_image);
+    return url || icons.person;
+  }, [currentDriver]);
   const today = new Date();
-  const [searchQuery, setSearchQuery] = useState('');
+  const [searchQuery, setSearchQuery] = useState("");
   const [isloading, setIsloading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [isProfileModalVisible, setIsProfileModalVisible] = useState(false);
   const [apiError, setApiError] = useState<string | null>(null);
-  
+  const driverId = React.useMemo(
+    () =>
+      getDriverRequestId({
+        user,
+        currentDriver,
+      }),
+    [user, currentDriver],
+  );
+
   // Helper function to check if order is currently available
   const isOrderCurrentlyAvailable = (order: Order) => {
     if (!order.start_time || !order.end_time) return false;
-    
+
     try {
       const now = new Date();
       const currentTime = now.getHours() * 60 + now.getMinutes();
-      
-      const [startHour, startMin] = order.start_time.split(':').map(Number);
-      const [endHour, endMin] = order.end_time.split(':').map(Number);
-      
+
+      const [startHour, startMin] = order.start_time.split(":").map(Number);
+      const [endHour, endMin] = order.end_time.split(":").map(Number);
+
       const startTime = startHour * 60 + startMin;
       const endTime = endHour * 60 + endMin;
-      
+
       return currentTime >= startTime && currentTime <= endTime;
     } catch {
       return false;
     }
   };
-  
+
   // Count currently available orders
-  const availableOrdersCount = React.useMemo(
-    () => {
-      const hasSchedulingWindow = assignedOrders.some(
-        (order) => Boolean(order.start_time && order.end_time)
-      );
-      if (!hasSchedulingWindow) {
-        return assignedOrders.length;
-      }
-      return assignedOrders.filter(isOrderCurrentlyAvailable).length;
-    },
-    [assignedOrders]
-  );
+  const availableOrdersCount = React.useMemo(() => {
+    const hasSchedulingWindow = assignedOrders.some((order) =>
+      Boolean(order.start_time && order.end_time),
+    );
+    if (!hasSchedulingWindow) {
+      return assignedOrders.length;
+    }
+    return assignedOrders.filter(isOrderCurrentlyAvailable).length;
+  }, [assignedOrders]);
 
   // Filter deliveries based on search query
   const filteredDeliveries = React.useMemo(() => {
@@ -96,25 +112,24 @@ const Home = () => {
 
     const query = searchQuery.toLowerCase().trim();
     const searchFields = [
-      'customer_name',
-      'customer_phone',
-      'customer_address',
-      'order_number',
-      'display_id',
-      'customer_site_id',
-      'delivery_zone',
-      'route_name',
-      'customer_email'
+      "customer_name",
+      "customer_phone",
+      "customer_address",
+      "order_number",
+      "display_id",
+      "customer_site_id",
+      "delivery_zone",
+      "route_name",
+      "customer_email",
     ];
 
     return assignedOrders.filter((order) =>
-      searchFields.some(field => {
+      searchFields.some((field) => {
         const value = order[field as keyof Order];
-        return typeof value === 'string' && value.toLowerCase().includes(query);
-      })
+        return typeof value === "string" && value.toLowerCase().includes(query);
+      }),
     );
   }, [assignedOrders, searchQuery]);
-
 
   useEffect(() => {
     let subscription: Location.LocationSubscription | null = null;
@@ -123,7 +138,7 @@ const Home = () => {
       try {
         const { status } = await Location.requestForegroundPermissionsAsync();
         if (status !== "granted") {
-          console.log('Location permission denied');
+          console.log("Location permission denied");
           return;
         }
 
@@ -141,23 +156,23 @@ const Home = () => {
                 longitude: location.coords.longitude,
               });
               setUserLocation({
-                latitude: location.coords.latitude, 
-                longitude: location.coords.longitude, 
-                address: `${address[0]?.name || ''}, ${address[0]?.region || ''}`
+                latitude: location.coords.latitude,
+                longitude: location.coords.longitude,
+                address: `${address[0]?.name || ""}, ${address[0]?.region || ""}`,
               });
             } catch (error) {
-              console.error('Error reverse geocoding:', error);
+              console.error("Error reverse geocoding:", error);
               // Still update location even if reverse geocoding fails
               setUserLocation({
-                latitude: location.coords.latitude, 
-                longitude: location.coords.longitude, 
-                address: ''
+                latitude: location.coords.latitude,
+                longitude: location.coords.longitude,
+                address: "",
               });
             }
-          }
+          },
         );
       } catch (error) {
-        console.error('Error starting location tracking:', error);
+        console.error("Error starting location tracking:", error);
       }
     };
 
@@ -171,15 +186,15 @@ const Home = () => {
     };
   }, [setUserLocation]);
 
-  const handleViewDetails = (id:string) => {
-    selectOrder(id)
-    router.push("/(root)/(tabs)/order-details")
-  }
+  const handleViewDetails = (id: string) => {
+    selectOrder(id);
+    router.push("/(root)/(tabs)/order-details");
+  };
+
   const fetchDeliveries = useCallback(async () => {
-    const driverId = user?.id || currentDriver?.id;
     if (!driverId) {
       setAssignedOrders([]);
-      setApiError('Driver ID is missing. Please sign in again.');
+      setApiError("Driver ID is missing. Please sign in again.");
       setIsloading(false);
       setRefreshing(false);
       return;
@@ -190,13 +205,13 @@ const Home = () => {
       setApiError(null);
       const url = `${IP_ADDRESS}/deliveries`;
       const response = await authenticatedFetch(url, {
-        method: 'GET',
+        method: "GET",
         headers: {
-          'Content-Type': 'application/json',
-          'X-Driver-Id': driverId,
+          "X-Driver-Id": driverId,
         },
       });
-      const result = await parseApiResponseWithSoftError<DeliveryStop[]>(response);
+      const result =
+        await parseApiResponseWithSoftError<DeliveryStop[]>(response);
 
       if (!result.ok) {
         setAssignedOrders([]);
@@ -206,67 +221,66 @@ const Home = () => {
 
       const deliveries = Array.isArray(result.data) ? result.data : [];
       const transformedOrders: Order[] = deliveries.map((delivery) =>
-        mapDeliveryToOrder(delivery)
+        mapDeliveryToOrder(delivery),
       );
       setAssignedOrders(transformedOrders);
     } catch (err) {
-      console.error('Error fetching deliveries:', err);
+      console.error("Error fetching deliveries:", err);
       setAssignedOrders([]);
-      setApiError(err instanceof Error ? err.message : 'Failed to load deliveries.');
+      setApiError(
+        err instanceof Error ? err.message : "Failed to load deliveries.",
+      );
     } finally {
       setIsloading(false);
       setRefreshing(false);
     }
-  }, [user?.id, currentDriver?.id, IP_ADDRESS, setAssignedOrders]);
-
-  const fetchDriverInfo = useCallback(async () => {
-    const driverId = user?.id || currentDriver?.id;
-    try {
-      const url = `${IP_ADDRESS}/driver/info?driver_id=${driverId}`;
-      const response = await authenticatedFetch(url);
-      const result = await parseApiResponseWithSoftError<Parameters<typeof updateDriverInfo>[0]>(response);
-      if (result.ok && result.data && typeof result.data === 'object') {
-        updateDriverInfo(result.data);
-      }
-    } catch (err) {
-      // Silently fail - driver info is not critical
-    }
-  }, [user?.id, currentDriver?.id, IP_ADDRESS, updateDriverInfo]);
+  }, [driverId, setAssignedOrders]);
 
   const onRefresh = useCallback(() => {
     setRefreshing(true);
     fetchDeliveries();
-    fetchDriverInfo();
-  }, [fetchDeliveries, fetchDriverInfo]);
+  }, [fetchDeliveries]);
 
   useEffect(() => {
     fetchDeliveries();
-    fetchDriverInfo();
-  }, [fetchDeliveries, fetchDriverInfo]);
+  }, [fetchDeliveries]);
   return (
     <GestureHandlerRootView style={{ flex: 1 }}>
       <View className="flex-1 bg-white">
         {/* Map fills the whole screen */}
-      <MyMap orders={filteredDeliveries} />
+        <MyMap orders={filteredDeliveries} />
         {/* Transparent header overlay */}
         <View className="absolute top-0 left-0 right-0 px-6 pt-14 pb-4">
           <View className="flex-row items-center justify-between mb-4">
             <View className="flex-row items-center">
               <TouchableOpacity onPress={() => setIsProfileModalVisible(true)}>
-                <Image 
-                  source={typeof avatar === 'string' ? { uri: avatar } : avatar} 
-                  className="w-12 h-12 rounded-full border-2 border-white mr-4" 
+                <Image
+                  source={typeof avatar === "string" ? { uri: avatar } : avatar}
+                  className="w-12 h-12 rounded-full border-2 border-white mr-4"
                 />
               </TouchableOpacity>
               <View>
                 <Text className="text-gray-700 text-xs">Good morning,</Text>
-                <Text className="text-gray-900 text-xl font-JakartaSemiBold">{driverName}</Text>
+                <Text className="text-gray-900 text-xl font-JakartaSemiBold">
+                  {driverName}
+                </Text>
                 {helperName ? (
-                  <Text className="text-gray-600 text-xs mt-0.5">Helper: {helperName}</Text>
+                  <Text className="text-gray-600 text-xs mt-0.5">
+                    Helper: {helperName}
+                  </Text>
                 ) : null}
               </View>
             </View>
-            <View className="bg-white/80 rounded-full px-3 py-1" style={{ shadowColor: '#1E40AF', shadowOpacity: 0.06, shadowRadius: 10, shadowOffset: { width: 0, height: 6 }, elevation: 3 }}>
+            <View
+              className="bg-white/80 rounded-full px-3 py-1"
+              style={{
+                shadowColor: "#1E40AF",
+                shadowOpacity: 0.06,
+                shadowRadius: 10,
+                shadowOffset: { width: 0, height: 6 },
+                elevation: 3,
+              }}
+            >
               <Text className="text-gray-700 text-xs font-JakartaSemiBold">
                 {formatDate(today)}
               </Text>
@@ -280,14 +294,18 @@ const Home = () => {
             <View
               className="flex-1 flex-row items-center rounded-full px-4 py-[1px] bg-white border border-gray-200"
               style={{
-                shadowColor: '#1E40AF',
+                shadowColor: "#1E40AF",
                 shadowOpacity: 0.06,
                 shadowRadius: 12,
                 shadowOffset: { width: 0, height: 8 },
-                elevation: 4
+                elevation: 4,
               }}
             >
-              <Image source={icons.search} className="w-5 h-5 mr-3" resizeMode="contain" />
+              <Image
+                source={icons.search}
+                className="w-5 h-5 mr-3"
+                resizeMode="contain"
+              />
               <TextInput
                 className="flex-1 text-[14px] font-JakartaSemiBold text-gray-800"
                 placeholder="Search for customers..."
@@ -296,26 +314,32 @@ const Home = () => {
                 onChangeText={setSearchQuery}
               />
               {searchQuery.length > 0 && (
-                <TouchableOpacity onPress={() => setSearchQuery('')}>
-                  <Image source={icons.close} className="w-5 h-5 ml-2 opacity-70" resizeMode="contain" />
+                <TouchableOpacity onPress={() => setSearchQuery("")}>
+                  <Image
+                    source={icons.close}
+                    className="w-5 h-5 ml-2 opacity-70"
+                    resizeMode="contain"
+                  />
                 </TouchableOpacity>
               )}
             </View>
             <TouchableOpacity
-              onPress={() => router.push('/(root)/(tabs)/direct-sales')}
+              onPress={() => router.push("/(root)/(tabs)/direct-sales")}
               className="rounded-full px-3 py-[10px] flex-row items-center justify-center"
-              style={{ 
-                backgroundColor: '#0EA5E9',
-                shadowColor: '#0EA5E9',
+              style={{
+                backgroundColor: "#0EA5E9",
+                shadowColor: "#0EA5E9",
                 shadowOpacity: 0.28,
                 shadowRadius: 10,
                 shadowOffset: { width: 0, height: 6 },
-                elevation: 8
+                elevation: 8,
               }}
             >
               <View className="flex-row items-center gap-2">
                 <Ionicons name="flash-outline" size={18} color="white" />
-                <Text className="text-white text-sm font-JakartaSemiBold">Direct Sale</Text>
+                <Text className="text-white text-sm font-JakartaSemiBold">
+                  Direct Sale
+                </Text>
               </View>
             </TouchableOpacity>
           </View>
@@ -325,75 +349,93 @@ const Home = () => {
         <View className="flex-1 bg-gray-50">
           <ApiErrorText error={apiError} className="px-6" />
           <View className="px-6 py-4 flex-row items-center justify-between">
-            <Text className="text-xl font-JakartaSemiBold text-gray-900">Today's Deliveries</Text>
+            <Text className="text-xl font-JakartaSemiBold text-gray-900">
+              Today&apos;s Deliveries
+            </Text>
             <View className="flex-row items-center gap-2">
               {!searchQuery && availableOrdersCount > 0 && (
                 <View className="flex-row items-center gap-1 bg-green-50 border border-green-200 rounded-full px-2 py-1">
-                  <View className="w-2 h-2 bg-green-500 rounded-full" 
-                        style={{ 
-                          shadowColor: '#10B981', 
-                          shadowOpacity: 0.8, 
-                          shadowRadius: 3, 
-                          shadowOffset: { width: 0, height: 1 },
-                          elevation: 2
-                        }}>
-                  </View>
-                  <Text className="text-green-700 text-xs font-JakartaSemiBold">{availableOrdersCount}</Text>
+                  <View
+                    className="w-2 h-2 bg-green-500 rounded-full"
+                    style={{
+                      shadowColor: "#10B981",
+                      shadowOpacity: 0.8,
+                      shadowRadius: 3,
+                      shadowOffset: { width: 0, height: 1 },
+                      elevation: 2,
+                    }}
+                  ></View>
+                  <Text className="text-green-700 text-xs font-JakartaSemiBold">
+                    {availableOrdersCount}
+                  </Text>
                 </View>
               )}
               <View className="bg-[#0286FF] rounded-full px-3 py-1">
                 <Text className="text-sm text-white font-JakartaSemiBold">
-                  {searchQuery ? `${filteredDeliveries.length} found` : `${assignedOrders.length} total`}
+                  {searchQuery
+                    ? `${filteredDeliveries.length} found`
+                    : `${assignedOrders.length} total`}
                 </Text>
               </View>
             </View>
           </View>
-          {isloading ? 
-          (
-            <View className='mt-16 items-center'>
-              <ActivityIndicator className='mt-10 items-center justify-center'/>
+          {isloading ? (
+            <View className="mt-16 items-center">
+              <ActivityIndicator className="mt-10 items-center justify-center" />
             </View>
-          )
-          : (
-          <FlatList
-            data={filteredDeliveries}
-            keyExtractor={(item: Order) => item.id}
-            renderItem={({ item }: { item: Order }) => (
-              <DeliveryCard
-                item={item}
-                onPress={()=>{handleViewDetails(item.id)}}
-              />
-            )}
-            contentContainerStyle={{ paddingHorizontal: 24, paddingBottom: 100 }}
-            refreshControl={
-              <RefreshControl
-                refreshing={refreshing}
-                onRefresh={onRefresh}
-                tintColor="#1E40AF"
-                colors={["#1E40AF"]}
-              />
-            }
-            ListEmptyComponent={
-              <View className="flex-1 items-center justify-center mt-24">
-                <Image source={images.noResult} className="w-40 h-40 mb-6" resizeMode="contain" />
-                <Text className="text-lg text-gray-400 font-semibold">
-                  {searchQuery ? 'No deliveries found' : 'No deliveries for today'}
-                </Text>
-                {searchQuery && (
-                  <Text className="text-sm text-gray-300 mt-2">Try adjusting your search</Text>
-                )}
-              </View>
-            }
-            showsVerticalScrollIndicator={false}
-          /> )
-        } 
+          ) : (
+            <FlatList
+              data={filteredDeliveries}
+              keyExtractor={(item: Order) => item.id}
+              renderItem={({ item }: { item: Order }) => (
+                <DeliveryCard
+                  item={item}
+                  onPress={() => {
+                    handleViewDetails(item.id);
+                  }}
+                />
+              )}
+              contentContainerStyle={{
+                paddingHorizontal: 24,
+                paddingBottom: 100,
+              }}
+              refreshControl={
+                <RefreshControl
+                  refreshing={refreshing}
+                  onRefresh={onRefresh}
+                  tintColor="#1E40AF"
+                  colors={["#1E40AF"]}
+                />
+              }
+              ListEmptyComponent={
+                <View className="flex-1 items-center justify-center mt-24">
+                  <Image
+                    source={images.noResult}
+                    className="w-40 h-40 mb-6"
+                    resizeMode="contain"
+                  />
+                  <Text className="text-lg text-gray-400 font-semibold">
+                    {searchQuery
+                      ? "No deliveries found"
+                      : "No deliveries for today"}
+                  </Text>
+                  {searchQuery && (
+                    <Text className="text-sm text-gray-300 mt-2">
+                      Try adjusting your search
+                    </Text>
+                  )}
+                </View>
+              }
+              showsVerticalScrollIndicator={false}
+            />
+          )}
         </View>
       </View>
-      
+
       {/* Profile Modal */}
-      <ProfileModal 
-        visible={isProfileModalVisible} 
-        onClose={() => setIsProfileModalVisible(false)} 
+      <ProfileModal
+        visible={isProfileModalVisible}
+        onClose={() => setIsProfileModalVisible(false)}
       />
     </GestureHandlerRootView>
   );

@@ -1,10 +1,21 @@
 import ApiErrorText from "@/components/ApiErrorText";
+import TruckAssetsPanel from "@/components/TruckAssetsPanel";
 import { authenticatedFetch, useAuthStore } from "@/store/auth";
 import { useOrderStore } from "@/store/index";
 import { Order } from "@/types/order";
 import { parseApiResponseWithSoftError } from "@/utils/api";
 import { AssignmentRoute, AssignmentsPayload } from "@/utils/assignments";
+import { formatDeliveryAddress } from "@/utils/deliveries";
+import { getDriverRequestId } from "@/utils/driverIdentity";
+import {
+  DriverHistoryDetail,
+  getDriverHistoryInvoiceDisplayId,
+  getDriverHistoryPrimaryId,
+  getDriverHistorySaleId,
+  normalizeDriverHistoryDetail,
+} from "@/utils/driverHistory";
 import { resolveResourceUrl } from "@/utils/resources";
+import { extractTruckAssets, TruckAsset } from "@/utils/truckLoad";
 import { Ionicons } from "@expo/vector-icons";
 import { useRouter } from "expo-router";
 import * as Location from "expo-location";
@@ -46,9 +57,16 @@ interface ServerProduct {
   available_stock?: number | string;
 }
 
-const PAYMENT_METHODS = [
+type DirectSalePaymentMethod = "cash" | "wallet" | "check" | "credit";
+
+const PAYMENT_METHODS: {
+  id: DirectSalePaymentMethod;
+  label: string;
+  icon: keyof typeof Ionicons.glyphMap;
+}[] = [
   { id: "cash", label: "Cash", icon: "cash-outline" as const },
   { id: "wallet", label: "Wallet", icon: "wallet-outline" as const },
+  { id: "check", label: "Check", icon: "document-text-outline" as const },
   { id: "credit", label: "Credit", icon: "receipt-outline" as const },
 ];
 
@@ -204,8 +222,20 @@ const normalizeProductsPayload = (payload: unknown): ServerProduct[] => {
 
 interface SaleRequestBody {
   customerId: string;
-  paymentMethod: "cash" | "wallet" | "credit";
+  siteId?: string;
+  displayId?: string;
+  paymentMethod: DirectSalePaymentMethod;
+  receiver?: {
+    name?: string;
+    position?: string;
+    signatureData?: string;
+  };
   remark?: string;
+  totals?: {
+    subtotal: number;
+    vat: number;
+    total: number;
+  };
   retails?: {
     id: string;
     quantity: number;
@@ -220,33 +250,26 @@ interface SaleRequestBody {
     id: string;
     price: number;
   }[];
+  check?: {
+    checkNumber?: string;
+    checkDate?: string;
+    bankName?: string;
+    accountNumber?: string;
+  };
+  depositsReturns?: {
+    type: "deposit" | "deposit_return";
+    itemId: string;
+    depositKind: "asset" | "bottle";
+    quantity: number;
+    unitPrice: number;
+  }[];
 }
 
-interface SalePaymentCash {
-  method: "cash";
-  paidAmount: number;
-  saleTotal: number;
-}
-
-interface SalePaymentWallet {
-  method: "wallet";
-  paidAmount: number;
-  saleTotal: number;
-  walletActionId: string;
-  newBalance: number;
-}
-
-interface SalePaymentCredit {
-  method: "credit";
-}
-
-type SalePayment = SalePaymentCash | SalePaymentWallet | SalePaymentCredit;
-
-// Response data structure for POST /sale
-interface DirectSaleApiResponse {
-  saleId: string;
-  invoiceNumber?: string;
-  payment: SalePayment;
+interface DirectSaleCheckDraft {
+  checkNumber: string;
+  checkDate: string;
+  bankName: string;
+  accountNumber: string;
 }
 
 // Customer lookup response structures
@@ -448,6 +471,7 @@ const DirectSales: React.FC = () => {
     clearCart,
   } = useOrderStore();
   const [products, setProducts] = useState<ServerProduct[]>([]);
+  const [truckAssets, setTruckAssets] = useState<TruckAsset[]>([]);
   const [loading, setLoading] = useState(true);
   const [quantities, setQuantities] = useState<Record<string, number>>({});
   const [customerSearchModalVisible, setCustomerSearchModalVisible] =
@@ -461,9 +485,14 @@ const DirectSales: React.FC = () => {
   const [customerCreatedInModal, setCustomerCreatedInModal] = useState(false);
   const [createCustomerName, setCreateCustomerName] = useState("");
   const [createCustomerPhone, setCreateCustomerPhone] = useState("");
-  const [paymentMethod, setPaymentMethod] = useState<
-    "cash" | "wallet" | "credit"
-  >("cash");
+  const [paymentMethod, setPaymentMethod] =
+    useState<DirectSalePaymentMethod>("cash");
+  const [checkDetails, setCheckDetails] = useState<DirectSaleCheckDraft>({
+    checkNumber: "",
+    checkDate: "",
+    bankName: "",
+    accountNumber: "",
+  });
   const [remark, setRemark] = useState("");
   const [isRemarkExpanded, setIsRemarkExpanded] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
@@ -490,7 +519,14 @@ const DirectSales: React.FC = () => {
   const [siteDraft, setSiteDraft] = useState<SiteDraft>(EMPTY_SITE_DRAFT);
   const [isSavingSite, setIsSavingSite] = useState(false);
   const [isAssigningRoute, setIsAssigningRoute] = useState(false);
-  const driverId = user?.id || currentDriver?.id;
+  const driverId = useMemo(
+    () =>
+      getDriverRequestId({
+        user,
+        currentDriver,
+      }),
+    [user, currentDriver],
+  );
 
   const fetchProducts = useCallback(
     async ({ showLoading = true }: { showLoading?: boolean } = {}) => {
@@ -543,9 +579,36 @@ const DirectSales: React.FC = () => {
     [driverId, selectedSite?.id],
   );
 
+  const fetchTruckAssets = useCallback(async () => {
+    if (!driverId) {
+      setTruckAssets([]);
+      return;
+    }
+
+    try {
+      const response = await authenticatedFetch(`${API_BASE_URL}/truck`, {
+        method: "GET",
+        headers: {
+          "X-Driver-Id": driverId,
+        },
+      });
+      const result = await parseApiResponseWithSoftError<unknown>(response);
+      if (!result.ok) {
+        setTruckAssets([]);
+        return;
+      }
+
+      setTruckAssets(extractTruckAssets(result.data));
+    } catch (error) {
+      console.warn("Error fetching truck assets:", error);
+      setTruckAssets([]);
+    }
+  }, [driverId]);
+
   useEffect(() => {
     fetchProducts();
-  }, [fetchProducts]);
+    fetchTruckAssets();
+  }, [fetchProducts, fetchTruckAssets]);
 
   const applySelectedSite = useCallback((site: CustomerSite | null) => {
     setSelectedSite(site);
@@ -662,17 +725,12 @@ const DirectSales: React.FC = () => {
 
     setIsLoadingRoutes(true);
     try {
-      const response = await authenticatedFetch(
-        `${API_BASE_URL}/assignments?_ts=${Date.now()}`,
-        {
-          method: "GET",
-          headers: {
-            "X-Driver-Id": driverId,
-            "Cache-Control": "no-cache",
-            Pragma: "no-cache",
-          },
+      const response = await authenticatedFetch(`${API_BASE_URL}/assignments`, {
+        method: "GET",
+        headers: {
+          "X-Driver-Id": driverId,
         },
-      );
+      });
       const result =
         await parseApiResponseWithSoftError<AssignmentsPayload>(response);
       if (!result.ok) {
@@ -728,12 +786,13 @@ const DirectSales: React.FC = () => {
     try {
       await Promise.all([
         fetchProducts({ showLoading: false }),
+        fetchTruckAssets(),
         fetchTodayRoutes(),
       ]);
     } finally {
       setRefreshingProducts(false);
     }
-  }, [fetchProducts, fetchTodayRoutes]);
+  }, [fetchProducts, fetchTodayRoutes, fetchTruckAssets]);
 
   const searchCustomers = useCallback(async () => {
     if (!driverId) {
@@ -748,7 +807,7 @@ const DirectSales: React.FC = () => {
     if (!query) {
       showWarningAlert(
         "Search Required",
-        "Enter a customer search query.",
+        "Enter a customer phone number or customer ID.",
       );
       return;
     }
@@ -760,7 +819,11 @@ const DirectSales: React.FC = () => {
     try {
       setApiError(null);
       const params = new URLSearchParams();
-      params.set("search", query);
+      if (isUuid(query)) {
+        params.set("id", query);
+      } else {
+        params.set("phone", query);
+      }
 
       const response = await authenticatedFetch(
         `${API_BASE_URL}/customers?${params.toString()}`,
@@ -1358,14 +1421,6 @@ const DirectSales: React.FC = () => {
   };
 
   const handleConfirmSale = useCallback(async () => {
-    if (!driverId) {
-      showWarningAlert(
-        "Driver Missing",
-        "Driver information is not loaded yet. Please try again in a moment.",
-      );
-      return;
-    }
-
     if (selectedProducts.length === 0) {
       showWarningAlert("No Items", "Please select at least one product.");
       return;
@@ -1426,11 +1481,20 @@ const DirectSales: React.FC = () => {
       const saleData: SaleRequestBody = {
         customerId: customerData.id,
         paymentMethod,
+        totals: {
+          subtotal: Number(subtotal.toFixed(2)),
+          vat: Number(vat.toFixed(2)),
+          total: Number(totalAmount.toFixed(2)),
+        },
       };
 
       const normalizedRemark = remark.trim();
       if (normalizedRemark) {
         saleData.remark = normalizedRemark;
+      }
+      const selectedSiteId = selectedSite?.id?.trim();
+      if (selectedSiteId) {
+        saleData.siteId = selectedSiteId;
       }
       if (retails.length > 0) {
         saleData.retails = retails;
@@ -1441,69 +1505,130 @@ const DirectSales: React.FC = () => {
       if (assets.length > 0) {
         saleData.assets = assets;
       }
+      if (paymentMethod === "check") {
+        saleData.check = {
+          ...(checkDetails.checkNumber.trim()
+            ? { checkNumber: checkDetails.checkNumber.trim() }
+            : {}),
+          ...(checkDetails.checkDate.trim()
+            ? { checkDate: checkDetails.checkDate.trim() }
+            : {}),
+          ...(checkDetails.bankName.trim()
+            ? { bankName: checkDetails.bankName.trim() }
+            : {}),
+          ...(checkDetails.accountNumber.trim()
+            ? { accountNumber: checkDetails.accountNumber.trim() }
+            : {}),
+        };
+      }
 
-      const response = await authenticatedFetch(`${API_BASE_URL}/sale`, {
-        method: "POST",
-        headers: {
-          "X-Driver-Id": driverId,
+      const response = await authenticatedFetch(
+        `${API_BASE_URL}/adhoc-delivery`,
+        {
+          method: "POST",
+          body: JSON.stringify(saleData),
         },
-        body: JSON.stringify(saleData),
-      });
-
+      );
       const parseResult =
-        await parseApiResponseWithSoftError<DirectSaleApiResponse>(response);
+        await parseApiResponseWithSoftError<DriverHistoryDetail>(response);
       if (!parseResult.ok) {
         setApiError(parseResult.error);
         return;
       }
-      const data = parseResult.data;
 
-      // Prepare cart items from selected products for receipt display
+      const data = normalizeDriverHistoryDetail(parseResult.data);
+      if (!data) {
+        setApiError("Invalid response from server.");
+        return;
+      }
+
+      // Prepare cart items from the confirmed sale for receipt display.
       clearCart();
-      const cartItemsFromSale = selectedProducts.map((product) => ({
-        id: product.id,
-        name: product.label,
-        image: { uri: product.image_url || "https://via.placeholder.com/150" },
-        price: product.pricePerUnit,
-        quantity: quantities[product.id],
-        currency: "AED" as const,
-        category: product.type || "",
-      }));
+      const saleDetail = data.sale;
+      const saleItems = Array.isArray(saleDetail?.items)
+        ? saleDetail.items
+        : [];
+      const cartItemsFromSale =
+        saleItems.length > 0
+          ? saleItems.map((item) => ({
+              id: item.itemId || item.id,
+              name: item.label,
+              image: {
+                uri:
+                  resolveResourceUrl(item.imageUrl) ||
+                  "https://via.placeholder.com/150",
+              },
+              price: item.unitPrice,
+              quantity: item.quantity,
+              currency: "AED" as const,
+              category: item.itemType,
+            }))
+          : selectedProducts.map((product) => ({
+              id: product.id,
+              name: product.label,
+              image: {
+                uri:
+                  resolveResourceUrl(product.image_url) ||
+                  "https://via.placeholder.com/150",
+              },
+              price: product.pricePerUnit,
+              quantity: quantities[product.id],
+              currency: "AED" as const,
+              category: product.type || "",
+            }));
 
-      // Create order object for receipt page using POST /sale response
-      const saleId = data.saleId;
-      const invoiceNumber = data.invoiceNumber;
-      const orderNumber = `SALE-${saleId}`;
-
-      const paymentResult = data.payment;
-      const responsePaymentMethod = paymentResult?.method || paymentMethod;
-      const saleTotal =
-        "saleTotal" in paymentResult &&
-        typeof paymentResult.saleTotal === "number"
-          ? paymentResult.saleTotal
-          : totalAmount;
+      const formattedServerAddress = formatDeliveryAddress(data.address);
+      const saleId = getDriverHistorySaleId(data);
+      const invoiceNumber = getDriverHistoryInvoiceDisplayId(data);
+      const orderNumber = getDriverHistoryPrimaryId(data);
+      const responsePaymentMethod =
+        saleDetail?.payment?.method || paymentMethod;
+      const saleTotal = saleDetail?.totals.total ?? totalAmount;
+      const orderAddress =
+        (formattedServerAddress !== "No address"
+          ? formattedServerAddress
+          : "") ||
+        formatSiteAddress(selectedSite) ||
+        selectedSite?.siteName ||
+        location?.address ||
+        "N/A";
 
       const newOrder: Order = {
-        id: saleId,
+        id: data.id,
         order_number: orderNumber,
+        display_id: data.displayId || undefined,
         invoice_number: invoiceNumber,
         status: "delivered",
-        customer_id: customerData.id,
-        customer_name: customerData.name,
-        customer_phone: customerData.phone,
-        customer_address:
-          formatSiteAddress(selectedSite) ||
-          selectedSite?.siteName ||
-          location?.address ||
-          "N/A",
+        date: data.createdAt,
+        customer_id: data.customer.id,
+        customer_name: data.customer.name,
+        customer_phone: data.customer.phone,
+        customer_email: data.customer.email ?? undefined,
+        customer_address: orderAddress,
+        latitude: data.address.latitude ?? undefined,
+        longitude: data.address.longitude ?? undefined,
+        requires_signature: Boolean(data.customer.requires_signature),
+        requires_immediate_invoice: Boolean(
+          data.customer.requires_immediate_invoice,
+        ),
         total_amount: saleTotal,
         payment_method: responsePaymentMethod,
-        products: selectedProducts.map((product) => ({
-          id: product.id,
-          name: product.label,
-          quantity: quantities[product.id],
-          price: product.pricePerUnit,
-        })),
+        products:
+          saleItems.length > 0
+            ? saleItems.map((item) => ({
+                id: item.itemId || item.id,
+                name: item.label,
+                quantity: item.quantity,
+                type: item.itemType,
+                category: item.itemType,
+              }))
+            : selectedProducts.map((product) => ({
+                id: product.id,
+                name: product.label,
+                quantity: quantities[product.id],
+                type: product.type,
+                category: product.type,
+              })),
       };
 
       // Add order to completedOrders and set cart items in one update
@@ -1517,8 +1642,8 @@ const DirectSales: React.FC = () => {
       selectOrder(newOrder.id);
       setGlobalPaymentMethod(responsePaymentMethod);
       setLastConfirmPaymentResponse({
-        orderId: saleId,
-        sale_id: saleId, // Used by receipt page invoice generation API
+        orderId: newOrder.id,
+        sale_id: saleId,
         invoice_number: invoiceNumber,
         order_number: orderNumber,
       });
@@ -1530,7 +1655,7 @@ const DirectSales: React.FC = () => {
       // Show success alert with option to view invoice/receipt
       showSuccessAlert(
         "Sale Confirmed",
-        paymentResult.method === "credit"
+        responsePaymentMethod === "credit"
           ? "Credit sale confirmed successfully."
           : `Sale of AED ${saleTotal.toFixed(2)} confirmed successfully.`,
         [
@@ -1549,6 +1674,12 @@ const DirectSales: React.FC = () => {
               setCustomerModalVisible(false);
               setCustomerModalMode("create");
               setCustomerCreatedInModal(false);
+              setCheckDetails({
+                checkNumber: "",
+                checkDate: "",
+                bankName: "",
+                accountNumber: "",
+              });
               setRemark("");
               setIsRemarkExpanded(false);
               clearCart();
@@ -1571,12 +1702,14 @@ const DirectSales: React.FC = () => {
       setIsSubmitting(false);
     }
   }, [
-    driverId,
     selectedProducts,
     customerData,
     paymentMethod,
+    checkDetails,
     remark,
     quantities,
+    subtotal,
+    vat,
     totalAmount,
     selectedSite,
     location?.address,
@@ -1852,80 +1985,170 @@ const DirectSales: React.FC = () => {
                 })}
               </View>
 
-              {/* Bottom Row: Credit */}
+              {/* Bottom Row: Check, Credit */}
               <View style={[styles.paymentRow, styles.paymentRowBottom]}>
-                {PAYMENT_METHODS.filter((m) => m.id === "credit").map(
-                  (method) => {
-                    const isDisabled = false;
-                    return (
-                      <TouchableOpacity
-                        key={method.id}
+                {PAYMENT_METHODS.filter((m) =>
+                  ["check", "credit"].includes(m.id),
+                ).map((method) => {
+                  const isDisabled = false;
+                  return (
+                    <TouchableOpacity
+                      key={method.id}
+                      style={[
+                        styles.paymentOption,
+                        styles.paymentOptionBottom,
+                        paymentMethod === method.id &&
+                          styles.paymentOptionActive,
+                        isDisabled && styles.paymentOptionDisabled,
+                      ]}
+                      onPress={() =>
+                        !isDisabled &&
+                        setPaymentMethod(method.id as typeof paymentMethod)
+                      }
+                      disabled={isDisabled}
+                      activeOpacity={isDisabled ? 1 : 0.7}
+                    >
+                      <View
                         style={[
-                          styles.paymentOption,
-                          styles.paymentOptionBottom,
+                          styles.paymentIconBox,
                           paymentMethod === method.id &&
-                            styles.paymentOptionActive,
-                          isDisabled && styles.paymentOptionDisabled,
+                            styles.paymentIconBoxActive,
+                          isDisabled && styles.paymentIconBoxDisabled,
                         ]}
-                        onPress={() =>
-                          !isDisabled &&
-                          setPaymentMethod(method.id as typeof paymentMethod)
-                        }
-                        disabled={isDisabled}
-                        activeOpacity={isDisabled ? 1 : 0.7}
                       >
-                        <View
-                          style={[
-                            styles.paymentIconBox,
-                            paymentMethod === method.id &&
-                              styles.paymentIconBoxActive,
-                            isDisabled && styles.paymentIconBoxDisabled,
-                          ]}
-                        >
+                        <Ionicons
+                          name={method.icon}
+                          size={22}
+                          color={
+                            isDisabled
+                              ? "#CBD5E1"
+                              : paymentMethod === method.id
+                                ? "#FFFFFF"
+                                : "#94A3B8"
+                          }
+                        />
+                      </View>
+                      <Text
+                        style={[
+                          styles.paymentLabel,
+                          paymentMethod === method.id &&
+                            styles.paymentLabelActive,
+                          isDisabled && styles.paymentLabelDisabled,
+                        ]}
+                      >
+                        {method.label}
+                      </Text>
+                      {paymentMethod === method.id && !isDisabled && (
+                        <View style={styles.paymentCheck}>
                           <Ionicons
-                            name={method.icon}
-                            size={22}
-                            color={
-                              isDisabled
-                                ? "#CBD5E1"
-                                : paymentMethod === method.id
-                                  ? "#FFFFFF"
-                                  : "#94A3B8"
-                            }
+                            name="checkmark-circle"
+                            size={18}
+                            color="#10B981"
                           />
                         </View>
-                        <Text
-                          style={[
-                            styles.paymentLabel,
-                            paymentMethod === method.id &&
-                              styles.paymentLabelActive,
-                            isDisabled && styles.paymentLabelDisabled,
-                          ]}
-                        >
-                          {method.label}
-                        </Text>
-                        {paymentMethod === method.id && !isDisabled && (
-                          <View style={styles.paymentCheck}>
-                            <Ionicons
-                              name="checkmark-circle"
-                              size={18}
-                              color="#10B981"
-                            />
-                          </View>
-                        )}
-                        {isDisabled && (
-                          <View style={styles.paymentDisabledBadge}>
-                            <Text style={styles.paymentDisabledText}>
-                              Not Available
-                            </Text>
-                          </View>
-                        )}
-                      </TouchableOpacity>
-                    );
-                  },
-                )}
+                      )}
+                      {isDisabled && (
+                        <View style={styles.paymentDisabledBadge}>
+                          <Text style={styles.paymentDisabledText}>
+                            Not Available
+                          </Text>
+                        </View>
+                      )}
+                    </TouchableOpacity>
+                  );
+                })}
               </View>
             </View>
+
+            {paymentMethod === "check" ? (
+              <View style={styles.siteFormCard}>
+                <Text style={styles.siteFormTitle}>Check Details</Text>
+                <View style={styles.siteInputRow}>
+                  <View style={[styles.inputWrapper, styles.siteInputHalf]}>
+                    <Ionicons
+                      name="document-text-outline"
+                      size={18}
+                      color="#94A3B8"
+                      style={styles.inputIcon}
+                    />
+                    <TextInput
+                      style={styles.input}
+                      placeholder="Check number"
+                      placeholderTextColor="#CBD5E1"
+                      value={checkDetails.checkNumber}
+                      onChangeText={(value) =>
+                        setCheckDetails((prev) => ({
+                          ...prev,
+                          checkNumber: value,
+                        }))
+                      }
+                    />
+                  </View>
+                  <View style={[styles.inputWrapper, styles.siteInputHalf]}>
+                    <Ionicons
+                      name="calendar-outline"
+                      size={18}
+                      color="#94A3B8"
+                      style={styles.inputIcon}
+                    />
+                    <TextInput
+                      style={styles.input}
+                      placeholder="YYYY-MM-DD"
+                      placeholderTextColor="#CBD5E1"
+                      value={checkDetails.checkDate}
+                      onChangeText={(value) =>
+                        setCheckDetails((prev) => ({
+                          ...prev,
+                          checkDate: value,
+                        }))
+                      }
+                    />
+                  </View>
+                </View>
+                <View style={[styles.siteInputRow, { marginTop: 10 }]}>
+                  <View style={[styles.inputWrapper, styles.siteInputHalf]}>
+                    <Ionicons
+                      name="business-outline"
+                      size={18}
+                      color="#94A3B8"
+                      style={styles.inputIcon}
+                    />
+                    <TextInput
+                      style={styles.input}
+                      placeholder="Bank name"
+                      placeholderTextColor="#CBD5E1"
+                      value={checkDetails.bankName}
+                      onChangeText={(value) =>
+                        setCheckDetails((prev) => ({
+                          ...prev,
+                          bankName: value,
+                        }))
+                      }
+                    />
+                  </View>
+                  <View style={[styles.inputWrapper, styles.siteInputHalf]}>
+                    <Ionicons
+                      name="card-outline"
+                      size={18}
+                      color="#94A3B8"
+                      style={styles.inputIcon}
+                    />
+                    <TextInput
+                      style={styles.input}
+                      placeholder="Account number"
+                      placeholderTextColor="#CBD5E1"
+                      value={checkDetails.accountNumber}
+                      onChangeText={(value) =>
+                        setCheckDetails((prev) => ({
+                          ...prev,
+                          accountNumber: value,
+                        }))
+                      }
+                    />
+                  </View>
+                </View>
+              </View>
+            ) : null}
           </View>
 
           {/* Products */}
@@ -1936,10 +2159,13 @@ const DirectSales: React.FC = () => {
                 <ActivityIndicator size="large" color="#1E40AF" />
               </View>
             ) : products.length === 0 ? (
-              <View style={styles.emptyContainer}>
-                <Ionicons name="cube-outline" size={48} color="#E2E8F0" />
-                <Text style={styles.emptyText}>No products available</Text>
-              </View>
+              <>
+                <View style={styles.emptyContainer}>
+                  <Ionicons name="cube-outline" size={48} color="#E2E8F0" />
+                  <Text style={styles.emptyText}>No products available</Text>
+                </View>
+                <TruckAssetsPanel assets={truckAssets} />
+              </>
             ) : (
               <View style={styles.productsSections}>
                 {groupedProducts.refill.length > 0 && (
@@ -2033,6 +2259,8 @@ const DirectSales: React.FC = () => {
                     </View>
                   </View>
                 )}
+
+                <TruckAssetsPanel assets={truckAssets} />
               </View>
             )}
           </View>
@@ -2104,7 +2332,7 @@ const DirectSales: React.FC = () => {
               />
               <TextInput
                 style={styles.input}
-                placeholder="Search customer"
+                placeholder="Search by phone or customer ID"
                 placeholderTextColor="#CBD5E1"
                 value={customerSearchQuery}
                 onChangeText={setCustomerSearchQuery}

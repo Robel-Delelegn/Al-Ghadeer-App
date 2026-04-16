@@ -2,6 +2,7 @@ import ApiErrorText from "@/components/ApiErrorText";
 import { authenticatedFetch, useAuthStore } from "@/store/auth";
 import { useOrderStore } from "@/store/index";
 import { parseApiResponseWithSoftError } from "@/utils/api";
+import { getDriverRequestId } from "@/utils/driverIdentity";
 import { resolveResourceUrl } from "@/utils/resources";
 import { Ionicons } from "@expo/vector-icons";
 import * as FileSystem from "expo-file-system";
@@ -268,7 +269,14 @@ const Expenses = () => {
 
   const [apiError, setApiError] = useState<string | null>(null);
 
-  const driverId = currentDriver?.id || user?.id;
+  const driverId = useMemo(
+    () =>
+      getDriverRequestId({
+        user,
+        currentDriver,
+      }),
+    [user, currentDriver],
+  );
 
   const formattedAmount = useMemo(
     () => amount.replace(/[^0-9.]/g, "").replace(/(\.\d*?)\./g, "$1"),

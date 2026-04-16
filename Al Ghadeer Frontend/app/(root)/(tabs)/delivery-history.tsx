@@ -1,7 +1,17 @@
 import ApiErrorText from "@/components/ApiErrorText";
-import { authenticatedFetch, useAuthStore } from "@/store/auth";
-import { useOrderStore } from "@/store/index";
+import { authenticatedFetch } from "@/store/auth";
 import { parseApiResponseWithSoftError } from "@/utils/api";
+import { formatDeliveryAddress } from "@/utils/deliveries";
+import {
+  DriverHistoryDetail,
+  DriverHistoryListPayload,
+  getDriverHistoryKindLabel,
+  getDriverHistoryPrimaryId,
+  isAdhocDeliveryHistory,
+  isScheduledDeliveryHistory,
+  normalizeDriverHistoryDetail,
+  normalizeDriverHistoryListPayload,
+} from "@/utils/driverHistory";
 import { resolveResourceUrl } from "@/utils/resources";
 import { Ionicons } from "@expo/vector-icons";
 import { useRouter } from "expo-router";
@@ -32,166 +42,11 @@ const PAGE_LIMIT = 20;
 
 type HistoryKindFilter = "all" | "delivery" | "direct_sale";
 
-interface HistoryCustomer {
+interface NormalizedHistoryTask {
   id: string;
-  name: string;
-  phone: string;
-  email: string | null;
-  requires_signature: boolean;
-  requires_immediate_invoice: boolean;
+  title: string;
+  meta: string[];
 }
-
-interface HistoryAddress {
-  location_id: string;
-  label: string | null;
-  street: string | null;
-  building: string | null;
-  flat: string | null;
-  city: string | null;
-  area: string | null;
-  latitude: number | null;
-  longitude: number | null;
-}
-
-interface HistoryReceiver {
-  name: string;
-  position?: string;
-  signatureUrl: string | null;
-}
-
-interface HistorySaleAmountSummary {
-  saleId: string;
-  subtotal: string;
-  tax: string;
-  total: string;
-}
-
-interface HistoryDeliveryListItem {
-  id: string;
-  kind: "delivery";
-  createdAt: string;
-  displayId: string;
-  isSuccessful: boolean;
-  customer: HistoryCustomer;
-  address: HistoryAddress;
-  receiver: HistoryReceiver | null;
-  saleAmount: HistorySaleAmountSummary | null;
-}
-
-interface HistoryDirectSaleListItem {
-  id: string;
-  kind: "directSale";
-  createdAt: string;
-  customer: HistoryCustomer;
-  address: HistoryAddress | null;
-  saleAmount: HistorySaleAmountSummary;
-}
-
-type HistoryListItem = HistoryDeliveryListItem | HistoryDirectSaleListItem;
-
-interface HistoryListPayload {
-  items: HistoryListItem[];
-  page: number;
-  limit: number;
-  total: number;
-  hasMore: boolean;
-}
-
-type HistoryTask =
-  | {
-      id: string;
-      type: "subscription";
-      itemId: string;
-      outcome: string;
-      currentStatus: string;
-    }
-  | {
-      id: string;
-      type: "prepaid_order";
-      orderId: string;
-      outcome: string;
-      currentStatus: string;
-    }
-  | {
-      id: string;
-      type: "order";
-      orderId: string;
-      outcome: string;
-      currentStatus: string;
-    }
-  | {
-      id: string;
-      type: "staff_order";
-      staffOrderId: string;
-      outcome: string;
-      currentStatus: string;
-    };
-
-interface HistoryDepositReturn {
-  id: string;
-  type: "deposit" | "deposit_return";
-  itemId: string;
-  depositKind: "asset" | "bottle";
-  quantity: number;
-  unitPrice: number;
-  label: string;
-  imageUrl: string | null;
-}
-
-interface HistorySaleLineItem {
-  id: string;
-  itemId: string;
-  itemType: "asset" | "retail" | "refill";
-  label: string;
-  imageUrl: string | null;
-  quantity: number;
-  unitPrice: number;
-}
-
-type HistorySalePayment =
-  | { method: "cash"; amount: number }
-  | { method: "check"; amount: number }
-  | { method: "wallet"; amount: number }
-  | null;
-
-interface HistorySaleDetail {
-  saleId: string;
-  items: HistorySaleLineItem[];
-  totals: {
-    subtotal: number;
-    vat: number;
-    total: number;
-  };
-  payment: HistorySalePayment;
-}
-
-interface HistoryDeliveryDetail {
-  kind: "delivery";
-  id: string;
-  displayId: string | null;
-  customer: HistoryCustomer;
-  address: HistoryAddress;
-  isSuccessful: boolean | null;
-  failureReason: string | null;
-  receiver: HistoryReceiver | null;
-  remark: string | null;
-  createdAt: string;
-  tasks: HistoryTask[];
-  depositReturns: HistoryDepositReturn[];
-  sale: HistorySaleDetail | null;
-}
-
-interface HistoryDirectSaleDetail {
-  kind: "directSale";
-  id: string;
-  customer: HistoryCustomer;
-  address: HistoryAddress | null;
-  remark: string | null;
-  createdAt: string;
-  sale: HistorySaleDetail;
-}
-
-type HistoryDetail = HistoryDeliveryDetail | HistoryDirectSaleDetail;
 
 const parseServerDate = (rawValue: string): Date | null => {
   const value = rawValue.trim();
@@ -328,83 +183,121 @@ const formatAmount = (value?: number | string | null): string => {
   return parsed.toFixed(2);
 };
 
-const formatAddress = (address: HistoryAddress | null | undefined): string => {
+const formatAddress = (
+  address: DriverHistoryDetail["address"] | null | undefined,
+): string => {
   if (!address) return "No address available";
-
-  const parts = [
-    address.label,
-    address.street,
-    address.building,
-    address.flat,
-    address.area,
-    address.city,
-  ]
-    .map((part) => (part || "").trim())
-    .filter((part) => part.length > 0);
-
-  return parts.join(", ") || "No address available";
+  const formatted = formatDeliveryAddress(address);
+  return formatted === "No address" ? "No address available" : formatted;
 };
 
-const normalizeHistoryReceiver = (
-  receiver: HistoryReceiver | null,
-): HistoryReceiver | null => {
-  if (!receiver) return null;
-  return {
-    ...receiver,
-    signatureUrl: resolveResourceUrl(receiver.signatureUrl),
-  };
+const toTrimmedText = (value: unknown): string => {
+  return typeof value === "string" ? value.trim() : "";
 };
 
-const normalizeHistorySale = (
-  sale: HistorySaleDetail | null,
-): HistorySaleDetail | null => {
-  if (!sale) return null;
-  return {
-    ...sale,
-    items: sale.items.map((item) => ({
-      ...item,
-      imageUrl: resolveResourceUrl(item.imageUrl),
-    })),
-  };
-};
-
-const normalizeHistoryListItem = (item: HistoryListItem): HistoryListItem => {
-  if (item.kind === "delivery") {
-    return {
-      ...item,
-      receiver: normalizeHistoryReceiver(item.receiver),
-    };
+const formatTaskValue = (value: unknown): string => {
+  if (typeof value === "string") return value.trim();
+  if (typeof value === "number" || typeof value === "boolean") {
+    return String(value);
   }
-
-  return item;
+  return "";
 };
 
-const normalizeHistoryDetail = (detail: HistoryDetail): HistoryDetail => {
-  if (detail.kind === "delivery") {
-    return {
-      ...detail,
-      receiver: normalizeHistoryReceiver(detail.receiver),
-      depositReturns: detail.depositReturns.map((entry) => ({
-        ...entry,
-        imageUrl: resolveResourceUrl(entry.imageUrl),
-      })),
-      sale: normalizeHistorySale(detail.sale),
-    };
-  }
-
-  return {
-    ...detail,
-    sale: normalizeHistorySale(detail.sale) as HistorySaleDetail,
-  };
+const humanizeTaskKey = (value: string): string => {
+  return value
+    .replace(/([a-z0-9])([A-Z])/g, "$1 $2")
+    .replace(/_/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
 };
 
-const getListDisplayId = (item: HistoryListItem): string => {
-  if (item.kind === "delivery") return item.displayId || item.id;
-  return item.saleAmount?.saleId || item.id;
+const normalizeHistoryTasks = (tasks: unknown[]): NormalizedHistoryTask[] => {
+  if (!Array.isArray(tasks)) return [];
+
+  return tasks
+    .map((task, index) => {
+      if (typeof task === "string") {
+        const title = task.trim();
+        if (!title) return null;
+        return {
+          id: `task-${index}-${title}`,
+          title,
+          meta: [],
+        };
+      }
+
+      if (!task || typeof task !== "object") {
+        return {
+          id: `task-${index}`,
+          title: `Task ${index + 1}`,
+          meta: [],
+        };
+      }
+
+      const record = task as Record<string, unknown>;
+      const title =
+        toTrimmedText(record.label) ||
+        toTrimmedText(record.title) ||
+        toTrimmedText(record.name) ||
+        humanizeTaskKey(
+          toTrimmedText(record.type) ||
+            toTrimmedText(record.kind) ||
+            `Task ${index + 1}`,
+        );
+
+      const meta = [
+        toTrimmedText(record.outcome)
+          ? `Outcome: ${toTrimmedText(record.outcome)}`
+          : null,
+        toTrimmedText(record.currentStatus)
+          ? `Status: ${toTrimmedText(record.currentStatus)}`
+          : null,
+        toTrimmedText(record.orderId)
+          ? `Order: ${toTrimmedText(record.orderId)}`
+          : null,
+        toTrimmedText(record.staffOrderId)
+          ? `Staff Order: ${toTrimmedText(record.staffOrderId)}`
+          : null,
+        toTrimmedText(record.subscriptionId)
+          ? `Subscription: ${toTrimmedText(record.subscriptionId)}`
+          : null,
+        toTrimmedText(record.itemId)
+          ? `Item: ${toTrimmedText(record.itemId)}`
+          : null,
+      ].filter((entry): entry is string => Boolean(entry));
+
+      if (meta.length > 0) {
+        return {
+          id: toTrimmedText(record.id) || `task-${index}`,
+          title,
+          meta,
+        };
+      }
+
+      const fallbackMeta = Object.entries(record)
+        .filter(([key]) => key !== "id")
+        .slice(0, 3)
+        .map(([key, value]) => {
+          const formatted = formatTaskValue(value);
+          return formatted ? `${humanizeTaskKey(key)}: ${formatted}` : null;
+        })
+        .filter((entry): entry is string => Boolean(entry));
+
+      return {
+        id: toTrimmedText(record.id) || `task-${index}`,
+        title,
+        meta: fallbackMeta,
+      };
+    })
+    .filter((task): task is NormalizedHistoryTask => Boolean(task));
 };
 
-const getListStatusConfig = (item: HistoryListItem) => {
-  if (item.kind === "delivery") {
+const getListDisplayId = (item: DriverHistoryDetail): string => {
+  return getDriverHistoryPrimaryId(item);
+};
+
+const getListStatusConfig = (item: DriverHistoryDetail) => {
+  if (isScheduledDeliveryHistory(item)) {
     if (item.isSuccessful) {
       return {
         label: "Successful",
@@ -420,7 +313,7 @@ const getListStatusConfig = (item: HistoryListItem) => {
   }
 
   return {
-    label: "Direct Sale",
+    label: "Ad-hoc Sale",
     bg: "#DBEAFE",
     text: "#1D4ED8",
   };
@@ -429,10 +322,6 @@ const getListStatusConfig = (item: HistoryListItem) => {
 const HistoryScreen = () => {
   const insets = useSafeAreaInsets();
   const router = useRouter();
-  const { user } = useAuthStore();
-  const { currentDriver } = useOrderStore();
-
-  const driverId = currentDriver?.id || user?.id;
 
   const [search, setSearch] = useState("");
   const [kindFilter, setKindFilter] = useState<HistoryKindFilter>("all");
@@ -448,7 +337,7 @@ const HistoryScreen = () => {
   });
   const [showCalendar, setShowCalendar] = useState(false);
 
-  const [items, setItems] = useState<HistoryListItem[]>([]);
+  const [items, setItems] = useState<DriverHistoryDetail[]>([]);
   const [page, setPage] = useState(1);
   const [total, setTotal] = useState(0);
   const [hasMore, setHasMore] = useState(false);
@@ -461,7 +350,9 @@ const HistoryScreen = () => {
   const [showDetail, setShowDetail] = useState(false);
   const [detailLoading, setDetailLoading] = useState(false);
   const [detailError, setDetailError] = useState<string | null>(null);
-  const [detailData, setDetailData] = useState<HistoryDetail | null>(null);
+  const [detailData, setDetailData] = useState<DriverHistoryDetail | null>(
+    null,
+  );
 
   const fetchHistory = useCallback(
     async ({
@@ -473,15 +364,6 @@ const HistoryScreen = () => {
       append?: boolean;
       isRefresh?: boolean;
     } = {}) => {
-      if (!driverId) {
-        setItems([]);
-        setApiError("Driver ID not available.");
-        setLoading(false);
-        setRefreshing(false);
-        setLoadingMore(false);
-        return;
-      }
-
       try {
         if (isRefresh) {
           setRefreshing(true);
@@ -493,7 +375,9 @@ const HistoryScreen = () => {
         setApiError(null);
 
         const params = new URLSearchParams();
-        params.set("kind", kindFilter);
+        if (kindFilter === "delivery") {
+          params.set("kind", "delivery");
+        }
         params.set("page", String(pageToLoad));
         params.set("limit", String(PAGE_LIMIT));
         if (appliedFrom.trim()) params.set("from", appliedFrom.trim());
@@ -503,14 +387,13 @@ const HistoryScreen = () => {
           `${API_BASE_URL}/history?${params.toString()}`,
           {
             method: "GET",
-            headers: {
-              "X-Driver-Id": driverId,
-            },
           },
         );
 
         const result =
-          await parseApiResponseWithSoftError<HistoryListPayload>(response);
+          await parseApiResponseWithSoftError<DriverHistoryListPayload>(
+            response,
+          );
 
         if (!result.ok) {
           if (!append) {
@@ -523,7 +406,7 @@ const HistoryScreen = () => {
           return;
         }
 
-        const payload = result.data;
+        const payload = normalizeDriverHistoryListPayload(result.data);
         setTotal(payload.total);
         setPage(payload.page);
         setHasMore(payload.hasMore);
@@ -531,13 +414,13 @@ const HistoryScreen = () => {
         if (append) {
           setItems((prev) => {
             const existingIds = new Set(prev.map((item) => item.id));
-            const newItems = payload.items
-              .map(normalizeHistoryListItem)
-              .filter((item) => !existingIds.has(item.id));
+            const newItems = payload.items.filter(
+              (item) => !existingIds.has(item.id),
+            );
             return [...prev, ...newItems];
           });
         } else {
-          setItems(payload.items.map(normalizeHistoryListItem));
+          setItems(payload.items);
         }
       } catch (error) {
         if (!append) {
@@ -555,7 +438,7 @@ const HistoryScreen = () => {
         setLoadingMore(false);
       }
     },
-    [appliedFrom, appliedTo, driverId, kindFilter],
+    [appliedFrom, appliedTo, kindFilter],
   );
 
   useEffect(() => {
@@ -656,16 +539,26 @@ const HistoryScreen = () => {
     [calendarMonth],
   );
 
+  const kindScopedItems = useMemo(() => {
+    if (kindFilter === "delivery") {
+      return items.filter((item) => isScheduledDeliveryHistory(item));
+    }
+    if (kindFilter === "direct_sale") {
+      return items.filter((item) => isAdhocDeliveryHistory(item));
+    }
+    return items;
+  }, [items, kindFilter]);
+
   const filteredItems = useMemo(() => {
     const query = search.trim().toLowerCase();
-    if (!query) return items;
+    if (!query) return kindScopedItems;
 
-    return items.filter((item) => {
+    return kindScopedItems.filter((item) => {
       const displayId = getListDisplayId(item).toLowerCase();
       const name = (item.customer?.name || "").toLowerCase();
       const phone = (item.customer?.phone || "").toLowerCase();
       const address = formatAddress(item.address).toLowerCase();
-      const saleId = (item.saleAmount?.saleId || "").toLowerCase();
+      const saleId = (item.sale?.saleId || "").toLowerCase();
 
       return (
         displayId.includes(query) ||
@@ -675,66 +568,67 @@ const HistoryScreen = () => {
         saleId.includes(query)
       );
     });
-  }, [items, search]);
+  }, [kindScopedItems, search]);
 
   const stats = useMemo(() => {
-    const deliveries = items.filter((item) => item.kind === "delivery");
-    const directSales = items.filter((item) => item.kind === "directSale");
+    const deliveries = kindScopedItems.filter((item) =>
+      isScheduledDeliveryHistory(item),
+    );
+    const directSales = kindScopedItems.filter((item) =>
+      isAdhocDeliveryHistory(item),
+    );
 
     return {
-      total,
-      loaded: items.length,
+      total:
+        kindFilter === "direct_sale"
+          ? kindScopedItems.length
+          : total || kindScopedItems.length,
+      loaded: filteredItems.length,
       deliveries: deliveries.length,
       successfulDeliveries: deliveries.filter((item) => item.isSuccessful)
         .length,
       directSales: directSales.length,
     };
-  }, [items, total]);
+  }, [filteredItems.length, kindFilter, kindScopedItems, total]);
 
-  const fetchHistoryDetail = useCallback(
-    async (id: string) => {
-      if (!driverId) {
-        setDetailError("Driver ID not available.");
-        setShowDetail(true);
+  const fetchHistoryDetail = useCallback(async (id: string) => {
+    setShowDetail(true);
+    setDetailLoading(true);
+    setDetailError(null);
+    setDetailData(null);
+
+    try {
+      const response = await authenticatedFetch(
+        `${API_BASE_URL}/history/${id}`,
+        {
+          method: "GET",
+        },
+      );
+
+      const result =
+        await parseApiResponseWithSoftError<DriverHistoryDetail>(response);
+      if (!result.ok) {
+        setDetailError(result.error);
         return;
       }
 
-      setShowDetail(true);
-      setDetailLoading(true);
-      setDetailError(null);
-      setDetailData(null);
-
-      try {
-        const response = await authenticatedFetch(
-          `${API_BASE_URL}/history/${id}`,
-          {
-            method: "GET",
-            headers: {
-              "X-Driver-Id": driverId,
-            },
-          },
-        );
-
-        const result =
-          await parseApiResponseWithSoftError<HistoryDetail>(response);
-        if (!result.ok) {
-          setDetailError(result.error);
-          return;
-        }
-
-        setDetailData(normalizeHistoryDetail(result.data));
-      } catch (error) {
-        setDetailError(
-          error instanceof Error
-            ? error.message
-            : "Could not load history detail.",
-        );
-      } finally {
-        setDetailLoading(false);
+      const normalizedDetail = normalizeDriverHistoryDetail(result.data);
+      if (!normalizedDetail) {
+        setDetailError("Invalid response from server.");
+        return;
       }
-    },
-    [driverId],
-  );
+
+      setDetailData(normalizedDetail);
+    } catch (error) {
+      setDetailError(
+        error instanceof Error
+          ? error.message
+          : "Could not load history detail.",
+      );
+    } finally {
+      setDetailLoading(false);
+    }
+  }, []);
 
   const openUrl = useCallback(async (url: string | null) => {
     const normalizedUrl = resolveResourceUrl(url);
@@ -749,10 +643,10 @@ const HistoryScreen = () => {
   }, []);
 
   const renderCard = useCallback(
-    ({ item }: { item: HistoryListItem }) => {
+    ({ item }: { item: DriverHistoryDetail }) => {
       const status = getListStatusConfig(item);
-      const amount = item.saleAmount?.total ?? null;
-      const kindLabel = item.kind === "delivery" ? "Delivery" : "Direct Sale";
+      const amount = item.sale?.totals.total ?? null;
+      const kindLabel = getDriverHistoryKindLabel(item.kind);
 
       return (
         <TouchableOpacity
@@ -764,7 +658,9 @@ const HistoryScreen = () => {
             <View style={styles.kindBadge}>
               <Ionicons
                 name={
-                  item.kind === "delivery" ? "cube-outline" : "cash-outline"
+                  isScheduledDeliveryHistory(item)
+                    ? "cube-outline"
+                    : "cash-outline"
                 }
                 size={12}
                 color="#1D4ED8"
@@ -808,6 +704,14 @@ const HistoryScreen = () => {
   );
 
   const detailSale = detailData?.sale ?? null;
+  const detailInvoice = detailSale?.invoice ?? null;
+  const detailTasks = useMemo(
+    () => normalizeHistoryTasks(detailData?.tasks || []),
+    [detailData?.tasks],
+  );
+  const isDeliveryDetail = detailData
+    ? isScheduledDeliveryHistory(detailData)
+    : false;
 
   return (
     <View style={[styles.container, { paddingTop: insets.top }]}>
@@ -844,16 +748,16 @@ const HistoryScreen = () => {
       </View>
 
       <View style={styles.searchRow}>
-            <View style={styles.searchWrap}>
-              <Ionicons name="search" size={16} color="#94A3B8" />
-              <TextInput
-                style={styles.searchInput}
-                value={search}
-                onChangeText={setSearch}
-                placeholder="Search customer, phone, address"
-                placeholderTextColor="#94A3B8"
-              />
-            </View>
+        <View style={styles.searchWrap}>
+          <Ionicons name="search" size={16} color="#94A3B8" />
+          <TextInput
+            style={styles.searchInput}
+            value={search}
+            onChangeText={setSearch}
+            placeholder="Search customer, phone, address"
+            placeholderTextColor="#94A3B8"
+          />
+        </View>
         <TouchableOpacity
           style={[
             styles.calendarTrigger,
@@ -1128,7 +1032,9 @@ const HistoryScreen = () => {
             <View>
               <Text style={styles.modalTitle}>History Detail</Text>
               <Text style={styles.modalSubtitle}>
-                {detailData ? formatDate(detailData.createdAt, true) : "Loading..."}
+                {detailData
+                  ? formatDate(detailData.createdAt, true)
+                  : "Loading..."}
               </Text>
             </View>
             <TouchableOpacity
@@ -1157,7 +1063,11 @@ const HistoryScreen = () => {
                 <Text style={styles.detailSectionTitle}>Overview</Text>
                 <Text style={styles.detailLine}>
                   <Text style={styles.detailLineLabel}>Kind:</Text>{" "}
-                  {detailData.kind === "delivery" ? "Delivery" : "Direct Sale"}
+                  {getDriverHistoryKindLabel(detailData.kind)}
+                </Text>
+                <Text style={styles.detailLine}>
+                  <Text style={styles.detailLineLabel}>Reference:</Text>{" "}
+                  {getListDisplayId(detailData)}
                 </Text>
                 <Text style={styles.detailLine}>
                   <Text style={styles.detailLineLabel}>Created At:</Text>{" "}
@@ -1200,129 +1110,116 @@ const HistoryScreen = () => {
                 </Text>
               </View>
 
-              {detailData.kind === "delivery" ? (
-                <>
-                  <View style={styles.detailSection}>
-                    <Text style={styles.detailSectionTitle}>
-                      Delivery Result
-                    </Text>
-                    <Text style={styles.detailLine}>
-                      <Text style={styles.detailLineLabel}>Successful:</Text>{" "}
-                      {detailData.isSuccessful == null
-                        ? "N/A"
-                        : detailData.isSuccessful
-                          ? "Yes"
-                          : "No"}
-                    </Text>
-                    <Text style={styles.detailLine}>
-                      <Text style={styles.detailLineLabel}>
-                        Failure Reason:
-                      </Text>{" "}
-                      {detailData.failureReason || "N/A"}
-                    </Text>
-                    <Text style={styles.detailLine}>
-                      <Text style={styles.detailLineLabel}>Remark:</Text>{" "}
-                      {detailData.remark || "N/A"}
-                    </Text>
-                    <Text style={styles.detailLine}>
-                      <Text style={styles.detailLineLabel}>Receiver:</Text>{" "}
-                      {detailData.receiver
-                        ? `${detailData.receiver.name}${detailData.receiver.position ? ` (${detailData.receiver.position})` : ""}`
-                        : "N/A"}
-                    </Text>
-                    {detailData.receiver?.signatureUrl ? (
-                      <TouchableOpacity
-                        style={styles.linkButton}
-                        onPress={() =>
-                          void openUrl(
-                            detailData.receiver?.signatureUrl || null,
-                          )
-                        }
-                      >
-                        <Text style={styles.linkButtonText}>
-                          Open Signature
-                        </Text>
-                        <Ionicons
-                          name="open-outline"
-                          size={14}
-                          color="#1E40AF"
-                        />
-                      </TouchableOpacity>
-                    ) : null}
-                  </View>
-
-                  <View style={styles.detailSection}>
-                    <Text style={styles.detailSectionTitle}>Tasks</Text>
-                    {detailData.tasks.length === 0 ? (
-                      <Text style={styles.detailMutedText}>
-                        No tasks recorded.
-                      </Text>
-                    ) : (
-                      detailData.tasks.map((task) => (
-                        <View key={task.id} style={styles.detailListRow}>
-                          <Text style={styles.detailListTitle}>
-                            {task.type.replace(/_/g, " ")}
-                          </Text>
-                          <Text style={styles.detailListMeta}>
-                            Outcome: {task.outcome || "N/A"}
-                          </Text>
-                          <Text style={styles.detailListMeta}>
-                            Status: {task.currentStatus || "N/A"}
-                          </Text>
-                        </View>
-                      ))
-                    )}
-                  </View>
-
-                  <View style={styles.detailSection}>
-                    <Text style={styles.detailSectionTitle}>
-                      Deposit Returns
-                    </Text>
-                    {detailData.depositReturns.length === 0 ? (
-                      <Text style={styles.detailMutedText}>
-                        No deposit returns in this report.
-                      </Text>
-                    ) : (
-                      detailData.depositReturns.map((entry) => (
-                        <View key={entry.id} style={styles.detailListRow}>
-                          <Text style={styles.detailListTitle}>
-                            {entry.label}
-                          </Text>
-                          <Text style={styles.detailListMeta}>
-                            {entry.type} • {entry.depositKind}
-                          </Text>
-                          <Text style={styles.detailListMeta}>
-                            Qty {entry.quantity} • AED{" "}
-                            {formatAmount(entry.unitPrice)}
-                          </Text>
-                          {entry.imageUrl ? (
-                            <TouchableOpacity
-                              style={styles.inlineLinkButton}
-                              onPress={() => void openUrl(entry.imageUrl)}
-                            >
-                              <Text style={styles.inlineLinkButtonText}>
-                                Open Image
-                              </Text>
-                            </TouchableOpacity>
-                          ) : null}
-                        </View>
-                      ))
-                    )}
-                  </View>
-                </>
-              ) : (
+              {isDeliveryDetail ? (
                 <View style={styles.detailSection}>
-                  <Text style={styles.detailSectionTitle}>Remark</Text>
+                  <Text style={styles.detailSectionTitle}>Delivery Result</Text>
                   <Text style={styles.detailLine}>
-                    {detailData.remark || "N/A"}
+                    <Text style={styles.detailLineLabel}>Successful:</Text>{" "}
+                    {detailData.isSuccessful == null
+                      ? "N/A"
+                      : detailData.isSuccessful
+                        ? "Yes"
+                        : "No"}
+                  </Text>
+                  <Text style={styles.detailLine}>
+                    <Text style={styles.detailLineLabel}>Failure Reason:</Text>{" "}
+                    {detailData.failureReason || "N/A"}
                   </Text>
                 </View>
-              )}
+              ) : null}
+
+              <View style={styles.detailSection}>
+                <Text style={styles.detailSectionTitle}>Receiver & Notes</Text>
+                <Text style={styles.detailLine}>
+                  <Text style={styles.detailLineLabel}>Receiver:</Text>{" "}
+                  {detailData.receiver
+                    ? `${detailData.receiver.name}${detailData.receiver.position ? ` (${detailData.receiver.position})` : ""}`
+                    : "N/A"}
+                </Text>
+                <Text style={styles.detailLine}>
+                  <Text style={styles.detailLineLabel}>Remark:</Text>{" "}
+                  {detailData.remark || "N/A"}
+                </Text>
+                {detailData.receiver?.signatureUrl ? (
+                  <TouchableOpacity
+                    style={styles.linkButton}
+                    onPress={() =>
+                      void openUrl(detailData.receiver?.signatureUrl || null)
+                    }
+                  >
+                    <Text style={styles.linkButtonText}>Open Signature</Text>
+                    <Ionicons name="open-outline" size={14} color="#1E40AF" />
+                  </TouchableOpacity>
+                ) : null}
+              </View>
+
+              <View style={styles.detailSection}>
+                <Text style={styles.detailSectionTitle}>Tasks</Text>
+                {detailTasks.length === 0 ? (
+                  <Text style={styles.detailMutedText}>
+                    No task activity recorded.
+                  </Text>
+                ) : (
+                  detailTasks.map((task) => (
+                    <View key={task.id} style={styles.detailListRow}>
+                      <Text style={styles.detailListTitle}>{task.title}</Text>
+                      {task.meta.length > 0 ? (
+                        task.meta.map((line, index) => (
+                          <Text
+                            key={`${task.id}-meta-${index}`}
+                            style={styles.detailListMeta}
+                          >
+                            {line}
+                          </Text>
+                        ))
+                      ) : (
+                        <Text style={styles.detailListMeta}>No extra data</Text>
+                      )}
+                    </View>
+                  ))
+                )}
+              </View>
+
+              <View style={styles.detailSection}>
+                <Text style={styles.detailSectionTitle}>Deposit Returns</Text>
+                {detailData.depositReturns.length === 0 ? (
+                  <Text style={styles.detailMutedText}>
+                    No deposit returns in this report.
+                  </Text>
+                ) : (
+                  detailData.depositReturns.map((entry) => (
+                    <View key={entry.id} style={styles.detailListRow}>
+                      <Text style={styles.detailListTitle}>{entry.label}</Text>
+                      <Text style={styles.detailListMeta}>
+                        {entry.type} • {entry.depositKind}
+                      </Text>
+                      <Text style={styles.detailListMeta}>
+                        Qty {entry.quantity} • AED{" "}
+                        {formatAmount(entry.unitPrice)}
+                      </Text>
+                      {entry.imageUrl ? (
+                        <TouchableOpacity
+                          style={styles.inlineLinkButton}
+                          onPress={() => void openUrl(entry.imageUrl)}
+                        >
+                          <Text style={styles.inlineLinkButtonText}>
+                            Open Image
+                          </Text>
+                        </TouchableOpacity>
+                      ) : null}
+                    </View>
+                  ))
+                )}
+              </View>
 
               <View style={styles.detailSection}>
                 <Text style={styles.detailSectionTitle}>Sale</Text>
                 {detailSale ? (
                   <>
+                    <Text style={styles.detailLine}>
+                      <Text style={styles.detailLineLabel}>Sale ID:</Text>{" "}
+                      {detailSale.saleId}
+                    </Text>
                     <Text style={styles.detailLine}>
                       <Text style={styles.detailLineLabel}>Subtotal:</Text> AED{" "}
                       {formatAmount(detailSale.totals.subtotal)}
@@ -1338,9 +1235,45 @@ const HistoryScreen = () => {
                     <Text style={styles.detailLine}>
                       <Text style={styles.detailLineLabel}>Payment:</Text>{" "}
                       {detailSale.payment
-                        ? `${detailSale.payment.method} (AED ${formatAmount(detailSale.payment.amount)})`
+                        ? `${detailSale.payment.method.charAt(0).toUpperCase()}${detailSale.payment.method.slice(1)} (AED ${formatAmount(detailSale.payment.amount)})`
                         : "Credit / Not captured"}
                     </Text>
+                    {detailInvoice ? (
+                      <>
+                        <Text style={styles.detailLine}>
+                          <Text style={styles.detailLineLabel}>Invoice:</Text>{" "}
+                          {detailInvoice.displayId}
+                        </Text>
+                        <Text style={styles.detailLine}>
+                          <Text style={styles.detailLineLabel}>
+                            Invoice Total:
+                          </Text>{" "}
+                          AED {formatAmount(detailInvoice.totalAmount)}
+                        </Text>
+                        <Text style={styles.detailLine}>
+                          <Text style={styles.detailLineLabel}>
+                            Invoice Date:
+                          </Text>{" "}
+                          {formatDate(detailInvoice.createdAt, true)}
+                        </Text>
+                        <Text style={styles.detailLine}>
+                          <Text style={styles.detailLineLabel}>Paid:</Text>{" "}
+                          {detailInvoice.isPaid ? "Yes" : "No"}
+                        </Text>
+                        <Text style={styles.detailLine}>
+                          <Text style={styles.detailLineLabel}>
+                            Pending Payment:
+                          </Text>{" "}
+                          {detailInvoice.hasPendingPayment ? "Yes" : "No"}
+                        </Text>
+                        <Text style={styles.detailLine}>
+                          <Text style={styles.detailLineLabel}>
+                            Invoice Remark:
+                          </Text>{" "}
+                          {detailInvoice.remark || "N/A"}
+                        </Text>
+                      </>
+                    ) : null}
 
                     <View style={styles.saleItemsWrap}>
                       {detailSale.items.map((saleItem) => (

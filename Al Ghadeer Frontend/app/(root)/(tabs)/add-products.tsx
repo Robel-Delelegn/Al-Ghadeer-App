@@ -1,8 +1,11 @@
 import ApiErrorText from "@/components/ApiErrorText";
+import TruckAssetsPanel from "@/components/TruckAssetsPanel";
 import { useOrderStore } from "@/store/index";
 import { useAuthStore, authenticatedFetch } from "@/store/auth";
 import { parseApiResponseWithSoftError } from "@/utils/api";
+import { getDriverRequestId } from "@/utils/driverIdentity";
 import { resolveResourceUrl } from "@/utils/resources";
+import { extractTruckAssets, TruckAsset } from "@/utils/truckLoad";
 import { Product } from "@/types/order";
 import { getProductQuantity, getProductCategory } from "@/utils/orderUtils";
 import { Ionicons } from "@expo/vector-icons";
@@ -271,6 +274,7 @@ const ProductList: React.FC = () => {
     clearCart,
     selectedOrder,
     assignedOrders,
+    currentDriver,
     getAvailableStock,
     setProducts: setStoreProducts,
     setAssignedOrders,
@@ -278,14 +282,23 @@ const ProductList: React.FC = () => {
   const { user } = useAuthStore();
 
   const [products, setProducts] = useState<ServerProduct[]>([]);
+  const [truckAssets, setTruckAssets] = useState<TruckAsset[]>([]);
   const [loading, setLoading] = useState(true);
   const [apiError, setApiError] = useState<string | null>(null);
+  const driverId = useMemo(
+    () =>
+      getDriverRequestId({
+        user,
+        currentDriver,
+      }),
+    [user, currentDriver],
+  );
 
   const fetchProducts = useCallback(async () => {
     try {
       setLoading(true);
       setApiError(null);
-      if (!user?.id) {
+      if (!driverId) {
         setProducts([]);
         setApiError("Driver ID is missing. Please sign in again.");
         return;
@@ -308,7 +321,7 @@ const ProductList: React.FC = () => {
       const response = await authenticatedFetch(url, {
         method: "GET",
         headers: {
-          "X-Driver-Id": user.id,
+          "X-Driver-Id": driverId,
         },
       });
       const parseResult =
@@ -343,13 +356,42 @@ const ProductList: React.FC = () => {
     } finally {
       setLoading(false);
     }
-  }, [selectedOrder, setStoreProducts, user?.id]); // Removed assignedOrders - we access it inside but don't need it as dependency
+  }, [driverId, selectedOrder, setStoreProducts]); // Removed assignedOrders - we access it inside but don't need it as dependency
+
+  const fetchTruckAssets = useCallback(async () => {
+    if (!driverId) {
+      setTruckAssets([]);
+      return;
+    }
+
+    try {
+      const response = await authenticatedFetch(`${IP_ADDRESS}/truck`, {
+        method: "GET",
+        headers: {
+          "X-Driver-Id": driverId,
+        },
+      });
+
+      const parseResult =
+        await parseApiResponseWithSoftError<unknown>(response);
+      if (!parseResult.ok) {
+        setTruckAssets([]);
+        return;
+      }
+
+      setTruckAssets(extractTruckAssets(parseResult.data));
+    } catch (error) {
+      console.warn("Error fetching truck assets:", error);
+      setTruckAssets([]);
+    }
+  }, [driverId]);
 
   // Only fetch products when screen is focused, not when assignedOrders changes in background
   useFocusEffect(
     useCallback(() => {
       fetchProducts();
-    }, [fetchProducts]),
+      fetchTruckAssets();
+    }, [fetchProducts, fetchTruckAssets]),
   );
 
   const categories = useMemo(() => {
@@ -409,7 +451,7 @@ const ProductList: React.FC = () => {
       // Use utility function to get quantity (works with both array and Record formats)
       // Match by both name AND category to avoid mixing retail-items and refill items
       const initialQty = currentOrder
-        ? getProductQuantity(currentOrder, p.name, p.category)
+        ? getProductQuantity(currentOrder, p.name, p.category, p.itemId)
         : 0;
       record[p.id] = initialQty;
     });
@@ -503,7 +545,11 @@ const ProductList: React.FC = () => {
       const fullImageUrl = resolveResourceUrl(serverProduct.image_url) || "";
       // Prefer category from order if available, otherwise use product category
       const orderCategory = currentOrder
-        ? getProductCategory(currentOrder, serverProduct.name)
+        ? getProductCategory(
+            currentOrder,
+            serverProduct.name,
+            serverProduct.itemId,
+          )
         : undefined;
       return {
         id: serverProduct.id,
@@ -624,7 +670,8 @@ const ProductList: React.FC = () => {
                 <Ionicons name="information-circle" size={16} color="#2563EB" />
               </View>
               <Text style={styles.contextText}>
-                Quantities pre-filled from order. Adjust as needed.
+                Planned delivery items were pre-filled from today&apos;s tasks.
+                Adjust them if the stop changes.
               </Text>
             </View>
           )}
@@ -657,6 +704,7 @@ const ProductList: React.FC = () => {
                       currentOrder,
                       product.name,
                       product.category,
+                      product.itemId,
                     )
                   : 0;
                 const availableStock = getAvailableStock(product.id);
@@ -676,6 +724,8 @@ const ProductList: React.FC = () => {
             </View>
           );
         })}
+
+        <TruckAssetsPanel assets={truckAssets} />
 
         {/* Rent Items Section */}
         {currentOrder?.rent_items && currentOrder.rent_items.length > 0 && (

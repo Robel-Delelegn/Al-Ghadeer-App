@@ -3,6 +3,7 @@ import { authenticatedFetch, useAuthStore } from "@/store/auth";
 import { useOrderStore } from "@/store/index";
 import { showErrorAlert, showSuccessAlert } from "@/store/utils/alert";
 import { parseApiResponseWithSoftError } from "@/utils/api";
+import { getDriverRequestId } from "@/utils/driverIdentity";
 import { Ionicons } from "@expo/vector-icons";
 import { useRouter } from "expo-router";
 import React, { useCallback, useEffect, useMemo, useState } from "react";
@@ -77,7 +78,14 @@ const LoadedItems = () => {
   const [apiError, setApiError] = useState<string | null>(null);
   const [noTruckToday, setNoTruckToday] = useState(false);
 
-  const driverId = currentDriver?.id || user?.id;
+  const driverId = useMemo(
+    () =>
+      getDriverRequestId({
+        user,
+        currentDriver,
+      }),
+    [user, currentDriver],
+  );
 
   const loadInfo = truckData?.load;
   const bulkItems = loadInfo?.bulkItems ?? [];
