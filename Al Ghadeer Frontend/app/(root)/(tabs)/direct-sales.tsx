@@ -1,21 +1,21 @@
 import ApiErrorText from "@/components/ApiErrorText";
-import TruckAssetsPanel from "@/components/TruckAssetsPanel";
 import { authenticatedFetch, useAuthStore } from "@/store/auth";
-import { useOrderStore } from "@/store/index";
-import { Order } from "@/types/order";
+import { DirectSaleDraft, useOrderStore } from "@/store/index";
 import { parseApiResponseWithSoftError } from "@/utils/api";
+import { toTransferableAssetProduct } from "@/utils/assetTransfers";
 import { AssignmentRoute, AssignmentsPayload } from "@/utils/assignments";
-import { formatDeliveryAddress } from "@/utils/deliveries";
-import { getDriverRequestId } from "@/utils/driverIdentity";
 import {
-  DriverHistoryDetail,
-  getDriverHistoryInvoiceDisplayId,
-  getDriverHistoryPrimaryId,
-  getDriverHistorySaleId,
-  normalizeDriverHistoryDetail,
-} from "@/utils/driverHistory";
+  CustomerHeldItems,
+  normalizeCustomerHeldItems,
+} from "@/utils/customerHeldItems";
+import { getDriverRequestId } from "@/utils/driverIdentity";
 import { resolveResourceUrl } from "@/utils/resources";
-import { extractTruckAssets, TruckAsset } from "@/utils/truckLoad";
+import {
+  extractTruckBulkItems,
+  extractTruckAssets,
+  TruckBulkItem,
+  TruckAsset,
+} from "@/utils/truckLoad";
 import { Ionicons } from "@expo/vector-icons";
 import { useRouter } from "expo-router";
 import * as Location from "expo-location";
@@ -32,6 +32,7 @@ import {
   KeyboardAvoidingView,
   RefreshControl,
   Modal,
+  Image,
 } from "react-native";
 import { showSuccessAlert, showWarningAlert } from "@/store/utils/alert";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
@@ -45,12 +46,14 @@ const API_BASE_URL = (
 // Unified product structure used by direct-sale UI.
 interface ServerProduct {
   id: string;
-  type: "retail" | "refill" | "other";
+  type: "retail" | "refill" | "assets" | "other";
   itemId: string;
   label: string;
   pricePerUnit: number;
   unit: string | null;
   image_url: string | null;
+  category?: string | null;
+  assetCategory?: string | null;
   originalPrice?: number;
   badge?: string;
   loaded_quantity?: number | string;
@@ -70,7 +73,11 @@ const PAYMENT_METHODS: {
   { id: "credit", label: "Credit", icon: "receipt-outline" as const },
 ];
 
-type ProductGroup = "wholesale" | "refill" | "other";
+type ProductGroup = "wholesale" | "refill" | "assets" | "other";
+
+const EMPTY_BOTTLE_PRODUCT_PREFIX = "sale-empty-bottle:";
+const TRUCK_ASSET_PRODUCT_PREFIX = "sale-asset:";
+const EMPTY_BOTTLE_CATEGORY = "empty_bottle";
 
 const normalizeCategory = (category?: string) =>
   (category || "")
@@ -78,22 +85,104 @@ const normalizeCategory = (category?: string) =>
     .toLowerCase()
     .replace(/[\s_-]+/g, "");
 
-const getProductGroup = (type?: string): ProductGroup => {
-  const normalized = normalizeCategory(type);
+const isEmptyBottleSaleProduct = (
+  product: Pick<ServerProduct, "id" | "category">,
+) =>
+  product.id.startsWith(EMPTY_BOTTLE_PRODUCT_PREFIX) ||
+  normalizeCategory(product.category || undefined) ===
+    normalizeCategory(EMPTY_BOTTLE_CATEGORY);
+
+const isTruckAssetSaleProduct = (product: Pick<ServerProduct, "id">) =>
+  product.id.startsWith(TRUCK_ASSET_PRODUCT_PREFIX);
+
+const isSyntheticSaleProduct = (
+  product: Pick<ServerProduct, "id" | "category">,
+) => isEmptyBottleSaleProduct(product) || isTruckAssetSaleProduct(product);
+
+const getProductStockGroupKey = (
+  product: Pick<ServerProduct, "id" | "itemId" | "type" | "category">,
+) => {
+  if (isTruckAssetSaleProduct(product)) {
+    return product.id;
+  }
+
+  if (product.type === "refill") {
+    return `bottle:${product.itemId || product.id}`;
+  }
+
+  return product.id;
+};
+
+const getProductGroup = (
+  product: Pick<ServerProduct, "type" | "category">,
+): ProductGroup => {
+  const normalized = normalizeCategory(product.type);
+  const normalizedCategory = normalizeCategory(product.category || undefined);
 
   if (normalized.includes("refill")) return "refill";
+  if (normalized.includes("asset") || normalizedCategory.includes("asset")) {
+    return "assets";
+  }
   if (normalized.includes("retail")) {
     return "wholesale";
   }
   return "other";
 };
 
-type SaleLineType = "retail" | "refill";
+type DirectSaleAssetAction = "deposit" | "deposit_return";
 
-const getSaleLineType = (type?: string): SaleLineType => {
-  const normalized = normalizeCategory(type);
-  if (normalized.includes("refill")) return "refill";
-  return "retail";
+interface DirectSaleAssetOption {
+  key: string;
+  itemId: string;
+  label: string;
+  serial: string | null;
+  category: string | null;
+  imageUrl: string | null;
+  source: "product" | "held";
+  defaultAction: DirectSaleAssetAction;
+  defaultPrice: number;
+}
+
+interface DirectSaleAssetDraft {
+  selected: boolean;
+  price: string;
+}
+
+interface DirectSaleBottleReturnOption {
+  key: string;
+  itemId: string;
+  label: string;
+  description: string | null;
+  unit: string | null;
+  imageUrl: string | null;
+  availableQuantity: number;
+}
+
+interface DirectSaleBottleDepositOption {
+  key: string;
+  itemId: string;
+  label: string;
+  unit: string | null;
+  imageUrl: string | null;
+  availableQuantity: number;
+}
+
+const toEmptyRefillLabel = (label: string) => {
+  const trimmedLabel = label.trim();
+
+  if (!trimmedLabel) {
+    return "Refill Item (Empty)";
+  }
+
+  if (/\(\s*empty\s*\)$/i.test(trimmedLabel)) {
+    return trimmedLabel;
+  }
+
+  if (/\(\s*full\s*\)$/i.test(trimmedLabel)) {
+    return trimmedLabel.replace(/\(\s*full\s*\)$/i, "(Empty)");
+  }
+
+  return `${trimmedLabel} (Empty)`;
 };
 
 const parseStockNumber = (value: unknown): number | null => {
@@ -129,6 +218,13 @@ const getCoolerStockLimit = (product: ServerProduct): number => {
   return Infinity;
 };
 
+const getProductIconName = (type?: string) => {
+  const normalized = normalizeCategory(type);
+  if (normalized.includes("refill")) return "water-outline" as const;
+  if (normalized.includes("retail")) return "storefront-outline" as const;
+  return "cube-outline" as const;
+};
+
 const toStringValue = (value: unknown): string => {
   return typeof value === "string" ? value.trim() : "";
 };
@@ -151,6 +247,7 @@ const normalizeProductType = (value: unknown): ServerProduct["type"] => {
   const normalized = normalizeCategory(toStringValue(value));
   if (normalized.includes("refill")) return "refill";
   if (normalized.includes("retail")) return "retail";
+  if (normalized.includes("asset")) return "assets";
   return "other";
 };
 
@@ -187,6 +284,10 @@ const normalizeProductRecord = (
     type,
     unit: toNullableStringValue(source.unit),
     image_url: resolveResourceUrl(toNullableStringValue(source.image_url)),
+    category: toNullableStringValue(source.category),
+    assetCategory: toNullableStringValue(
+      source.assetCategory ?? source.asset_category,
+    ),
     originalPrice: originalPrice ?? undefined,
     badge: badge || undefined,
     loaded_quantity: source.loaded_quantity as number | string | undefined,
@@ -220,50 +321,67 @@ const normalizeProductsPayload = (payload: unknown): ServerProduct[] => {
   return mapped;
 };
 
-interface SaleRequestBody {
-  customerId: string;
-  siteId?: string;
-  displayId?: string;
-  paymentMethod: DirectSalePaymentMethod;
-  receiver?: {
-    name?: string;
-    position?: string;
-    signatureData?: string;
-  };
-  remark?: string;
-  totals?: {
-    subtotal: number;
-    vat: number;
-    total: number;
-  };
-  retails?: {
-    id: string;
-    quantity: number;
-    price: number;
-  }[];
-  refills?: {
-    filledBottleId: string;
-    filledQuantity: number;
-    price: number;
-  }[];
-  assets?: {
-    id: string;
-    price: number;
-  }[];
-  check?: {
-    checkNumber?: string;
-    checkDate?: string;
-    bankName?: string;
-    accountNumber?: string;
-  };
-  depositsReturns?: {
-    type: "deposit" | "deposit_return";
-    itemId: string;
-    depositKind: "asset" | "bottle";
-    quantity: number;
-    unitPrice: number;
-  }[];
-}
+const buildSellableProducts = (
+  baseProducts: ServerProduct[],
+  truckAssets: TruckAsset[],
+): ServerProduct[] => {
+  const cleanBaseProducts = baseProducts.filter(
+    (product) => !isSyntheticSaleProduct(product),
+  );
+
+  const assetProductsById = new Map<string, ServerProduct>();
+  cleanBaseProducts
+    .filter((product) => product.type === "assets")
+    .forEach((product) => {
+      assetProductsById.set(product.itemId, product);
+      assetProductsById.set(product.id, product);
+    });
+
+  const truckAssetItemIds = new Set<string>();
+  const truckAssetProducts = truckAssets.flatMap((asset) => {
+    const metadata =
+      assetProductsById.get(asset.itemId) || assetProductsById.get(asset.id);
+    truckAssetItemIds.add(asset.itemId);
+
+    const label =
+      asset.serial && !asset.label.includes(asset.serial)
+        ? `${asset.label} (${asset.serial})`
+        : asset.label;
+
+    return [
+      {
+        id: `${TRUCK_ASSET_PRODUCT_PREFIX}${asset.id}:${asset.serial || asset.itemId}`,
+        type: "assets" as const,
+        itemId: asset.itemId,
+        label: label || metadata?.label || "Asset",
+        pricePerUnit: metadata?.pricePerUnit ?? 0,
+        unit: metadata?.unit ?? null,
+        image_url:
+          resolveResourceUrl(asset.image_url) || metadata?.image_url || null,
+        category: asset.category || metadata?.category || "Assets",
+        assetCategory: asset.category || metadata?.assetCategory || null,
+        originalPrice: metadata?.originalPrice,
+        badge: "Asset",
+        loaded_quantity: 1,
+        available_stock: 1,
+      },
+    ];
+  });
+
+  const visibleBaseProducts = cleanBaseProducts.filter(
+    (product) =>
+      product.type !== "assets" || !truckAssetItemIds.has(product.itemId),
+  );
+
+  const deduped = new Map<string, ServerProduct>();
+  [...visibleBaseProducts, ...truckAssetProducts].forEach((product) => {
+    if (!deduped.has(product.id)) {
+      deduped.set(product.id, product);
+    }
+  });
+
+  return Array.from(deduped.values());
+};
 
 interface DirectSaleCheckDraft {
   checkNumber: string;
@@ -306,6 +424,10 @@ interface SiteDraft {
   deliveryInstructions: string;
 }
 
+type ReverseGeocodeResult = Awaited<
+  ReturnType<typeof Location.reverseGeocodeAsync>
+>[number];
+
 const EMPTY_SITE_DRAFT: SiteDraft = {
   siteName: "",
   latitude: "",
@@ -316,6 +438,102 @@ const EMPTY_SITE_DRAFT: SiteDraft = {
   buildingNo: "",
   flatNo: "",
   deliveryInstructions: "",
+};
+
+const firstText = (...values: (string | null | undefined)[]) => {
+  for (const value of values) {
+    const text = (value || "").trim();
+    if (text) return text;
+  }
+  return "";
+};
+
+const joinAddressParts = (...values: (string | null | undefined)[]) => {
+  const seen = new Set<string>();
+  const parts: string[] = [];
+
+  values.forEach((value) => {
+    const text = (value || "").trim();
+    if (!text) return;
+
+    const key = text.toLowerCase();
+    if (seen.has(key)) return;
+
+    seen.add(key);
+    parts.push(text);
+  });
+
+  return parts.join(", ");
+};
+
+const formatReverseGeocodeAddress = (
+  address?: ReverseGeocodeResult,
+): string => {
+  if (!address) return "";
+
+  return joinAddressParts(
+    address.name,
+    address.street,
+    address.district,
+    address.subregion,
+    address.city,
+    address.region,
+    address.country,
+  );
+};
+
+const buildSiteDraftPatchFromGeocode = (
+  address?: ReverseGeocodeResult,
+): Partial<SiteDraft> => {
+  if (!address) return {};
+
+  const streetName = firstText(address.street, address.name);
+  const areaName = firstText(address.district, address.subregion);
+  const city = firstText(address.city, address.subregion, address.region);
+  const siteName = firstText(address.name, address.street, areaName, city);
+
+  return {
+    ...(siteName ? { siteName } : {}),
+    ...(streetName ? { streetName } : {}),
+    ...(address.streetNumber ? { buildingNo: address.streetNumber } : {}),
+    ...(areaName ? { areaName } : {}),
+    ...(city ? { city } : {}),
+  };
+};
+
+const resolveCurrentLocationForSite = async () => {
+  const { status } = await Location.requestForegroundPermissionsAsync();
+  if (status !== "granted") {
+    throw new Error("Location permission is required.");
+  }
+
+  const locationData = await Location.getCurrentPositionAsync({
+    accuracy: Location.Accuracy.Balanced,
+  });
+  const latitude = locationData.coords.latitude;
+  const longitude = locationData.coords.longitude;
+
+  let address: ReverseGeocodeResult | undefined;
+  try {
+    const addressData = await Location.reverseGeocodeAsync({
+      latitude,
+      longitude,
+    });
+    address = addressData[0];
+  } catch (error) {
+    console.warn("Failed to reverse geocode current location:", error);
+  }
+
+  const formattedAddress =
+    formatReverseGeocodeAddress(address) ||
+    `${latitude.toFixed(6)}, ${longitude.toFixed(6)}`;
+
+  return {
+    latitude,
+    longitude,
+    address: formattedAddress,
+    siteDraftPatch: buildSiteDraftPatchFromGeocode(address),
+  };
 };
 
 const formatSiteAddress = (site?: CustomerSite | null): string => {
@@ -411,6 +629,30 @@ const getRouteCandidateLabel = (
   return label;
 };
 
+const sanitizeMoneyInput = (value: string) => {
+  const normalized = value.replace(/[^0-9.]/g, "");
+  const [whole, ...fractionParts] = normalized.split(".");
+  if (fractionParts.length === 0) {
+    return whole;
+  }
+  return `${whole}.${fractionParts.join("")}`;
+};
+
+const parseMoneyDraft = (value: string): number | null => {
+  const trimmed = value.trim();
+  if (!trimmed) return null;
+  const parsed = Number(trimmed);
+  return Number.isFinite(parsed) ? parsed : null;
+};
+
+const getAssetSourceLabel = (source: DirectSaleAssetOption["source"]) => {
+  return source === "held" ? "Held" : "On Truck";
+};
+
+const isReturnOnlyAsset = (asset: DirectSaleAssetOption) => {
+  return asset.source === "held";
+};
+
 interface ActionModalProps {
   visible: boolean;
   title: string;
@@ -463,17 +705,31 @@ const DirectSales: React.FC = () => {
   const insets = useSafeAreaInsets();
   const router = useRouter();
   const { user } = useAuthStore();
-  const {
-    currentDriver,
-    selectOrder,
-    setPaymentMethod: setGlobalPaymentMethod,
-    setLastConfirmPaymentResponse,
-    clearCart,
-  } = useOrderStore();
+  const { currentDriver, setDirectSaleDraft, directSaleDraft } =
+    useOrderStore();
   const [products, setProducts] = useState<ServerProduct[]>([]);
+  const [truckBulkItems, setTruckBulkItems] = useState<TruckBulkItem[]>([]);
   const [truckAssets, setTruckAssets] = useState<TruckAsset[]>([]);
+  const [heldItems, setHeldItems] = useState<CustomerHeldItems>({
+    bottles: [],
+    assets: [],
+  });
+  const [assetDrafts, setAssetDrafts] = useState<
+    Record<string, DirectSaleAssetDraft>
+  >({});
+  const [bottleDepositPrices, setBottleDepositPrices] = useState<
+    Record<string, string>
+  >({});
+  const [bottleDepositQuantities, setBottleDepositQuantities] = useState<
+    Record<string, number>
+  >({});
+  const [bottleReturnQuantities, setBottleReturnQuantities] = useState<
+    Record<string, number>
+  >({});
   const [loading, setLoading] = useState(true);
   const [quantities, setQuantities] = useState<Record<string, number>>({});
+  const [assetActionsModalVisible, setAssetActionsModalVisible] =
+    useState(false);
   const [customerSearchModalVisible, setCustomerSearchModalVisible] =
     useState(false);
   const [customerSearchQuery, setCustomerSearchQuery] = useState("");
@@ -493,9 +749,10 @@ const DirectSales: React.FC = () => {
     bankName: "",
     accountNumber: "",
   });
+  const [creditCollectionAmount, setCreditCollectionAmount] = useState("");
+  const [creditCollectionRemark, setCreditCollectionRemark] = useState("");
   const [remark, setRemark] = useState("");
   const [isRemarkExpanded, setIsRemarkExpanded] = useState(false);
-  const [isSubmitting, setIsSubmitting] = useState(false);
   const [location, setLocation] = useState<{
     latitude: number;
     longitude: number;
@@ -504,6 +761,8 @@ const DirectSales: React.FC = () => {
   const [isCheckingCustomer, setIsCheckingCustomer] = useState(false);
   const [isCreatingCustomer, setIsCreatingCustomer] = useState(false);
   const [apiError, setApiError] = useState<string | null>(null);
+  const [heldItemsError, setHeldItemsError] = useState<string | null>(null);
+  const [truckAssetsError, setTruckAssetsError] = useState<string | null>(null);
   const [refreshingProducts, setRefreshingProducts] = useState(false);
   const [customerSearchResults, setCustomerSearchResults] = useState<
     CustomerData[]
@@ -517,6 +776,7 @@ const DirectSales: React.FC = () => {
     null,
   );
   const [siteDraft, setSiteDraft] = useState<SiteDraft>(EMPTY_SITE_DRAFT);
+  const [isResolvingSiteLocation, setIsResolvingSiteLocation] = useState(false);
   const [isSavingSite, setIsSavingSite] = useState(false);
   const [isAssigningRoute, setIsAssigningRoute] = useState(false);
   const driverId = useMemo(
@@ -527,6 +787,28 @@ const DirectSales: React.FC = () => {
       }),
     [user, currentDriver],
   );
+
+  useEffect(() => {
+    if (!directSaleDraft) return;
+
+    setProducts(directSaleDraft.products);
+    setQuantities(directSaleDraft.quantities);
+    setCustomerData(directSaleDraft.customerData);
+    setSelectedSite(directSaleDraft.selectedSite);
+    setPaymentMethod(directSaleDraft.paymentMethod);
+    setCheckDetails(directSaleDraft.checkDetails);
+    setRemark(directSaleDraft.remark);
+    setLocation(directSaleDraft.location);
+    setTruckBulkItems(directSaleDraft.truckBulkItems);
+    setTruckAssets(directSaleDraft.truckAssets);
+    setHeldItems(directSaleDraft.heldItems);
+    setAssetDrafts(directSaleDraft.assetDrafts);
+    setBottleDepositPrices(directSaleDraft.bottleDepositPrices);
+    setBottleDepositQuantities(directSaleDraft.bottleDepositQuantities);
+    setBottleReturnQuantities(directSaleDraft.bottleReturnQuantities);
+    setCreditCollectionAmount(directSaleDraft.creditCollectionAmount);
+    setCreditCollectionRemark(directSaleDraft.creditCollectionRemark);
+  }, [directSaleDraft]);
 
   const fetchProducts = useCallback(
     async ({ showLoading = true }: { showLoading?: boolean } = {}) => {
@@ -567,7 +849,7 @@ const DirectSales: React.FC = () => {
         }
 
         const normalizedProducts = normalizeProductsPayload(result.data);
-        setProducts(normalizedProducts);
+        setProducts(buildSellableProducts(normalizedProducts, truckAssets));
       } catch (err) {
         console.error("Error fetching products:", err);
       } finally {
@@ -576,16 +858,23 @@ const DirectSales: React.FC = () => {
         }
       }
     },
-    [driverId, selectedSite?.id],
+    [driverId, selectedSite?.id, truckAssets],
   );
+
+  useEffect(() => {
+    fetchProducts();
+  }, [fetchProducts]);
 
   const fetchTruckAssets = useCallback(async () => {
     if (!driverId) {
+      setTruckBulkItems([]);
       setTruckAssets([]);
+      setTruckAssetsError(null);
       return;
     }
 
     try {
+      setTruckAssetsError(null);
       const response = await authenticatedFetch(`${API_BASE_URL}/truck`, {
         method: "GET",
         headers: {
@@ -594,21 +883,64 @@ const DirectSales: React.FC = () => {
       });
       const result = await parseApiResponseWithSoftError<unknown>(response);
       if (!result.ok) {
+        setTruckBulkItems([]);
         setTruckAssets([]);
+        setTruckAssetsError(result.error);
         return;
       }
 
+      setTruckBulkItems(extractTruckBulkItems(result.data));
       setTruckAssets(extractTruckAssets(result.data));
     } catch (error) {
-      console.warn("Error fetching truck assets:", error);
+      console.error("Error fetching truck assets:", error);
+      setTruckBulkItems([]);
       setTruckAssets([]);
+      setTruckAssetsError(
+        error instanceof Error ? error.message : "Failed to load truck assets.",
+      );
     }
   }, [driverId]);
 
   useEffect(() => {
-    fetchProducts();
-    fetchTruckAssets();
-  }, [fetchProducts, fetchTruckAssets]);
+    void fetchTruckAssets();
+  }, [fetchTruckAssets]);
+
+  const fetchHeldItems = useCallback(async (customerId?: string | null) => {
+    const normalizedCustomerId = customerId?.trim();
+    if (!normalizedCustomerId) {
+      setHeldItems({ bottles: [], assets: [] });
+      setHeldItemsError(null);
+      return;
+    }
+
+    try {
+      setHeldItemsError(null);
+      const response = await authenticatedFetch(
+        `${API_BASE_URL}/customers/${encodeURIComponent(normalizedCustomerId)}/held-items`,
+        {
+          method: "GET",
+        },
+      );
+      const result = await parseApiResponseWithSoftError<unknown>(response);
+      if (!result.ok) {
+        setHeldItems({ bottles: [], assets: [] });
+        setHeldItemsError(result.error);
+        return;
+      }
+
+      setHeldItems(normalizeCustomerHeldItems(result.data));
+    } catch (error) {
+      console.error("Error fetching held items:", error);
+      setHeldItems({ bottles: [], assets: [] });
+      setHeldItemsError(
+        error instanceof Error ? error.message : "Failed to load held items.",
+      );
+    }
+  }, []);
+
+  useEffect(() => {
+    void fetchHeldItems(customerData?.id);
+  }, [customerData?.id, fetchHeldItems]);
 
   const applySelectedSite = useCallback((site: CustomerSite | null) => {
     setSelectedSite(site);
@@ -788,11 +1120,18 @@ const DirectSales: React.FC = () => {
         fetchProducts({ showLoading: false }),
         fetchTruckAssets(),
         fetchTodayRoutes(),
+        fetchHeldItems(customerData?.id),
       ]);
     } finally {
       setRefreshingProducts(false);
     }
-  }, [fetchProducts, fetchTodayRoutes, fetchTruckAssets]);
+  }, [
+    customerData?.id,
+    fetchHeldItems,
+    fetchProducts,
+    fetchTodayRoutes,
+    fetchTruckAssets,
+  ]);
 
   const searchCustomers = useCallback(async () => {
     if (!driverId) {
@@ -807,7 +1146,7 @@ const DirectSales: React.FC = () => {
     if (!query) {
       showWarningAlert(
         "Search Required",
-        "Enter a customer phone number or customer ID.",
+        "Enter search text to look up a customer.",
       );
       return;
     }
@@ -819,11 +1158,7 @@ const DirectSales: React.FC = () => {
     try {
       setApiError(null);
       const params = new URLSearchParams();
-      if (isUuid(query)) {
-        params.set("id", query);
-      } else {
-        params.set("phone", query);
-      }
+      params.set("search", query);
 
       const response = await authenticatedFetch(
         `${API_BASE_URL}/customers?${params.toString()}`,
@@ -865,14 +1200,6 @@ const DirectSales: React.FC = () => {
   }, [customerSearchQuery, driverId]);
 
   const handleCreateCustomer = useCallback(async () => {
-    if (!driverId) {
-      showWarningAlert(
-        "Driver Missing",
-        "Driver information is not available.",
-      );
-      return;
-    }
-
     const trimmedName = createCustomerName.trim();
     const trimmedPhone = createCustomerPhone.trim();
 
@@ -890,9 +1217,6 @@ const DirectSales: React.FC = () => {
       setApiError(null);
       const response = await authenticatedFetch(`${API_BASE_URL}/customers`, {
         method: "POST",
-        headers: {
-          "X-Driver-Id": driverId,
-        },
         body: JSON.stringify({
           name: trimmedName,
           phone: trimmedPhone,
@@ -921,12 +1245,7 @@ const DirectSales: React.FC = () => {
     } finally {
       setIsCreatingCustomer(false);
     }
-  }, [
-    applyCustomerSelection,
-    createCustomerName,
-    createCustomerPhone,
-    driverId,
-  ]);
+  }, [applyCustomerSelection, createCustomerName, createCustomerPhone]);
 
   const openCreateSiteForm = useCallback(() => {
     setSiteFormMode("create");
@@ -967,23 +1286,47 @@ const DirectSales: React.FC = () => {
     setSiteDraft(EMPTY_SITE_DRAFT);
   }, []);
 
-  const applyCurrentLocationToSiteForm = useCallback(() => {
-    if (!location) {
+  const applyCurrentLocationToSiteForm = useCallback(async () => {
+    setIsResolvingSiteLocation(true);
+    try {
+      setApiError(null);
+      const resolvedLocation = await resolveCurrentLocationForSite();
+
+      setLocation({
+        latitude: resolvedLocation.latitude,
+        longitude: resolvedLocation.longitude,
+        address: resolvedLocation.address,
+      });
+
+      setSiteDraft((prev) => ({
+        ...prev,
+        latitude: String(resolvedLocation.latitude),
+        longitude: String(resolvedLocation.longitude),
+        siteName:
+          prev.siteName.trim().length > 0
+            ? prev.siteName
+            : resolvedLocation.siteDraftPatch.siteName || prev.siteName,
+        streetName:
+          resolvedLocation.siteDraftPatch.streetName || prev.streetName,
+        buildingNo:
+          resolvedLocation.siteDraftPatch.buildingNo || prev.buildingNo,
+        areaName: resolvedLocation.siteDraftPatch.areaName || prev.areaName,
+        city: resolvedLocation.siteDraftPatch.city || prev.city,
+      }));
+    } catch (error) {
       showWarningAlert(
         "Location Unavailable",
-        "Current location is not available right now.",
+        error instanceof Error
+          ? error.message
+          : "Current location is not available right now.",
       );
-      return;
+    } finally {
+      setIsResolvingSiteLocation(false);
     }
-    setSiteDraft((prev) => ({
-      ...prev,
-      latitude: String(location.latitude),
-      longitude: String(location.longitude),
-    }));
-  }, [location]);
+  }, []);
 
   const saveSite = useCallback(async () => {
-    if (!driverId || !customerData) {
+    if (!customerData) {
       showWarningAlert(
         "Customer Required",
         "Search or create a customer first.",
@@ -1047,9 +1390,6 @@ const DirectSales: React.FC = () => {
 
       const response = await authenticatedFetch(endpoint, {
         method,
-        headers: {
-          "X-Driver-Id": driverId,
-        },
         body: JSON.stringify(payload),
       });
 
@@ -1096,7 +1436,6 @@ const DirectSales: React.FC = () => {
     applySelectedSite,
     closeSiteForm,
     customerData,
-    driverId,
     selectedSite,
     siteDraft,
     siteFormMode,
@@ -1235,25 +1574,11 @@ const DirectSales: React.FC = () => {
   useEffect(() => {
     const getLocation = async () => {
       try {
-        const { status } = await Location.requestForegroundPermissionsAsync();
-        if (status !== "granted") {
-          showWarningAlert(
-            "Permission Denied",
-            "Location permission is required.",
-          );
-          return;
-        }
-
-        const locationData = await Location.getCurrentPositionAsync({});
-        const addressData = await Location.reverseGeocodeAsync({
-          latitude: locationData.coords.latitude,
-          longitude: locationData.coords.longitude,
-        });
-
+        const resolvedLocation = await resolveCurrentLocationForSite();
         setLocation({
-          latitude: locationData.coords.latitude,
-          longitude: locationData.coords.longitude,
-          address: `${addressData[0]?.name || ""}, ${addressData[0]?.city || ""}`,
+          latitude: resolvedLocation.latitude,
+          longitude: resolvedLocation.longitude,
+          address: resolvedLocation.address,
         });
       } catch (error) {
         console.error("Error getting location:", error);
@@ -1262,10 +1587,33 @@ const DirectSales: React.FC = () => {
     getLocation();
   }, []);
 
+  const getSelectableProductStock = useCallback(
+    (product: ServerProduct) => {
+      const parsedStock =
+        parseStockNumber(product.loaded_quantity) ??
+        parseStockNumber(product.available_stock);
+      const stockLimit = parsedStock ?? getCoolerStockLimit(product);
+
+      if (!Number.isFinite(stockLimit)) {
+        return Infinity;
+      }
+
+      const stockGroupKey = getProductStockGroupKey(product);
+      const reservedByOtherProducts = products.reduce((sum, entry) => {
+        if (entry.id === product.id) return sum;
+        if (getProductStockGroupKey(entry) !== stockGroupKey) return sum;
+        return sum + Math.max(0, quantities[entry.id] || 0);
+      }, 0);
+
+      return Math.max(0, stockLimit - reservedByOtherProducts);
+    },
+    [products, quantities],
+  );
+
   const handleChangeQuantity = useCallback(
     (product: ServerProduct, delta: number) => {
       let blockedByStock = false;
-      const stockLimit = getCoolerStockLimit(product);
+      const stockLimit = getSelectableProductStock(product);
 
       setQuantities((prev) => {
         const current = prev[product.id] || 0;
@@ -1285,31 +1633,328 @@ const DirectSales: React.FC = () => {
         );
       }
     },
-    [],
+    [getSelectableProductStock],
   );
 
   const selectedProducts = useMemo(() => {
     return products.filter((p) => (quantities[p.id] || 0) > 0);
   }, [products, quantities]);
+  const productsForDraft = products;
+  const transferableAssetProducts = useMemo(
+    () =>
+      products
+        .filter(
+          (product) =>
+            product.type === "assets" && !isTruckAssetSaleProduct(product),
+        )
+        .map((product) =>
+          toTransferableAssetProduct({
+            id: product.id,
+            itemId: product.itemId,
+            label: product.label,
+            assetCategory: product.assetCategory,
+            image_url: product.image_url,
+          }),
+        ),
+    [products],
+  );
+  const directSaleAssetOptions = useMemo<DirectSaleAssetOption[]>(() => {
+    const assetMetadataByItemId = new Map(
+      transferableAssetProducts.map((asset) => [asset.itemId, asset]),
+    );
+
+    const productAssets = truckAssets.map((asset) => {
+      const metadata =
+        assetMetadataByItemId.get(asset.itemId) ||
+        assetMetadataByItemId.get(asset.id);
+
+      return {
+        key: `product:${asset.id}:${asset.serial || asset.itemId}`,
+        itemId: asset.itemId,
+        label: asset.label || metadata?.label || "Truck Asset",
+        serial: asset.serial ?? metadata?.serial ?? null,
+        category: asset.category ?? metadata?.assetCategory ?? null,
+        imageUrl:
+          resolveResourceUrl(asset.image_url) || metadata?.imageUrl || null,
+        source: "product" as const,
+        defaultAction: "deposit" as const,
+        defaultPrice: 0,
+      };
+    });
+
+    const heldAssets = heldItems.assets.map((asset) => ({
+      key: `held:${asset.itemId}:${asset.serial}`,
+      itemId: asset.itemId,
+      label: asset.label,
+      serial: asset.serial,
+      category: asset.assetCategory,
+      imageUrl: resolveResourceUrl(asset.image_url),
+      source: "held" as const,
+      defaultAction: "deposit_return" as const,
+      defaultPrice: 0,
+    }));
+
+    return [...productAssets, ...heldAssets];
+  }, [heldItems.assets, transferableAssetProducts, truckAssets]);
+
+  useEffect(() => {
+    setAssetDrafts((previousDrafts) => {
+      const nextDrafts: Record<string, DirectSaleAssetDraft> = {};
+
+      directSaleAssetOptions.forEach((asset) => {
+        const existingDraft = previousDrafts[asset.key];
+        nextDrafts[asset.key] = {
+          selected: existingDraft?.selected ?? false,
+          price: existingDraft?.price ?? asset.defaultPrice.toFixed(2),
+        };
+      });
+
+      return nextDrafts;
+    });
+  }, [directSaleAssetOptions]);
+
+  const selectedAssetEntries = useMemo(
+    () =>
+      directSaleAssetOptions
+        .map((asset) => {
+          const draft = assetDrafts[asset.key];
+          if (!draft?.selected) return null;
+
+          const parsedPrice = Number(draft.price);
+          return {
+            ...asset,
+            action: isReturnOnlyAsset(asset) ? "deposit_return" : "deposit",
+            price: parsedPrice,
+          };
+        })
+        .filter(
+          (
+            asset,
+          ): asset is DirectSaleAssetOption & {
+            action: DirectSaleAssetAction;
+            price: number;
+          } => asset !== null,
+        ),
+    [assetDrafts, directSaleAssetOptions],
+  );
+  const directSaleBottleOptions = useMemo<DirectSaleBottleReturnOption[]>(
+    () =>
+      heldItems.bottles.map((bottle) => ({
+        key: `held:bottle:${bottle.emptyBottleId}`,
+        itemId: bottle.emptyBottleId,
+        label: toEmptyRefillLabel(bottle.label),
+        description: bottle.description,
+        unit: bottle.unit,
+        imageUrl: resolveResourceUrl(bottle.image_url),
+        availableQuantity: bottle.quantity,
+      })),
+    [heldItems.bottles],
+  );
+  const directSaleBottleDepositOptions = useMemo<
+    DirectSaleBottleDepositOption[]
+  >(() => {
+    const refillProductsById = new Map<string, ServerProduct>();
+    products
+      .filter((product) => product.type === "refill")
+      .forEach((product) => {
+        refillProductsById.set(product.itemId, product);
+        refillProductsById.set(product.id, product);
+      });
+
+    const selectedRefillQuantities = new Map<string, number>();
+    products
+      .filter(
+        (product) =>
+          product.type === "refill" || isEmptyBottleSaleProduct(product),
+      )
+      .forEach((product) => {
+        const selectedQuantity = quantities[product.id] || 0;
+        if (selectedQuantity <= 0) return;
+        selectedRefillQuantities.set(
+          product.itemId,
+          (selectedRefillQuantities.get(product.itemId) || 0) +
+            selectedQuantity,
+        );
+      });
+
+    return truckBulkItems.reduce<DirectSaleBottleDepositOption[]>(
+      (options, bulkItem) => {
+        const refillProduct = refillProductsById.get(bulkItem.id);
+        if (!refillProduct) {
+          return options;
+        }
+
+        const reservedForSales =
+          selectedRefillQuantities.get(refillProduct.itemId) ||
+          selectedRefillQuantities.get(bulkItem.id) ||
+          0;
+        const availableQuantity = Math.max(
+          0,
+          bulkItem.quantity - reservedForSales,
+        );
+
+        if (availableQuantity <= 0) {
+          return options;
+        }
+
+        options.push({
+          key: `truck:bottle:${bulkItem.id}`,
+          itemId: bulkItem.id,
+          label: toEmptyRefillLabel(refillProduct.label || bulkItem.label),
+          unit: refillProduct.unit,
+          imageUrl: refillProduct.image_url,
+          availableQuantity,
+        });
+
+        return options;
+      },
+      [],
+    );
+  }, [products, quantities, truckBulkItems]);
+  const heldAssetOptions = useMemo(
+    () => directSaleAssetOptions.filter((asset) => asset.source === "held"),
+    [directSaleAssetOptions],
+  );
+  const depositAssetOptions = useMemo(
+    () => directSaleAssetOptions.filter((asset) => asset.source === "product"),
+    [directSaleAssetOptions],
+  );
+
+  useEffect(() => {
+    setBottleReturnQuantities((previousQuantities) => {
+      const nextQuantities: Record<string, number> = {};
+
+      directSaleBottleOptions.forEach((bottle) => {
+        const previousQuantity = previousQuantities[bottle.key] ?? 0;
+        nextQuantities[bottle.key] = Math.max(
+          0,
+          Math.min(previousQuantity, bottle.availableQuantity),
+        );
+      });
+
+      return nextQuantities;
+    });
+  }, [directSaleBottleOptions]);
+
+  useEffect(() => {
+    setBottleDepositQuantities((previousQuantities) => {
+      const nextQuantities: Record<string, number> = {};
+
+      directSaleBottleDepositOptions.forEach((bottle) => {
+        const previousQuantity = previousQuantities[bottle.key] ?? 0;
+        nextQuantities[bottle.key] = Math.max(
+          0,
+          Math.min(previousQuantity, bottle.availableQuantity),
+        );
+      });
+
+      return nextQuantities;
+    });
+  }, [directSaleBottleDepositOptions]);
+
+  useEffect(() => {
+    setBottleDepositPrices((previousPrices) => {
+      const nextPrices: Record<string, string> = {};
+
+      directSaleBottleDepositOptions.forEach((bottle) => {
+        nextPrices[bottle.key] = previousPrices[bottle.key] ?? "0.00";
+      });
+
+      return nextPrices;
+    });
+  }, [directSaleBottleDepositOptions]);
+
+  const selectedBottleReturnEntries = useMemo(
+    () =>
+      directSaleBottleOptions
+        .map((bottle) => {
+          const quantity = bottleReturnQuantities[bottle.key] ?? 0;
+          if (quantity <= 0) return null;
+          return {
+            ...bottle,
+            quantity,
+          };
+        })
+        .filter(
+          (
+            bottle,
+          ): bottle is DirectSaleBottleReturnOption & { quantity: number } =>
+            bottle !== null,
+        ),
+    [bottleReturnQuantities, directSaleBottleOptions],
+  );
+  const selectedBottleDepositEntries = useMemo(
+    () =>
+      directSaleBottleDepositOptions
+        .map((bottle) => {
+          const quantity = bottleDepositQuantities[bottle.key] ?? 0;
+          if (quantity <= 0) return null;
+          const priceDraft = bottleDepositPrices[bottle.key] ?? "0.00";
+          const unitPrice = toPriceValue(priceDraft);
+          return {
+            ...bottle,
+            quantity,
+            priceDraft,
+            unitPrice: unitPrice ?? Number.NaN,
+          };
+        })
+        .filter(
+          (
+            bottle,
+          ): bottle is DirectSaleBottleDepositOption & {
+            quantity: number;
+            priceDraft: string;
+            unitPrice: number;
+          } => bottle !== null,
+        ),
+    [
+      bottleDepositPrices,
+      bottleDepositQuantities,
+      directSaleBottleDepositOptions,
+    ],
+  );
 
   const groupedProducts = useMemo(() => {
     return products.reduce(
       (acc, product) => {
-        const group = getProductGroup(product.type);
+        const group = getProductGroup(product);
         acc[group].push(product);
         return acc;
       },
       {
         wholesale: [] as ServerProduct[],
         refill: [] as ServerProduct[],
+        assets: [] as ServerProduct[],
         other: [] as ServerProduct[],
       },
     );
   }, [products]);
 
   const totalItems = useMemo(() => {
-    return Object.values(quantities).reduce((sum, q) => sum + q, 0);
-  }, [quantities]);
+    const productCount = Object.values(quantities).reduce(
+      (sum, q) => sum + q,
+      0,
+    );
+    const bottleDepositCount = selectedBottleDepositEntries.reduce(
+      (sum, bottle) => sum + bottle.quantity,
+      0,
+    );
+    const bottleReturnCount = selectedBottleReturnEntries.reduce(
+      (sum, bottle) => sum + bottle.quantity,
+      0,
+    );
+    return (
+      productCount +
+      selectedAssetEntries.length +
+      bottleDepositCount +
+      bottleReturnCount
+    );
+  }, [
+    quantities,
+    selectedAssetEntries.length,
+    selectedBottleDepositEntries,
+    selectedBottleReturnEntries,
+  ]);
 
   const subtotal = useMemo(() => {
     return selectedProducts.reduce((sum, product) => {
@@ -1319,6 +1964,115 @@ const DirectSales: React.FC = () => {
 
   const vat = useMemo(() => subtotal * 0.05, [subtotal]);
   const totalAmount = useMemo(() => subtotal + vat, [subtotal, vat]);
+  const totalAssetActionValue = useMemo(() => {
+    return selectedAssetEntries.reduce((sum, asset) => {
+      return Number.isFinite(asset.price) ? sum + asset.price : sum;
+    }, 0);
+  }, [selectedAssetEntries]);
+  const totalBottleDepositValue = useMemo(
+    () =>
+      selectedBottleDepositEntries.reduce((sum, bottle) => {
+        return Number.isFinite(bottle.unitPrice)
+          ? sum + bottle.unitPrice * bottle.quantity
+          : sum;
+      }, 0),
+    [selectedBottleDepositEntries],
+  );
+  const totalBottleReturnCount = useMemo(
+    () =>
+      selectedBottleReturnEntries.reduce(
+        (sum, bottle) => sum + bottle.quantity,
+        0,
+      ),
+    [selectedBottleReturnEntries],
+  );
+  const totalBottleDepositCount = useMemo(
+    () =>
+      selectedBottleDepositEntries.reduce(
+        (sum, bottle) => sum + bottle.quantity,
+        0,
+      ),
+    [selectedBottleDepositEntries],
+  );
+  const totalActionSelections = useMemo(
+    () =>
+      selectedAssetEntries.length +
+      totalBottleDepositCount +
+      totalBottleReturnCount,
+    [
+      selectedAssetEntries.length,
+      totalBottleDepositCount,
+      totalBottleReturnCount,
+    ],
+  );
+  const parsedCreditCollectionAmount = useMemo(
+    () => parseMoneyDraft(creditCollectionAmount),
+    [creditCollectionAmount],
+  );
+  const hasCreditCollectionDraft = useMemo(
+    () =>
+      parsedCreditCollectionAmount !== null && parsedCreditCollectionAmount > 0,
+    [parsedCreditCollectionAmount],
+  );
+  const actionSummaryText = useMemo(() => {
+    const sentences: string[] = [];
+    const parts: string[] = [];
+
+    if (selectedAssetEntries.length > 0) {
+      parts.push(
+        `${selectedAssetEntries.length} asset action${selectedAssetEntries.length === 1 ? "" : "s"}`,
+      );
+    }
+
+    if (totalBottleDepositCount > 0) {
+      parts.push(
+        `${totalBottleDepositCount} bottle deposit${totalBottleDepositCount === 1 ? "" : "s"}`,
+      );
+    }
+
+    if (totalBottleReturnCount > 0) {
+      parts.push(
+        `${totalBottleReturnCount} bottle return${totalBottleReturnCount === 1 ? "" : "s"}`,
+      );
+    }
+
+    if (parts.length > 0) {
+      const summary =
+        parts.length === 1
+          ? parts[0]
+          : `${parts.slice(0, -1).join(", ")} and ${parts[parts.length - 1]}`;
+
+      const recordedActionValue =
+        totalAssetActionValue + totalBottleDepositValue;
+
+      sentences.push(
+        `${summary} will be recorded outside the VAT total. Recorded deposit value: AED ${recordedActionValue.toFixed(2)}.`,
+      );
+    }
+    if (hasCreditCollectionDraft && parsedCreditCollectionAmount !== null) {
+      sentences.push(
+        `Credit collection recorded: AED ${parsedCreditCollectionAmount.toFixed(2)}.`,
+      );
+    }
+
+    return sentences.join(" ");
+  }, [
+    hasCreditCollectionDraft,
+    parsedCreditCollectionAmount,
+    selectedAssetEntries.length,
+    totalAssetActionValue,
+    totalBottleDepositValue,
+    totalBottleDepositCount,
+    totalBottleReturnCount,
+  ]);
+  const hasSaleProducts = useMemo(() => {
+    return (
+      groupedProducts.refill.length > 0 ||
+      groupedProducts.wholesale.length > 0 ||
+      groupedProducts.assets.length > 0 ||
+      groupedProducts.other.length > 0
+    );
+  }, [groupedProducts]);
   const selectedSiteLabel = useMemo(() => {
     if (!customerData || !selectedSite) return null;
     const siteIndex = customerData.sites.findIndex(
@@ -1327,7 +2081,146 @@ const DirectSales: React.FC = () => {
     return getSiteLabel(selectedSite, siteIndex >= 0 ? siteIndex : 0);
   }, [customerData, selectedSite]);
 
-  const isFormValid = selectedProducts.length > 0 && Boolean(customerData?.id);
+  const handleToggleAssetSelection = useCallback((assetKey: string) => {
+    setAssetDrafts((previousDrafts) => {
+      const currentDraft = previousDrafts[assetKey];
+      if (!currentDraft) return previousDrafts;
+      return {
+        ...previousDrafts,
+        [assetKey]: {
+          ...currentDraft,
+          selected: !currentDraft.selected,
+        },
+      };
+    });
+  }, []);
+
+  const handleChangeAssetPrice = useCallback(
+    (assetKey: string, value: string) => {
+      const sanitizedValue = sanitizeMoneyInput(value);
+      setAssetDrafts((previousDrafts) => {
+        const currentDraft = previousDrafts[assetKey];
+        if (!currentDraft) return previousDrafts;
+        return {
+          ...previousDrafts,
+          [assetKey]: {
+            ...currentDraft,
+            price: sanitizedValue,
+          },
+        };
+      });
+    },
+    [],
+  );
+  const handleChangeBottleReturnQuantity = useCallback(
+    (bottleKey: string, delta: number) => {
+      const bottle = directSaleBottleOptions.find(
+        (entry) => entry.key === bottleKey,
+      );
+      const maxQuantity = bottle?.availableQuantity ?? Infinity;
+
+      setBottleReturnQuantities((previousQuantities) => {
+        const currentQuantity = previousQuantities[bottleKey] ?? 0;
+        const nextQuantity = Math.max(0, currentQuantity + delta);
+        const cappedQuantity = Number.isFinite(maxQuantity)
+          ? Math.min(nextQuantity, maxQuantity)
+          : nextQuantity;
+        return {
+          ...previousQuantities,
+          [bottleKey]: cappedQuantity,
+        };
+      });
+    },
+    [directSaleBottleOptions],
+  );
+  const handleChangeBottleDepositQuantity = useCallback(
+    (bottleKey: string, delta: number) => {
+      const bottle = directSaleBottleDepositOptions.find(
+        (entry) => entry.key === bottleKey,
+      );
+      const maxQuantity = bottle?.availableQuantity ?? Infinity;
+
+      setBottleDepositQuantities((previousQuantities) => {
+        const currentQuantity = previousQuantities[bottleKey] ?? 0;
+        const nextQuantity = Math.max(0, currentQuantity + delta);
+        const cappedQuantity = Number.isFinite(maxQuantity)
+          ? Math.min(nextQuantity, maxQuantity)
+          : nextQuantity;
+        return {
+          ...previousQuantities,
+          [bottleKey]: cappedQuantity,
+        };
+      });
+    },
+    [directSaleBottleDepositOptions],
+  );
+  const handleChangeBottleDepositPrice = useCallback(
+    (bottleKey: string, value: string) => {
+      const sanitizedValue = sanitizeMoneyInput(value);
+      setBottleDepositPrices((previousPrices) => ({
+        ...previousPrices,
+        [bottleKey]: sanitizedValue,
+      }));
+    },
+    [],
+  );
+  const handleChangeCreditCollectionAmount = useCallback((value: string) => {
+    setCreditCollectionAmount(sanitizeMoneyInput(value));
+  }, []);
+
+  const buildDirectSaleDraft = useCallback(
+    (): DirectSaleDraft => ({
+      products: productsForDraft,
+      quantities,
+      customerData,
+      selectedSite,
+      paymentMethod,
+      checkDetails,
+      remark,
+      location,
+      truckBulkItems,
+      truckAssets,
+      heldItems,
+      assetDrafts,
+      bottleDepositPrices,
+      bottleDepositQuantities,
+      bottleReturnQuantities,
+      creditCollectionAmount,
+      creditCollectionRemark,
+    }),
+    [
+      assetDrafts,
+      bottleDepositPrices,
+      bottleDepositQuantities,
+      bottleReturnQuantities,
+      checkDetails,
+      creditCollectionAmount,
+      creditCollectionRemark,
+      customerData,
+      heldItems,
+      location,
+      paymentMethod,
+      productsForDraft,
+      quantities,
+      remark,
+      selectedSite,
+      truckAssets,
+      truckBulkItems,
+    ],
+  );
+
+  const handleContinueToBottlesAssets = useCallback(() => {
+    if (!customerData?.id) {
+      showWarningAlert("Customer Required", "Select a customer first.");
+      return;
+    }
+
+    setDirectSaleDraft(buildDirectSaleDraft());
+    router.push({
+      pathname: "/(root)/(tabs)/direct-sale-bottles-assets",
+      params: { backTo: "direct-sales" },
+    });
+  }, [buildDirectSaleDraft, customerData?.id, router, setDirectSaleDraft]);
 
   const renderProductCard = (
     product: ServerProduct,
@@ -1336,7 +2229,7 @@ const DirectSales: React.FC = () => {
   ) => {
     const quantity = quantities[product.id] || 0;
     const isSelected = quantity > 0;
-    const stockLimit = getCoolerStockLimit(product);
+    const stockLimit = getSelectableProductStock(product);
     const hasStockLimit = Number.isFinite(stockLimit);
     const isMaxStock = hasStockLimit && quantity >= stockLimit;
     const groupCardStyle =
@@ -1344,17 +2237,20 @@ const DirectSales: React.FC = () => {
         ? styles.productCardRefill
         : group === "wholesale"
           ? styles.productCardWholesale
-          : styles.productCardOther;
+          : group === "assets"
+            ? styles.productCardAssets
+            : styles.productCardOther;
+    const unitPrice = product.pricePerUnit;
 
     const displayPrice = product.originalPrice ? (
       <View style={styles.priceContainer}>
         <Text style={styles.productPriceOriginal}>
-          AED {product.originalPrice}
+          AED {product.originalPrice.toFixed(2)}
         </Text>
-        <Text style={styles.productPrice}>AED {product.pricePerUnit}</Text>
+        <Text style={styles.productPrice}>AED {unitPrice.toFixed(2)}</Text>
       </View>
     ) : (
-      <Text style={styles.productPrice}>AED {product.pricePerUnit}</Text>
+      <Text style={styles.productPrice}>AED {unitPrice.toFixed(2)}</Text>
     );
 
     return (
@@ -1366,21 +2262,58 @@ const DirectSales: React.FC = () => {
           isSelected && styles.productCardSelected,
         ]}
       >
-        <View style={styles.productInfo}>
-          <View style={styles.productNameContainer}>
-            <Text style={styles.productName} numberOfLines={1}>
-              {product.label}
+        <View style={styles.productMain}>
+          <View
+            style={[
+              styles.productIconBox,
+              isSelected && styles.productIconBoxSelected,
+            ]}
+          >
+            {product.image_url ? (
+              <Image
+                source={{ uri: product.image_url }}
+                style={styles.productImage}
+                resizeMode="cover"
+              />
+            ) : (
+              <Ionicons
+                name={getProductIconName(product.type)}
+                size={18}
+                color={isSelected ? "#FFFFFF" : "#1D4ED8"}
+              />
+            )}
+          </View>
+
+          <View style={styles.productInfo}>
+            <View style={styles.productNameContainer}>
+              <Text style={styles.productName} numberOfLines={2}>
+                {product.label}
+              </Text>
+              {product.badge && (
+                <View style={styles.badge}>
+                  <Text style={styles.badgeText}>{product.badge}</Text>
+                </View>
+              )}
+            </View>
+            <Text style={styles.productMetaText}>
+              {group === "refill"
+                ? "Refill item"
+                : group === "wholesale"
+                  ? isEmptyBottleSaleProduct(product)
+                    ? "Empty bottle"
+                    : "Retail item"
+                  : group === "assets"
+                    ? "Asset item"
+                    : "Other product"}
+              {product.unit ? ` - ${product.unit}` : ""}
             </Text>
-            {product.badge && (
-              <View style={styles.badge}>
-                <Text style={styles.badgeText}>{product.badge}</Text>
+            {displayPrice}
+            {hasStockLimit && (
+              <View style={styles.stockBadge}>
+                <Text style={styles.stockText}>Stock: {stockLimit}</Text>
               </View>
             )}
           </View>
-          {displayPrice}
-          {hasStockLimit && (
-            <Text style={styles.productStockText}>Stock: {stockLimit}</Text>
-          )}
         </View>
 
         <View style={styles.quantityControl}>
@@ -1420,306 +2353,437 @@ const DirectSales: React.FC = () => {
     );
   };
 
-  const handleConfirmSale = useCallback(async () => {
-    if (selectedProducts.length === 0) {
-      showWarningAlert("No Items", "Please select at least one product.");
-      return;
-    }
+  const renderAssetActionCard = (asset: DirectSaleAssetOption) => {
+    const draft = assetDrafts[asset.key] || {
+      selected: false,
+      price: asset.defaultPrice.toFixed(2),
+    };
+    const isSelected = draft.selected;
+    const isHeldAsset = isReturnOnlyAsset(asset);
+    const imageUrl = asset.imageUrl;
 
-    if (!customerData?.phone?.trim()) {
-      showWarningAlert("Customer Required", "Select a customer first.");
-      return;
-    }
+    return (
+      <View
+        key={asset.key}
+        style={[
+          styles.assetActionCard,
+          isHeldAsset
+            ? styles.assetActionCardHeld
+            : styles.assetActionCardTruck,
+          isSelected && styles.assetActionCardSelected,
+          isSelected &&
+            (isHeldAsset
+              ? styles.assetActionCardSelectedHeld
+              : styles.assetActionCardSelectedTruck),
+        ]}
+      >
+        <View style={styles.assetActionTopRow}>
+          <View style={styles.assetActionMedia}>
+            {imageUrl ? (
+              <Image
+                source={{ uri: imageUrl }}
+                style={styles.assetActionImage}
+                resizeMode="cover"
+              />
+            ) : (
+              <Ionicons
+                name="cube-outline"
+                size={18}
+                color={isSelected ? "#FFFFFF" : "#1D4ED8"}
+              />
+            )}
+          </View>
 
-    if (!customerData?.id) {
-      showWarningAlert(
-        "Customer Required",
-        "Direct sale requires an existing customer. Search or create a customer first.",
-      );
-      return;
-    }
+          <View style={styles.assetActionContent}>
+            <View style={styles.assetActionHeaderRow}>
+              <Text style={styles.assetActionLabel} numberOfLines={2}>
+                {asset.label}
+              </Text>
+              <View
+                style={[
+                  styles.assetActionRuleBadge,
+                  isHeldAsset
+                    ? styles.assetActionRuleBadgeHeld
+                    : styles.assetActionRuleBadgeDeposit,
+                ]}
+              >
+                <Ionicons
+                  name={
+                    isHeldAsset
+                      ? "return-up-back-outline"
+                      : "arrow-forward-outline"
+                  }
+                  size={12}
+                  color={isHeldAsset ? "#047857" : "#6D28D9"}
+                />
+                <Text
+                  style={[
+                    styles.assetActionRuleText,
+                    isHeldAsset
+                      ? styles.assetActionRuleTextHeld
+                      : styles.assetActionRuleTextDeposit,
+                  ]}
+                >
+                  {isHeldAsset ? "Return" : "Deposit"}
+                </Text>
+              </View>
+            </View>
 
-    setIsSubmitting(true);
-    setApiError(null);
-    try {
-      const retails: NonNullable<SaleRequestBody["retails"]> = [];
-      const refills: NonNullable<SaleRequestBody["refills"]> = [];
-      const assets: NonNullable<SaleRequestBody["assets"]> = [];
+            <View style={styles.modalActionMetaRow}>
+              <View
+                style={[
+                  styles.modalActionMetaPill,
+                  asset.source === "held"
+                    ? styles.modalActionMetaPillHeld
+                    : styles.assetSourceBadgeTruck,
+                ]}
+              >
+                <Text
+                  style={[
+                    styles.modalActionMetaPillText,
+                    asset.source === "held"
+                      ? styles.modalActionMetaPillTextHeld
+                      : styles.assetSourceBadgeTextTruck,
+                  ]}
+                >
+                  {getAssetSourceLabel(asset.source)}
+                </Text>
+              </View>
+              <View style={styles.modalActionMetaPill}>
+                <Text style={styles.modalActionMetaPillText}>
+                  {asset.category || "Asset"}
+                </Text>
+              </View>
+              {asset.serial ? (
+                <View style={styles.modalActionMetaPill}>
+                  <Text
+                    style={styles.modalActionMetaPillText}
+                    numberOfLines={1}
+                  >
+                    S/N {asset.serial}
+                  </Text>
+                </View>
+              ) : null}
+            </View>
+          </View>
+        </View>
 
-      selectedProducts.forEach((product) => {
-        const quantity = quantities[product.id] || 0;
-        if (quantity <= 0) return;
+        <View style={styles.assetActionControls}>
+          <View style={styles.assetActionFooterRow}>
+            <View style={styles.assetPriceEditor}>
+              <Text style={styles.assetPriceLabel}>Value</Text>
+              <View style={styles.assetPriceInputRow}>
+                <Text style={styles.assetPricePrefix}>AED</Text>
+                <TextInput
+                  style={styles.assetPriceInput}
+                  value={draft.price}
+                  onChangeText={(value) =>
+                    handleChangeAssetPrice(asset.key, value)
+                  }
+                  placeholder="0.00"
+                  placeholderTextColor="#94A3B8"
+                  keyboardType="decimal-pad"
+                />
+              </View>
+            </View>
 
-        const unitPrice = Number(product.pricePerUnit);
-        if (!Number.isFinite(unitPrice)) return;
+            <TouchableOpacity
+              style={[
+                styles.assetIncludeButton,
+                isSelected && styles.assetIncludeButtonActive,
+              ]}
+              onPress={() => handleToggleAssetSelection(asset.key)}
+              activeOpacity={0.85}
+            >
+              <Ionicons
+                name={isSelected ? "checkmark-circle" : "add-circle-outline"}
+                size={16}
+                color={isSelected ? "#FFFFFF" : "#1D4ED8"}
+              />
+              <Text
+                style={[
+                  styles.assetIncludeButtonText,
+                  isSelected && styles.assetIncludeButtonTextActive,
+                ]}
+              >
+                {isSelected ? "Added" : "Add"}
+              </Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      </View>
+    );
+  };
+  const renderBottleDepositCard = (bottle: DirectSaleBottleDepositOption) => {
+    const quantity = bottleDepositQuantities[bottle.key] ?? 0;
+    const price = bottleDepositPrices[bottle.key] ?? "0.00";
+    const isSelected = quantity > 0;
+    const isMaxQuantity = quantity >= bottle.availableQuantity;
 
-        const lineType = getSaleLineType(product.type);
-        if (lineType === "refill") {
-          refills.push({
-            filledBottleId: product.itemId,
-            filledQuantity: quantity,
-            price: unitPrice,
-          });
-          return;
-        }
+    return (
+      <View
+        key={bottle.key}
+        style={[
+          styles.productCard,
+          styles.productCardRefill,
+          styles.modalActionCardCompact,
+          styles.modalActionCardStacked,
+          isSelected && styles.bottleDepositCardSelected,
+        ]}
+      >
+        <View style={[styles.productMain, styles.modalActionMainCompact]}>
+          <View
+            style={[
+              styles.productIconBox,
+              styles.modalActionIconBoxCompact,
+              isSelected && styles.bottleDepositIconBoxSelected,
+            ]}
+          >
+            {bottle.imageUrl ? (
+              <Image
+                source={{ uri: bottle.imageUrl }}
+                style={styles.productImage}
+                resizeMode="cover"
+              />
+            ) : (
+              <Ionicons
+                name="water-outline"
+                size={18}
+                color={isSelected ? "#FFFFFF" : "#0286FF"}
+              />
+            )}
+          </View>
 
-        retails.push({
-          id: product.itemId,
-          quantity,
-          price: unitPrice,
-        });
-      });
+          <View style={styles.productInfo}>
+            <View style={styles.modalActionTitleRow}>
+              <Text style={styles.modalActionTitle} numberOfLines={2}>
+                {bottle.label}
+              </Text>
+              <View style={styles.bottleDepositBadge}>
+                <Text style={styles.bottleDepositBadgeText}>Deposit</Text>
+              </View>
+            </View>
 
-      if (retails.length === 0 && refills.length === 0 && assets.length === 0) {
-        showWarningAlert(
-          "Invalid Cart",
-          "Please select valid products with quantities greater than zero.",
-        );
-        return;
-      }
+            <View style={styles.modalActionMetaRow}>
+              <View style={styles.modalActionMetaPill}>
+                <Text style={styles.modalActionMetaPillText}>On truck</Text>
+              </View>
+              {bottle.unit ? (
+                <View style={styles.modalActionMetaPill}>
+                  <Text style={styles.modalActionMetaPillText}>
+                    {bottle.unit}
+                  </Text>
+                </View>
+              ) : null}
+              <View style={styles.modalActionMetaPill}>
+                <Text style={styles.modalActionMetaPillText}>
+                  Avail {bottle.availableQuantity}
+                </Text>
+              </View>
+            </View>
+          </View>
+        </View>
 
-      const saleData: SaleRequestBody = {
-        customerId: customerData.id,
-        paymentMethod,
-        totals: {
-          subtotal: Number(subtotal.toFixed(2)),
-          vat: Number(vat.toFixed(2)),
-          total: Number(totalAmount.toFixed(2)),
-        },
-      };
+        <View style={styles.assetActionControls}>
+          <View style={styles.assetActionFooterRow}>
+            <View style={styles.assetPriceEditor}>
+              <Text style={styles.assetPriceLabel}>Value</Text>
+              <View style={styles.assetPriceInputRow}>
+                <Text style={styles.assetPricePrefix}>AED</Text>
+                <TextInput
+                  style={styles.assetPriceInput}
+                  value={price}
+                  onChangeText={(value) =>
+                    handleChangeBottleDepositPrice(bottle.key, value)
+                  }
+                  placeholder="0.00"
+                  placeholderTextColor="#94A3B8"
+                  keyboardType="decimal-pad"
+                />
+              </View>
+            </View>
 
-      const normalizedRemark = remark.trim();
-      if (normalizedRemark) {
-        saleData.remark = normalizedRemark;
-      }
-      const selectedSiteId = selectedSite?.id?.trim();
-      if (selectedSiteId) {
-        saleData.siteId = selectedSiteId;
-      }
-      if (retails.length > 0) {
-        saleData.retails = retails;
-      }
-      if (refills.length > 0) {
-        saleData.refills = refills;
-      }
-      if (assets.length > 0) {
-        saleData.assets = assets;
-      }
-      if (paymentMethod === "check") {
-        saleData.check = {
-          ...(checkDetails.checkNumber.trim()
-            ? { checkNumber: checkDetails.checkNumber.trim() }
-            : {}),
-          ...(checkDetails.checkDate.trim()
-            ? { checkDate: checkDetails.checkDate.trim() }
-            : {}),
-          ...(checkDetails.bankName.trim()
-            ? { bankName: checkDetails.bankName.trim() }
-            : {}),
-          ...(checkDetails.accountNumber.trim()
-            ? { accountNumber: checkDetails.accountNumber.trim() }
-            : {}),
-        };
-      }
+            <View
+              style={[
+                styles.quantityControl,
+                styles.modalActionQuantityControlCompact,
+              ]}
+            >
+              <TouchableOpacity
+                style={[
+                  styles.quantityButton,
+                  styles.modalActionQuantityButtonCompact,
+                  quantity === 0 && styles.quantityButtonDisabled,
+                ]}
+                onPress={() =>
+                  handleChangeBottleDepositQuantity(bottle.key, -1)
+                }
+                disabled={quantity === 0}
+                activeOpacity={0.8}
+              >
+                <Ionicons
+                  name="remove"
+                  size={18}
+                  color={quantity === 0 ? "#CBD5E1" : "#0286FF"}
+                />
+              </TouchableOpacity>
+              <Text
+                style={[
+                  styles.quantityText,
+                  styles.modalActionQuantityTextCompact,
+                ]}
+              >
+                {quantity}
+              </Text>
+              <TouchableOpacity
+                style={[
+                  styles.quantityButton,
+                  styles.modalActionQuantityButtonCompact,
+                  isMaxQuantity && styles.quantityButtonDisabled,
+                ]}
+                onPress={() => handleChangeBottleDepositQuantity(bottle.key, 1)}
+                disabled={isMaxQuantity}
+                activeOpacity={0.8}
+              >
+                <Ionicons
+                  name="add"
+                  size={18}
+                  color={isMaxQuantity ? "#CBD5E1" : "#0286FF"}
+                />
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      </View>
+    );
+  };
+  const renderBottleReturnCard = (bottle: DirectSaleBottleReturnOption) => {
+    const quantity = bottleReturnQuantities[bottle.key] ?? 0;
+    const isSelected = quantity > 0;
+    const isMaxQuantity = quantity >= bottle.availableQuantity;
 
-      const response = await authenticatedFetch(
-        `${API_BASE_URL}/adhoc-delivery`,
-        {
-          method: "POST",
-          body: JSON.stringify(saleData),
-        },
-      );
-      const parseResult =
-        await parseApiResponseWithSoftError<DriverHistoryDetail>(response);
-      if (!parseResult.ok) {
-        setApiError(parseResult.error);
-        return;
-      }
+    return (
+      <View
+        key={bottle.key}
+        style={[
+          styles.productCard,
+          styles.productCardRefill,
+          styles.modalActionCardCompact,
+          isSelected && styles.bottleReturnCardSelected,
+        ]}
+      >
+        <View style={[styles.productMain, styles.modalActionMainCompact]}>
+          <View
+            style={[
+              styles.productIconBox,
+              styles.modalActionIconBoxCompact,
+              isSelected && styles.productIconBoxSelected,
+            ]}
+          >
+            {bottle.imageUrl ? (
+              <Image
+                source={{ uri: bottle.imageUrl }}
+                style={styles.productImage}
+                resizeMode="cover"
+              />
+            ) : (
+              <Ionicons
+                name="water-outline"
+                size={18}
+                color={isSelected ? "#FFFFFF" : "#0F766E"}
+              />
+            )}
+          </View>
 
-      const data = normalizeDriverHistoryDetail(parseResult.data);
-      if (!data) {
-        setApiError("Invalid response from server.");
-        return;
-      }
+          <View style={styles.productInfo}>
+            <View style={styles.modalActionTitleRow}>
+              <Text style={styles.modalActionTitle} numberOfLines={2}>
+                {bottle.label}
+              </Text>
+              <View style={styles.bottleReturnBadge}>
+                <Text style={styles.bottleReturnBadgeText}>Return</Text>
+              </View>
+            </View>
 
-      // Prepare cart items from the confirmed sale for receipt display.
-      clearCart();
-      const saleDetail = data.sale;
-      const saleItems = Array.isArray(saleDetail?.items)
-        ? saleDetail.items
-        : [];
-      const cartItemsFromSale =
-        saleItems.length > 0
-          ? saleItems.map((item) => ({
-              id: item.itemId || item.id,
-              name: item.label,
-              image: {
-                uri:
-                  resolveResourceUrl(item.imageUrl) ||
-                  "https://via.placeholder.com/150",
-              },
-              price: item.unitPrice,
-              quantity: item.quantity,
-              currency: "AED" as const,
-              category: item.itemType,
-            }))
-          : selectedProducts.map((product) => ({
-              id: product.id,
-              name: product.label,
-              image: {
-                uri:
-                  resolveResourceUrl(product.image_url) ||
-                  "https://via.placeholder.com/150",
-              },
-              price: product.pricePerUnit,
-              quantity: quantities[product.id],
-              currency: "AED" as const,
-              category: product.type || "",
-            }));
+            <View style={styles.modalActionMetaRow}>
+              <View
+                style={[
+                  styles.modalActionMetaPill,
+                  styles.modalActionMetaPillHeld,
+                ]}
+              >
+                <Text
+                  style={[
+                    styles.modalActionMetaPillText,
+                    styles.modalActionMetaPillTextHeld,
+                  ]}
+                >
+                  Held
+                </Text>
+              </View>
+              {bottle.unit ? (
+                <View style={styles.modalActionMetaPill}>
+                  <Text style={styles.modalActionMetaPillText}>
+                    {bottle.unit}
+                  </Text>
+                </View>
+              ) : null}
+              <View style={styles.modalActionMetaPill}>
+                <Text style={styles.modalActionMetaPillText}>
+                  Held {bottle.availableQuantity}
+                </Text>
+              </View>
+            </View>
+          </View>
+        </View>
 
-      const formattedServerAddress = formatDeliveryAddress(data.address);
-      const saleId = getDriverHistorySaleId(data);
-      const invoiceNumber = getDriverHistoryInvoiceDisplayId(data);
-      const orderNumber = getDriverHistoryPrimaryId(data);
-      const responsePaymentMethod =
-        saleDetail?.payment?.method || paymentMethod;
-      const saleTotal = saleDetail?.totals.total ?? totalAmount;
-      const orderAddress =
-        (formattedServerAddress !== "No address"
-          ? formattedServerAddress
-          : "") ||
-        formatSiteAddress(selectedSite) ||
-        selectedSite?.siteName ||
-        location?.address ||
-        "N/A";
-
-      const newOrder: Order = {
-        id: data.id,
-        order_number: orderNumber,
-        display_id: data.displayId || undefined,
-        invoice_number: invoiceNumber,
-        status: "delivered",
-        date: data.createdAt,
-        customer_id: data.customer.id,
-        customer_name: data.customer.name,
-        customer_phone: data.customer.phone,
-        customer_email: data.customer.email ?? undefined,
-        customer_address: orderAddress,
-        latitude: data.address.latitude ?? undefined,
-        longitude: data.address.longitude ?? undefined,
-        requires_signature: Boolean(data.customer.requires_signature),
-        requires_immediate_invoice: Boolean(
-          data.customer.requires_immediate_invoice,
-        ),
-        total_amount: saleTotal,
-        payment_method: responsePaymentMethod,
-        products:
-          saleItems.length > 0
-            ? saleItems.map((item) => ({
-                id: item.itemId || item.id,
-                name: item.label,
-                quantity: item.quantity,
-                type: item.itemType,
-                category: item.itemType,
-              }))
-            : selectedProducts.map((product) => ({
-                id: product.id,
-                name: product.label,
-                quantity: quantities[product.id],
-                type: product.type,
-                category: product.type,
-              })),
-      };
-
-      // Add order to completedOrders and set cart items in one update
-      const store = useOrderStore.getState();
-      useOrderStore.setState({
-        completedOrders: [...store.completedOrders, newOrder],
-        cartItems: cartItemsFromSale,
-      });
-
-      // Set selected order and payment method for receipt page
-      selectOrder(newOrder.id);
-      setGlobalPaymentMethod(responsePaymentMethod);
-      setLastConfirmPaymentResponse({
-        orderId: newOrder.id,
-        sale_id: saleId,
-        invoice_number: invoiceNumber,
-        order_number: orderNumber,
-      });
-
-      // Document type from response: invoice_number present → Invoice, absent → Delivery Note
-      const hasInvoice = !!invoiceNumber;
-      const documentType = hasInvoice ? "Invoice" : "Delivery Note";
-
-      // Show success alert with option to view invoice/receipt
-      showSuccessAlert(
-        "Sale Confirmed",
-        responsePaymentMethod === "credit"
-          ? "Credit sale confirmed successfully."
-          : `Sale of AED ${saleTotal.toFixed(2)} confirmed successfully.`,
-        [
-          {
-            text: "Done",
-            style: "cancel",
-            onPress: () => {
-              setQuantities({});
-              setCustomerData(null);
-              applySelectedSite(null);
-              setCustomerSearchResults([]);
-              setCustomerSearchQuery("");
-              setHasSearchedCustomers(false);
-              setCreateCustomerName("");
-              setCreateCustomerPhone("");
-              setCustomerModalVisible(false);
-              setCustomerModalMode("create");
-              setCustomerCreatedInModal(false);
-              setCheckDetails({
-                checkNumber: "",
-                checkDate: "",
-                bankName: "",
-                accountNumber: "",
-              });
-              setRemark("");
-              setIsRemarkExpanded(false);
-              clearCart();
-              router.back();
-            },
-          },
-          {
-            text: `View ${documentType}`,
-            onPress: () => {
-              router.push("/(root)/(tabs)/payment-receipt");
-            },
-          },
-        ],
-      );
-    } catch (error) {
-      setApiError(
-        error instanceof Error ? error.message : "Failed to confirm sale.",
-      );
-    } finally {
-      setIsSubmitting(false);
-    }
-  }, [
-    selectedProducts,
-    customerData,
-    paymentMethod,
-    checkDetails,
-    remark,
-    quantities,
-    subtotal,
-    vat,
-    totalAmount,
-    selectedSite,
-    location?.address,
-    router,
-    clearCart,
-    applySelectedSite,
-    selectOrder,
-    setGlobalPaymentMethod,
-    setLastConfirmPaymentResponse,
-  ]);
+        <View
+          style={[
+            styles.quantityControl,
+            styles.modalActionQuantityControlCompact,
+          ]}
+        >
+          <TouchableOpacity
+            style={[
+              styles.quantityButton,
+              styles.modalActionQuantityButtonCompact,
+              quantity === 0 && styles.quantityButtonDisabled,
+            ]}
+            onPress={() => handleChangeBottleReturnQuantity(bottle.key, -1)}
+            disabled={quantity === 0}
+            activeOpacity={0.8}
+          >
+            <Ionicons
+              name="remove"
+              size={18}
+              color={quantity === 0 ? "#CBD5E1" : "#0F766E"}
+            />
+          </TouchableOpacity>
+          <Text
+            style={[styles.quantityText, styles.modalActionQuantityTextCompact]}
+          >
+            {quantity}
+          </Text>
+          <TouchableOpacity
+            style={[
+              styles.quantityButton,
+              styles.modalActionQuantityButtonCompact,
+              isMaxQuantity && styles.quantityButtonDisabled,
+            ]}
+            onPress={() => handleChangeBottleReturnQuantity(bottle.key, 1)}
+            disabled={isMaxQuantity}
+            activeOpacity={0.8}
+          >
+            <Ionicons
+              name="add"
+              size={18}
+              color={isMaxQuantity ? "#CBD5E1" : "#0F766E"}
+            />
+          </TouchableOpacity>
+        </View>
+      </View>
+    );
+  };
 
   return (
     <View style={[styles.container, { paddingTop: insets.top }]}>
@@ -2158,17 +3222,18 @@ const DirectSales: React.FC = () => {
               <View style={styles.loadingContainer}>
                 <ActivityIndicator size="large" color="#1E40AF" />
               </View>
-            ) : products.length === 0 ? (
-              <>
-                <View style={styles.emptyContainer}>
-                  <Ionicons name="cube-outline" size={48} color="#E2E8F0" />
-                  <Text style={styles.emptyText}>No products available</Text>
-                </View>
-                <TruckAssetsPanel assets={truckAssets} />
-              </>
             ) : (
               <View style={styles.productsSections}>
-                {groupedProducts.refill.length > 0 && (
+                {!hasSaleProducts &&
+                directSaleAssetOptions.length === 0 &&
+                directSaleBottleOptions.length === 0 ? (
+                  <View style={styles.emptyContainer}>
+                    <Ionicons name="cube-outline" size={48} color="#E2E8F0" />
+                    <Text style={styles.emptyText}>No products available</Text>
+                  </View>
+                ) : null}
+
+                {groupedProducts.refill.length > 0 ? (
                   <View style={styles.productCategorySection}>
                     <View style={styles.productCategoryHeader}>
                       <View
@@ -2196,9 +3261,9 @@ const DirectSales: React.FC = () => {
                       )}
                     </View>
                   </View>
-                )}
+                ) : null}
 
-                {groupedProducts.wholesale.length > 0 && (
+                {groupedProducts.wholesale.length > 0 ? (
                   <View style={styles.productCategorySection}>
                     <View style={styles.productCategoryHeader}>
                       <View
@@ -2226,9 +3291,39 @@ const DirectSales: React.FC = () => {
                       )}
                     </View>
                   </View>
-                )}
+                ) : null}
 
-                {groupedProducts.other.length > 0 && (
+                {groupedProducts.assets.length > 0 ? (
+                  <View style={styles.productCategorySection}>
+                    <View style={styles.productCategoryHeader}>
+                      <View
+                        style={[
+                          styles.productCategoryBadge,
+                          styles.productCategoryBadgeAssets,
+                        ]}
+                      >
+                        <Ionicons
+                          name="cube-outline"
+                          size={14}
+                          color="#6D28D9"
+                        />
+                        <Text style={styles.productCategoryTitle}>Assets</Text>
+                      </View>
+                      <View style={styles.productCategoryCountBadge}>
+                        <Text style={styles.productCategoryCount}>
+                          {groupedProducts.assets.length}
+                        </Text>
+                      </View>
+                    </View>
+                    <View style={styles.productGrid}>
+                      {groupedProducts.assets.map((product, index) =>
+                        renderProductCard(product, index, "assets"),
+                      )}
+                    </View>
+                  </View>
+                ) : null}
+
+                {groupedProducts.other.length > 0 ? (
                   <View style={styles.productCategorySection}>
                     <View style={styles.productCategoryHeader}>
                       <View
@@ -2258,9 +3353,7 @@ const DirectSales: React.FC = () => {
                       )}
                     </View>
                   </View>
-                )}
-
-                <TruckAssetsPanel assets={truckAssets} />
+                ) : null}
               </View>
             )}
           </View>
@@ -2285,34 +3378,358 @@ const DirectSales: React.FC = () => {
                   AED {totalAmount.toFixed(2)}
                 </Text>
               </View>
+              {actionSummaryText ? (
+                <Text style={styles.summaryNote}>{actionSummaryText}</Text>
+              ) : null}
             </View>
 
             {/* Confirm Button */}
             <TouchableOpacity
               style={[
                 styles.confirmButton,
-                !isFormValid && styles.confirmButtonDisabled,
+                !customerData?.id && styles.confirmButtonDisabled,
               ]}
-              onPress={handleConfirmSale}
-              disabled={!isFormValid || isSubmitting}
+              onPress={handleContinueToBottlesAssets}
+              disabled={!customerData?.id}
               activeOpacity={0.8}
             >
-              {isSubmitting ? (
-                <ActivityIndicator size="small" color="#FFFFFF" />
-              ) : (
-                <>
-                  <Text style={styles.confirmText}>Confirm Sale</Text>
-                  <View style={styles.confirmArrow}>
-                    <Ionicons name="arrow-forward" size={18} color="#1E40AF" />
-                  </View>
-                </>
-              )}
+              <Text style={styles.confirmText}>Bottles & Assets</Text>
+              <View style={styles.confirmArrow}>
+                <Ionicons name="arrow-forward" size={18} color="#1E40AF" />
+              </View>
             </TouchableOpacity>
           </View>
 
           <View style={{ height: Math.max(insets.bottom, 20) + 80 }} />
         </ScrollView>
       </KeyboardAvoidingView>
+
+      <ActionModal
+        visible={assetActionsModalVisible}
+        title="Bottles & Assets"
+        onClose={() => setAssetActionsModalVisible(false)}
+        topInset={insets.top}
+        bottomInset={insets.bottom}
+      >
+        <ScrollView
+          style={styles.modalResultsList}
+          contentContainerStyle={styles.assetActionsModalContent}
+          keyboardShouldPersistTaps="handled"
+          showsVerticalScrollIndicator={false}
+        >
+          <View style={styles.assetActionsIntroCard}>
+            <Text style={styles.assetActionsIntroTitle}>
+              Separate from billed items
+            </Text>
+            <Text style={styles.assetActionsIntroText}>
+              Returns first. Deposits second.
+            </Text>
+          </View>
+
+          <View style={styles.assetActionsSummaryRow}>
+            <View style={styles.assetLauncherChip}>
+              <Text style={styles.assetLauncherChipText}>
+                {directSaleBottleOptions.length + heldAssetOptions.length}{" "}
+                return
+                {directSaleBottleOptions.length + heldAssetOptions.length === 1
+                  ? ""
+                  : "s"}
+              </Text>
+            </View>
+            <View style={styles.assetLauncherChip}>
+              <Text style={styles.assetLauncherChipText}>
+                {directSaleBottleDepositOptions.length} bottle deposit
+                {directSaleBottleDepositOptions.length === 1 ? "" : "s"}
+              </Text>
+            </View>
+            <View style={styles.assetLauncherChip}>
+              <Text style={styles.assetLauncherChipText}>
+                {depositAssetOptions.length} asset deposit
+                {depositAssetOptions.length === 1 ? "" : "s"}
+              </Text>
+            </View>
+            {totalActionSelections > 0 ? (
+              <View
+                style={[
+                  styles.assetLauncherChip,
+                  styles.assetLauncherChipSelected,
+                ]}
+              >
+                <Text
+                  style={[
+                    styles.assetLauncherChipText,
+                    styles.assetLauncherChipTextSelected,
+                  ]}
+                >
+                  {totalActionSelections} selected
+                </Text>
+              </View>
+            ) : null}
+            {hasCreditCollectionDraft ? (
+              <View
+                style={[
+                  styles.assetLauncherChip,
+                  styles.assetLauncherChipSelected,
+                ]}
+              >
+                <Text
+                  style={[
+                    styles.assetLauncherChipText,
+                    styles.assetLauncherChipTextSelected,
+                  ]}
+                >
+                  credit collection set
+                </Text>
+              </View>
+            ) : null}
+          </View>
+
+          <View style={styles.creditCollectionCard}>
+            <View style={styles.creditCollectionHeader}>
+              <Text style={styles.creditCollectionTitle}>
+                Credit Collection
+              </Text>
+              <Text style={styles.creditCollectionText}>
+                Record any recovered balance on this stop.
+              </Text>
+            </View>
+
+            <View style={styles.creditCollectionFields}>
+              <View style={styles.creditCollectionField}>
+                <Text style={styles.creditCollectionLabel}>Amount</Text>
+                <View style={styles.assetPriceInputRow}>
+                  <Text style={styles.assetPricePrefix}>AED</Text>
+                  <TextInput
+                    style={styles.assetPriceInput}
+                    value={creditCollectionAmount}
+                    onChangeText={handleChangeCreditCollectionAmount}
+                    placeholder="0.00"
+                    placeholderTextColor="#94A3B8"
+                    keyboardType="decimal-pad"
+                  />
+                </View>
+              </View>
+
+              <View style={styles.creditCollectionField}>
+                <Text style={styles.creditCollectionLabel}>Remark</Text>
+                <TextInput
+                  style={styles.creditCollectionRemarkInput}
+                  value={creditCollectionRemark}
+                  onChangeText={setCreditCollectionRemark}
+                  placeholder="Reference or note"
+                  placeholderTextColor="#94A3B8"
+                />
+              </View>
+            </View>
+          </View>
+
+          <View style={styles.assetActionsSection}>
+            <View style={styles.assetActionsSectionHeader}>
+              <View style={styles.assetReturnBadge}>
+                <Ionicons
+                  name="return-up-back-outline"
+                  size={14}
+                  color="#0F766E"
+                />
+                <Text style={styles.assetReturnBadgeText}>Returns</Text>
+              </View>
+              <View style={styles.productCategoryCountBadge}>
+                <Text style={styles.productCategoryCount}>
+                  {directSaleBottleOptions.length + heldAssetOptions.length}
+                </Text>
+              </View>
+            </View>
+
+            <Text style={styles.assetSectionHelperText}>
+              {customerData
+                ? "Collected on this stop."
+                : "Select a customer to load returns."}
+            </Text>
+
+            {directSaleBottleOptions.length === 0 &&
+            heldAssetOptions.length === 0 &&
+            !heldItemsError &&
+            customerData ? (
+              <View style={styles.heldItemsInfoCard}>
+                <Ionicons
+                  name="checkmark-circle-outline"
+                  size={16}
+                  color="#0F766E"
+                />
+                <Text style={styles.heldItemsInfoText}>
+                  No held returns for this customer.
+                </Text>
+              </View>
+            ) : null}
+
+            <View style={styles.assetActionSubsection}>
+              <Text style={styles.assetActionSubsectionTitle}>
+                Bottle Returns
+              </Text>
+              <Text style={styles.assetActionSubsectionText}>
+                Customer-held bottles.
+              </Text>
+
+              {directSaleBottleOptions.length > 0 ? (
+                <View style={styles.productGrid}>
+                  {directSaleBottleOptions.map((bottle) =>
+                    renderBottleReturnCard(bottle),
+                  )}
+                </View>
+              ) : (
+                <View style={styles.assetSectionEmptyCard}>
+                  <Ionicons name="water-outline" size={18} color="#94A3B8" />
+                  <Text style={styles.assetSectionEmptyText}>
+                    No bottle returns available.
+                  </Text>
+                </View>
+              )}
+            </View>
+
+            <View style={styles.assetActionSubsection}>
+              <View style={styles.assetActionsSectionHeader}>
+                <Text style={styles.assetActionSubsectionTitle}>
+                  Asset Returns
+                </Text>
+                <View style={styles.productCategoryCountBadge}>
+                  <Text style={styles.productCategoryCount}>
+                    {heldAssetOptions.length}
+                  </Text>
+                </View>
+              </View>
+              <Text style={styles.assetActionSubsectionText}>
+                Customer-held assets. Set unit value.
+              </Text>
+
+              {!customerData ? (
+                <View style={styles.heldItemsInfoCard}>
+                  <Ionicons
+                    name="person-circle-outline"
+                    size={16}
+                    color="#64748B"
+                  />
+                  <Text style={styles.heldItemsInfoText}>
+                    Choose a customer to load asset returns.
+                  </Text>
+                </View>
+              ) : heldItemsError ? (
+                <View style={styles.assetSectionErrorBox}>
+                  <Ionicons
+                    name="alert-circle-outline"
+                    size={16}
+                    color="#DC2626"
+                  />
+                  <Text style={styles.assetSectionErrorText}>
+                    {heldItemsError}
+                  </Text>
+                </View>
+              ) : heldAssetOptions.length > 0 ? (
+                <View style={styles.productGrid}>
+                  {heldAssetOptions.map((asset) =>
+                    renderAssetActionCard(asset),
+                  )}
+                </View>
+              ) : (
+                <View style={styles.assetSectionEmptyCard}>
+                  <Ionicons name="cube-outline" size={18} color="#94A3B8" />
+                  <Text style={styles.assetSectionEmptyText}>
+                    No held assets registered.
+                  </Text>
+                </View>
+              )}
+            </View>
+          </View>
+
+          <View style={styles.assetActionsSection}>
+            <View style={styles.assetActionSubsection}>
+              <View style={styles.assetActionsSectionHeader}>
+                <View
+                  style={[
+                    styles.productCategoryBadge,
+                    styles.productCategoryBadgeRefill,
+                  ]}
+                >
+                  <Ionicons name="water-outline" size={14} color="#0F766E" />
+                  <Text style={styles.productCategoryTitle}>
+                    Bottle Deposits
+                  </Text>
+                </View>
+                <View style={styles.productCategoryCountBadge}>
+                  <Text style={styles.productCategoryCount}>
+                    {directSaleBottleDepositOptions.length}
+                  </Text>
+                </View>
+              </View>
+
+              <Text style={styles.assetSectionHelperText}>
+                From current truck load.
+              </Text>
+
+              {directSaleBottleDepositOptions.length === 0 ? (
+                <View style={styles.assetSectionEmptyCard}>
+                  <Ionicons name="water-outline" size={18} color="#94A3B8" />
+                  <Text style={styles.assetSectionEmptyText}>
+                    No bottle deposits available.
+                  </Text>
+                </View>
+              ) : (
+                <View style={styles.productGrid}>
+                  {directSaleBottleDepositOptions.map((bottle) =>
+                    renderBottleDepositCard(bottle),
+                  )}
+                </View>
+              )}
+            </View>
+
+            <View style={styles.assetActionsSectionHeader}>
+              <View
+                style={[
+                  styles.productCategoryBadge,
+                  styles.productCategoryBadgeAssets,
+                ]}
+              >
+                <Ionicons name="cube-outline" size={14} color="#581C87" />
+                <Text style={styles.productCategoryTitle}>Asset Deposits</Text>
+              </View>
+              <View style={styles.productCategoryCountBadge}>
+                <Text style={styles.productCategoryCount}>
+                  {depositAssetOptions.length}
+                </Text>
+              </View>
+            </View>
+
+            <Text style={styles.assetSectionHelperText}>
+              From truck load. Set unit value.
+            </Text>
+
+            {truckAssetsError ? (
+              <View style={styles.assetSectionErrorBox}>
+                <Ionicons
+                  name="alert-circle-outline"
+                  size={16}
+                  color="#DC2626"
+                />
+                <Text style={styles.assetSectionErrorText}>
+                  {truckAssetsError}
+                </Text>
+              </View>
+            ) : depositAssetOptions.length === 0 ? (
+              <View style={styles.assetSectionEmptyCard}>
+                <Ionicons name="cube-outline" size={18} color="#94A3B8" />
+                <Text style={styles.assetSectionEmptyText}>
+                  No asset deposits available.
+                </Text>
+              </View>
+            ) : (
+              <View style={styles.productGrid}>
+                {depositAssetOptions.map((asset) =>
+                  renderAssetActionCard(asset),
+                )}
+              </View>
+            )}
+          </View>
+        </ScrollView>
+      </ActionModal>
 
       <ActionModal
         visible={customerSearchModalVisible}
@@ -2332,7 +3749,7 @@ const DirectSales: React.FC = () => {
               />
               <TextInput
                 style={styles.input}
-                placeholder="Search by phone or customer ID"
+                placeholder="Search customer"
                 placeholderTextColor="#CBD5E1"
                 value={customerSearchQuery}
                 onChangeText={setCustomerSearchQuery}
@@ -2765,17 +4182,28 @@ const DirectSales: React.FC = () => {
 
                   <View style={styles.siteFormActionRow}>
                     <TouchableOpacity
-                      style={styles.siteFormGhostButton}
+                      style={[
+                        styles.siteFormGhostButton,
+                        isResolvingSiteLocation &&
+                          styles.siteFormGhostButtonDisabled,
+                      ]}
                       onPress={applyCurrentLocationToSiteForm}
+                      disabled={isResolvingSiteLocation}
                       activeOpacity={0.8}
                     >
-                      <Ionicons
-                        name="locate-outline"
-                        size={14}
-                        color="#1E40AF"
-                      />
+                      {isResolvingSiteLocation ? (
+                        <ActivityIndicator size="small" color="#1E40AF" />
+                      ) : (
+                        <Ionicons
+                          name="locate-outline"
+                          size={14}
+                          color="#1E40AF"
+                        />
+                      )}
                       <Text style={styles.siteFormGhostButtonText}>
-                        Use Current Location
+                        {isResolvingSiteLocation
+                          ? "Locating..."
+                          : "Use Current Location"}
                       </Text>
                     </TouchableOpacity>
                   </View>
@@ -3288,6 +4716,9 @@ const styles = StyleSheet.create({
     justifyContent: "center",
     gap: 6,
   },
+  siteFormGhostButtonDisabled: {
+    opacity: 0.72,
+  },
   siteFormGhostButtonText: {
     fontSize: 12,
     fontWeight: "700",
@@ -3688,6 +5119,9 @@ const styles = StyleSheet.create({
   productCategoryBadgeOther: {
     backgroundColor: "#E2E8F0",
   },
+  productCategoryBadgeAssets: {
+    backgroundColor: "#F3E8FF",
+  },
   productCategoryTitle: {
     fontSize: 12,
     fontWeight: "700",
@@ -3712,63 +5146,404 @@ const styles = StyleSheet.create({
   productGrid: {
     gap: 10,
   },
+  assetSectionHelperText: {
+    marginTop: 2,
+    marginBottom: 8,
+    fontSize: 12,
+    lineHeight: 16,
+    color: "#64748B",
+  },
+  assetSectionErrorBox: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+    backgroundColor: "#FEF2F2",
+    borderRadius: 14,
+    borderWidth: 1,
+    borderColor: "#FECACA",
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    marginBottom: 12,
+  },
+  assetSectionErrorText: {
+    flex: 1,
+    fontSize: 12,
+    lineHeight: 18,
+    color: "#B91C1C",
+    fontWeight: "500",
+  },
+  assetSectionEmptyCard: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 10,
+    backgroundColor: "#F8FAFC",
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: "#E2E8F0",
+    paddingHorizontal: 14,
+    paddingVertical: 14,
+  },
+  assetSectionEmptyText: {
+    flex: 1,
+    fontSize: 13,
+    lineHeight: 18,
+    color: "#64748B",
+  },
+  assetLauncherCard: {
+    backgroundColor: "#FFFFFF",
+    borderRadius: 18,
+    borderWidth: 1,
+    borderColor: "#E2E8F0",
+    padding: 16,
+    gap: 14,
+    shadowColor: "#0F172A",
+    shadowOffset: { width: 0, height: 8 },
+    shadowOpacity: 0.04,
+    shadowRadius: 16,
+    elevation: 2,
+  },
+  assetLauncherHeader: {
+    flexDirection: "row",
+    alignItems: "center",
+  },
+  assetLauncherIconBox: {
+    width: 48,
+    height: 48,
+    borderRadius: 15,
+    backgroundColor: "#EFF6FF",
+    borderWidth: 1,
+    borderColor: "#BFDBFE",
+    justifyContent: "center",
+    alignItems: "center",
+    marginRight: 14,
+  },
+  assetLauncherCopy: {
+    flex: 1,
+    gap: 4,
+    marginRight: 10,
+  },
+  assetLauncherTitle: {
+    fontSize: 15,
+    fontWeight: "700",
+    color: "#0F172A",
+  },
+  assetLauncherText: {
+    fontSize: 12,
+    lineHeight: 18,
+    color: "#64748B",
+  },
+  assetLauncherMetaRow: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    gap: 8,
+  },
+  assetLauncherChip: {
+    borderRadius: 999,
+    backgroundColor: "#F8FAFC",
+    borderWidth: 1,
+    borderColor: "#E2E8F0",
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+  },
+  assetLauncherChipSelected: {
+    backgroundColor: "#EFF6FF",
+    borderColor: "#BFDBFE",
+  },
+  assetLauncherChipText: {
+    fontSize: 11,
+    fontWeight: "700",
+    color: "#475569",
+  },
+  assetLauncherChipTextSelected: {
+    color: "#1D4ED8",
+  },
+  assetActionsModalContent: {
+    paddingBottom: 8,
+    gap: 12,
+  },
+  assetActionsIntroCard: {
+    backgroundColor: "#F8FAFC",
+    borderRadius: 18,
+    borderWidth: 1,
+    borderColor: "#E2E8F0",
+    padding: 14,
+    gap: 4,
+  },
+  assetActionsIntroTitle: {
+    fontSize: 14,
+    fontWeight: "700",
+    color: "#0F172A",
+  },
+  assetActionsIntroText: {
+    fontSize: 12,
+    lineHeight: 16,
+    color: "#64748B",
+  },
+  creditCollectionCard: {
+    backgroundColor: "#FFFFFF",
+    borderRadius: 18,
+    borderWidth: 1,
+    borderColor: "#DBEAFE",
+    padding: 16,
+    gap: 14,
+  },
+  creditCollectionHeader: {
+    gap: 4,
+  },
+  creditCollectionTitle: {
+    fontSize: 14,
+    fontWeight: "700",
+    color: "#0F172A",
+  },
+  creditCollectionText: {
+    fontSize: 12,
+    lineHeight: 16,
+    color: "#64748B",
+  },
+  creditCollectionFields: {
+    gap: 12,
+  },
+  creditCollectionField: {
+    gap: 6,
+  },
+  creditCollectionLabel: {
+    fontSize: 11,
+    fontWeight: "700",
+    color: "#475569",
+    textTransform: "uppercase",
+    letterSpacing: 0.35,
+  },
+  creditCollectionRemarkInput: {
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: "#CBD5E1",
+    backgroundColor: "#F8FAFC",
+    minHeight: 44,
+    paddingHorizontal: 12,
+    paddingVertical: 12,
+    fontSize: 14,
+    color: "#0F172A",
+    fontWeight: "500",
+  },
+  assetActionsSummaryRow: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    gap: 8,
+  },
+  assetActionsSection: {
+    gap: 10,
+  },
+  assetActionsSectionHeader: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    gap: 12,
+  },
+  assetActionSubsection: {
+    gap: 8,
+  },
+  assetActionSubsectionTitle: {
+    fontSize: 14,
+    fontWeight: "700",
+    color: "#0F172A",
+  },
+  assetActionSubsectionText: {
+    fontSize: 12,
+    lineHeight: 16,
+    color: "#64748B",
+  },
+  assetReturnBadge: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+    borderRadius: 999,
+    backgroundColor: "#ECFDF5",
+    paddingHorizontal: 10,
+    paddingVertical: 8,
+  },
+  assetReturnBadgeText: {
+    fontSize: 12,
+    fontWeight: "700",
+    color: "#0F766E",
+    textTransform: "uppercase",
+    letterSpacing: 0.35,
+  },
+  heldItemsInfoCard: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 10,
+    backgroundColor: "#F8FAFC",
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: "#E2E8F0",
+    paddingHorizontal: 14,
+    paddingVertical: 14,
+  },
+  heldItemsInfoText: {
+    flex: 1,
+    fontSize: 13,
+    lineHeight: 18,
+    color: "#475569",
+  },
   productCard: {
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "space-between",
-    backgroundColor: "#F8FAFC",
+    backgroundColor: "#FFFFFF",
     borderRadius: 16,
     padding: 16,
-    borderWidth: 2,
-    borderColor: "transparent",
+    borderWidth: 1,
+    borderColor: "#E2E8F0",
+    shadowColor: "#0F172A",
+    shadowOffset: { width: 0, height: 8 },
+    shadowOpacity: 0.04,
+    shadowRadius: 16,
+    elevation: 2,
   },
   productCardWholesale: {
-    borderLeftWidth: 4,
-    borderLeftColor: "#3B82F6",
+    borderLeftWidth: 5,
+    borderLeftColor: "#2563EB",
   },
   productCardRefill: {
-    borderLeftWidth: 4,
-    borderLeftColor: "#06B6D4",
+    borderLeftWidth: 5,
+    borderLeftColor: "#0891B2",
+  },
+  productCardAssets: {
+    borderLeftWidth: 5,
+    borderLeftColor: "#7C3AED",
   },
   productCardOther: {
-    borderLeftWidth: 4,
-    borderLeftColor: "#94A3B8",
+    borderLeftWidth: 5,
+    borderLeftColor: "#64748B",
   },
   productCardSelected: {
-    backgroundColor: "#F0FDF4",
-    borderColor: "#10B981",
+    backgroundColor: "#F8FAFF",
+    borderColor: "#2563EB",
   },
-  productInfo: {
+  productMain: {
+    flexDirection: "row",
+    alignItems: "center",
     flex: 1,
     marginRight: 16,
   },
+  productIconBox: {
+    width: 52,
+    height: 52,
+    borderRadius: 14,
+    backgroundColor: "#EFF6FF",
+    alignItems: "center",
+    justifyContent: "center",
+    overflow: "hidden",
+    borderWidth: 1,
+    borderColor: "#DBEAFE",
+    marginRight: 14,
+  },
+  productIconBoxSelected: {
+    backgroundColor: "#2563EB",
+    borderColor: "#2563EB",
+  },
+  productImage: {
+    width: "100%",
+    height: "100%",
+  },
+  productInfo: {
+    flex: 1,
+  },
   productNameContainer: {
     flexDirection: "row",
-    alignItems: "center",
-    marginBottom: 4,
+    alignItems: "flex-start",
+    marginBottom: 5,
     gap: 8,
   },
   productName: {
     fontSize: 15,
-    fontWeight: "600",
-    color: "#1E40AF",
+    fontWeight: "700",
+    color: "#0F172A",
     flex: 1,
   },
+  modalActionCardCompact: {
+    borderRadius: 14,
+    padding: 12,
+    shadowOpacity: 0.025,
+    shadowRadius: 10,
+    elevation: 1,
+  },
+  modalActionCardStacked: {
+    flexDirection: "column",
+    alignItems: "stretch",
+    justifyContent: "flex-start",
+    gap: 10,
+  },
+  modalActionMainCompact: {
+    marginRight: 10,
+  },
+  modalActionIconBoxCompact: {
+    width: 42,
+    height: 42,
+    borderRadius: 12,
+    marginRight: 10,
+  },
+  modalActionTitleRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+    marginBottom: 4,
+  },
+  modalActionTitle: {
+    flex: 1,
+    fontSize: 13,
+    lineHeight: 18,
+    fontWeight: "700",
+    color: "#0F172A",
+  },
+  modalActionMetaRow: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    gap: 6,
+  },
+  modalActionMetaPill: {
+    borderRadius: 999,
+    borderWidth: 1,
+    borderColor: "#E2E8F0",
+    backgroundColor: "#F8FAFC",
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+  },
+  modalActionMetaPillHeld: {
+    backgroundColor: "#ECFDF5",
+    borderColor: "#A7F3D0",
+  },
+  modalActionMetaPillText: {
+    fontSize: 10,
+    fontWeight: "600",
+    color: "#64748B",
+  },
+  modalActionMetaPillTextHeld: {
+    color: "#047857",
+  },
+  productMetaText: {
+    marginBottom: 8,
+    fontSize: 12,
+    color: "#64748B",
+  },
   badge: {
-    backgroundColor: "#FEF3C7",
-    paddingHorizontal: 6,
-    paddingVertical: 2,
-    borderRadius: 4,
+    backgroundColor: "#EFF6FF",
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    borderRadius: 999,
   },
   badgeText: {
     fontSize: 10,
     fontWeight: "600",
-    color: "#92400E",
+    color: "#1D4ED8",
+    textTransform: "uppercase",
+    letterSpacing: 0.3,
   },
   priceContainer: {
     flexDirection: "row",
     alignItems: "center",
     gap: 6,
+    flexWrap: "wrap",
   },
   productPriceOriginal: {
     fontSize: 12,
@@ -3779,13 +5554,50 @@ const styles = StyleSheet.create({
   productPrice: {
     fontSize: 14,
     fontWeight: "700",
-    color: "#10B981",
+    color: "#059669",
   },
-  productStockText: {
+  adjustablePriceContainer: {
+    flexDirection: "row",
+    alignItems: "center",
+    flexWrap: "wrap",
+    gap: 6,
+  },
+  priceInputRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    minHeight: 32,
+    borderRadius: 999,
+    borderWidth: 1,
+    borderColor: "#D1FAE5",
+    backgroundColor: "#F0FDF4",
+    paddingHorizontal: 9,
+  },
+  priceInputPrefix: {
+    fontSize: 11,
+    fontWeight: "700",
+    color: "#047857",
+    marginRight: 5,
+  },
+  priceInput: {
+    minWidth: 68,
+    paddingVertical: Platform.OS === "ios" ? 4 : 0,
+    paddingHorizontal: 0,
+    fontSize: 14,
+    fontWeight: "700",
+    color: "#059669",
+  },
+  stockBadge: {
     marginTop: 4,
+    alignSelf: "flex-start",
+    borderRadius: 999,
+    backgroundColor: "#F8FAFC",
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+  },
+  stockText: {
     fontSize: 11,
     fontWeight: "600",
-    color: "#64748B",
+    color: "#475569",
   },
   quantityControl: {
     flexDirection: "row",
@@ -3795,6 +5607,10 @@ const styles = StyleSheet.create({
     padding: 4,
     gap: 4,
   },
+  modalActionQuantityControlCompact: {
+    paddingHorizontal: 3,
+    paddingVertical: 3,
+  },
   quantityButton: {
     width: 36,
     height: 36,
@@ -3802,6 +5618,11 @@ const styles = StyleSheet.create({
     backgroundColor: "#F1F5F9",
     justifyContent: "center",
     alignItems: "center",
+  },
+  modalActionQuantityButtonCompact: {
+    width: 30,
+    height: 30,
+    borderRadius: 9,
   },
   quantityButtonDisabled: {
     backgroundColor: "#F8FAFC",
@@ -3812,6 +5633,376 @@ const styles = StyleSheet.create({
     color: "#1E40AF",
     minWidth: 32,
     textAlign: "center",
+  },
+  modalActionQuantityTextCompact: {
+    minWidth: 26,
+    fontSize: 14,
+  },
+  assetActionCard: {
+    backgroundColor: "#FFFFFF",
+    borderRadius: 14,
+    borderWidth: 1,
+    borderColor: "#E2E8F0",
+    padding: 12,
+    shadowColor: "#0F172A",
+    shadowOffset: { width: 0, height: 8 },
+    shadowOpacity: 0.025,
+    shadowRadius: 10,
+    elevation: 1,
+    gap: 10,
+  },
+  assetActionCardTruck: {
+    backgroundColor: "#FFFFFF",
+  },
+  assetActionCardHeld: {
+    backgroundColor: "#FCFFFD",
+    borderColor: "#D1FAE5",
+  },
+  assetActionCardSelected: {
+    shadowOpacity: 0.08,
+    elevation: 3,
+  },
+  assetActionCardSelectedTruck: {
+    borderColor: "#7C3AED",
+    backgroundColor: "#FCFAFF",
+  },
+  assetActionCardSelectedHeld: {
+    borderColor: "#10B981",
+    backgroundColor: "#F0FDF4",
+  },
+  assetActionTopRow: {
+    flexDirection: "row",
+    alignItems: "center",
+  },
+  assetActionMedia: {
+    width: 42,
+    height: 42,
+    borderRadius: 12,
+    backgroundColor: "#F5F3FF",
+    borderWidth: 1,
+    borderColor: "#E9D5FF",
+    justifyContent: "center",
+    alignItems: "center",
+    overflow: "hidden",
+    marginRight: 10,
+  },
+  assetActionImage: {
+    width: "100%",
+    height: "100%",
+  },
+  assetActionContent: {
+    flex: 1,
+    gap: 6,
+  },
+  assetActionHeaderRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    gap: 8,
+  },
+  assetActionLabel: {
+    flex: 1,
+    fontSize: 13,
+    lineHeight: 18,
+    fontWeight: "700",
+    color: "#0F172A",
+  },
+  assetSourceBadge: {
+    borderRadius: 999,
+    paddingHorizontal: 9,
+    paddingVertical: 5,
+    borderWidth: 1,
+  },
+  assetSourceBadgeHeld: {
+    backgroundColor: "#ECFDF5",
+    borderColor: "#A7F3D0",
+  },
+  assetSourceBadgeTruck: {
+    backgroundColor: "#EFF6FF",
+    borderColor: "#BFDBFE",
+  },
+  assetSourceBadgeText: {
+    fontSize: 10,
+    fontWeight: "700",
+    textTransform: "uppercase",
+    letterSpacing: 0.35,
+  },
+  assetSourceBadgeTextHeld: {
+    color: "#047857",
+  },
+  assetSourceBadgeTextTruck: {
+    color: "#1D4ED8",
+  },
+  assetActionMeta: {
+    fontSize: 12,
+    color: "#64748B",
+    fontWeight: "600",
+  },
+  assetActionSerial: {
+    fontSize: 12,
+    lineHeight: 18,
+    color: "#475569",
+  },
+  assetActionControls: {
+    gap: 8,
+  },
+  assetActionLockedRow: {
+    gap: 8,
+  },
+  assetActionToggleRow: {
+    flexDirection: "row",
+    gap: 10,
+  },
+  assetActionRuleBadge: {
+    alignSelf: "flex-start",
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 4,
+    borderRadius: 999,
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    borderWidth: 1,
+  },
+  assetActionRuleBadgeHeld: {
+    backgroundColor: "#ECFDF5",
+    borderColor: "#A7F3D0",
+  },
+  assetActionRuleBadgeDeposit: {
+    backgroundColor: "#F5F3FF",
+    borderColor: "#DDD6FE",
+  },
+  assetActionRuleText: {
+    fontSize: 10,
+    fontWeight: "700",
+    textTransform: "uppercase",
+    letterSpacing: 0.3,
+  },
+  assetActionRuleTextHeld: {
+    color: "#047857",
+  },
+  assetActionRuleTextDeposit: {
+    color: "#6D28D9",
+  },
+  assetActionModeButton: {
+    flex: 1,
+    alignItems: "center",
+    justifyContent: "center",
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: "#D8B4FE",
+    backgroundColor: "#FFFFFF",
+    paddingVertical: 10,
+    paddingHorizontal: 12,
+  },
+  assetActionModeButtonActive: {
+    backgroundColor: "#6D28D9",
+    borderColor: "#6D28D9",
+  },
+  assetActionModeText: {
+    fontSize: 13,
+    fontWeight: "700",
+    color: "#6D28D9",
+  },
+  assetActionModeTextActive: {
+    color: "#FFFFFF",
+  },
+  assetActionNote: {
+    fontSize: 12,
+    lineHeight: 18,
+    color: "#64748B",
+  },
+  assetActionFooterRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+  },
+  assetPriceEditor: {
+    flex: 1,
+    gap: 4,
+  },
+  assetPriceLabel: {
+    fontSize: 10,
+    fontWeight: "700",
+    color: "#64748B",
+    textTransform: "uppercase",
+    letterSpacing: 0.35,
+  },
+  assetPriceInputRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: "#CBD5E1",
+    backgroundColor: "#F8FAFC",
+    minHeight: 38,
+    paddingHorizontal: 10,
+  },
+  assetPricePrefix: {
+    fontSize: 11,
+    fontWeight: "700",
+    color: "#475569",
+    marginRight: 6,
+  },
+  assetPriceInput: {
+    flex: 1,
+    fontSize: 13,
+    fontWeight: "700",
+    color: "#0F172A",
+    paddingVertical: 0,
+  },
+  assetIncludeButton: {
+    minHeight: 38,
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: "#BFDBFE",
+    backgroundColor: "#EFF6FF",
+    paddingHorizontal: 12,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 6,
+  },
+  assetIncludeButtonActive: {
+    backgroundColor: "#1D4ED8",
+    borderColor: "#1D4ED8",
+  },
+  assetIncludeButtonText: {
+    fontSize: 12,
+    fontWeight: "700",
+    color: "#1D4ED8",
+  },
+  assetIncludeButtonTextActive: {
+    color: "#FFFFFF",
+  },
+  bottleReturnCard: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    backgroundColor: "#FFFFFF",
+    borderRadius: 18,
+    borderWidth: 1,
+    borderColor: "#D1FAE5",
+    padding: 16,
+    shadowColor: "#0F172A",
+    shadowOffset: { width: 0, height: 8 },
+    shadowOpacity: 0.04,
+    shadowRadius: 16,
+    elevation: 2,
+    gap: 12,
+  },
+  bottleReturnCardSelected: {
+    backgroundColor: "#F0FDF4",
+    borderColor: "#10B981",
+  },
+  bottleDepositCardSelected: {
+    backgroundColor: "#F8FAFF",
+    borderColor: "#93C5FD",
+  },
+  bottleDepositIconBoxSelected: {
+    backgroundColor: "#0286FF",
+    borderColor: "#0286FF",
+  },
+  bottleReturnMain: {
+    flexDirection: "row",
+    alignItems: "center",
+    flex: 1,
+    marginRight: 12,
+  },
+  bottleReturnMedia: {
+    width: 52,
+    height: 52,
+    borderRadius: 14,
+    backgroundColor: "#ECFDF5",
+    borderWidth: 1,
+    borderColor: "#A7F3D0",
+    justifyContent: "center",
+    alignItems: "center",
+    overflow: "hidden",
+    marginRight: 14,
+  },
+  bottleReturnMediaSelected: {
+    backgroundColor: "#10B981",
+    borderColor: "#10B981",
+  },
+  bottleReturnImage: {
+    width: "100%",
+    height: "100%",
+  },
+  bottleReturnContent: {
+    flex: 1,
+    gap: 4,
+  },
+  bottleReturnBadge: {
+    borderRadius: 999,
+    backgroundColor: "#ECFDF5",
+    borderWidth: 1,
+    borderColor: "#A7F3D0",
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+  },
+  bottleReturnBadgeText: {
+    fontSize: 10,
+    fontWeight: "700",
+    color: "#047857",
+    textTransform: "uppercase",
+    letterSpacing: 0.35,
+  },
+  bottleDepositBadge: {
+    borderRadius: 999,
+    backgroundColor: "#EFF6FF",
+    borderWidth: 1,
+    borderColor: "#BFDBFE",
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+  },
+  bottleDepositBadgeText: {
+    fontSize: 10,
+    fontWeight: "700",
+    color: "#1D4ED8",
+    textTransform: "uppercase",
+    letterSpacing: 0.35,
+  },
+  bottleReturnHeldText: {
+    fontSize: 12,
+    fontWeight: "600",
+    color: "#0F766E",
+  },
+  bottleReturnDescription: {
+    fontSize: 12,
+    lineHeight: 18,
+    color: "#64748B",
+  },
+  bottleReturnControls: {
+    flexDirection: "row",
+    alignItems: "center",
+    backgroundColor: "#F8FAFC",
+    borderRadius: 12,
+    padding: 4,
+    gap: 4,
+  },
+  assetQuantityButton: {
+    width: 36,
+    height: 36,
+    borderRadius: 10,
+    backgroundColor: "#FFFFFF",
+    justifyContent: "center",
+    alignItems: "center",
+    borderWidth: 1,
+    borderColor: "#D1FAE5",
+  },
+  assetQuantityButtonDisabled: {
+    backgroundColor: "#F8FAFC",
+    borderColor: "#E2E8F0",
+  },
+  assetQuantityValue: {
+    minWidth: 34,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  assetQuantityValueText: {
+    fontSize: 16,
+    fontWeight: "700",
+    color: "#0F766E",
   },
   actionSection: {
     backgroundColor: "#FFFFFF",
@@ -3862,6 +6053,12 @@ const styles = StyleSheet.create({
     color: "#1E40AF",
     fontWeight: "700",
     letterSpacing: -0.5,
+  },
+  summaryNote: {
+    marginTop: 12,
+    fontSize: 12,
+    lineHeight: 18,
+    color: "#0F766E",
   },
   confirmButton: {
     flexDirection: "row",

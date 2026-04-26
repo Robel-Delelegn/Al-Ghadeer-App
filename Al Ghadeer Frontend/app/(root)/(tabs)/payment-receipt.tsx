@@ -1,26 +1,62 @@
-import { useOrderStore } from "@/store/index";
-import { Order } from "@/types/order";
 import { authenticatedFetch } from "@/store/auth";
+import { useOrderStore } from "@/store/index";
+import { showErrorAlert, showSuccessAlert } from "@/store/utils/alert";
+import { Order } from "@/types/order";
 import { parseApiResponseWithSoftError } from "@/utils/api";
-import type { DriverSaleInvoiceResponse } from "@/utils/driverHistory";
+import {
+  type DriverHistoryDetail,
+  type DriverSaleInvoiceResponse,
+} from "@/utils/driverHistory";
+import { normalizeOrderProducts } from "@/utils/orderUtils";
+import {
+  getOrderSelectedDeliveryActions,
+  getRentItemDepositAction,
+  getRentItemDepositKind,
+} from "@/utils/rentItems";
 import { Ionicons } from "@expo/vector-icons";
 import * as FileSystem from "expo-file-system";
-import { useRouter } from "expo-router";
+import { useLocalSearchParams, useRouter } from "expo-router";
 import * as Sharing from "expo-sharing";
-import React, { useCallback, useState, useEffect, useMemo } from "react";
+import React, { useCallback, useMemo, useState } from "react";
 import {
   ActivityIndicator,
   ScrollView,
+  StyleSheet,
   Text,
   TouchableOpacity,
   View,
 } from "react-native";
-import { showSuccessAlert, showErrorAlert } from "@/store/utils/alert";
+import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 const IP_ADDRESS = process.env.EXPO_PUBLIC_IP_ADDRESS;
+
 type PrintModule = typeof import("expo-print");
 
 let printModule: PrintModule | null | undefined;
+
+type ReceiptViewMode = "delivery-note" | "invoice";
+
+type DeliveryActionRow = {
+  id: string;
+  label: string;
+  quantity: number;
+  unitPrice: number;
+  type: "deposit" | "deposit_return";
+  depositKind: "asset" | "bottle";
+};
+
+type SaleRow = {
+  id: string;
+  label: string;
+  quantity: number;
+  unitPrice: number;
+};
+
+type CreditCollectionRow = {
+  id: string;
+  amount: number;
+  remark: string | null;
+};
 
 const getPrintModule = (): PrintModule | null => {
   if (printModule !== undefined) {
@@ -28,6 +64,7 @@ const getPrintModule = (): PrintModule | null => {
   }
 
   try {
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
     printModule = require("expo-print") as PrintModule;
   } catch (error) {
     printModule = null;
@@ -37,8 +74,425 @@ const getPrintModule = (): PrintModule | null => {
   return printModule;
 };
 
+const formatDetailAddress = (detail?: DriverHistoryDetail | null): string => {
+  const address = detail?.address;
+  if (!address) return "";
+
+  const parts = [
+    address.label,
+    address.street,
+    address.building,
+    address.flat,
+    address.area,
+    address.city,
+  ]
+    .map((value) => (typeof value === "string" ? value.trim() : ""))
+    .filter((value) => value.length > 0);
+
+  return parts.join(", ");
+};
+
+const formatDocumentDate = (value?: string | null): string => {
+  if (!value) return new Date().toLocaleString("en-GB");
+
+  const parsed = new Date(value);
+  if (Number.isNaN(parsed.getTime())) {
+    return value;
+  }
+
+  return parsed.toLocaleString("en-GB", {
+    day: "2-digit",
+    month: "short",
+    year: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+  });
+};
+
+const getDateParts = (
+  value?: string | null,
+): {
+  date: string;
+  time: string;
+} => {
+  const parsed = value ? new Date(value) : new Date();
+  const fallback = new Date();
+  const target = Number.isNaN(parsed.getTime()) ? fallback : parsed;
+
+  return {
+    date: target.toISOString().split("T")[0],
+    time: target.toTimeString().split(" ")[0],
+  };
+};
+
+const formatPaymentMethod = (value: unknown): string => {
+  if (value === "wallet") return "Wallet";
+  if (value === "check") return "Check";
+  if (value === "credit" || value === "invoice" || value === "credit_invoice") {
+    return "Credit";
+  }
+  return "Cash";
+};
+
+const formatQuantity = (value: number): string => {
+  return Number.isInteger(value) ? String(value) : value.toFixed(2);
+};
+
+const formatCurrency = (value: number): string => {
+  return `AED ${value.toFixed(2)}`;
+};
+
+const hasLinePrice = (value: number): boolean => {
+  return Number.isFinite(value) && value > 0;
+};
+
+const formatOptionalLinePrice = (value: number): string => {
+  return hasLinePrice(value) ? formatCurrency(value) : "";
+};
+
+const escapeHtml = (value: string): string => {
+  return value
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
+};
+
+const toSafeFilePart = (value: string): string => {
+  return value.replace(/[^a-zA-Z0-9_-]+/g, "_").replace(/^_+|_+$/g, "");
+};
+
+const getFallbackRentItemLabel = (
+  item: NonNullable<Order["rent_items"]>[number],
+): string => {
+  const name = typeof item.name === "string" ? item.name.trim() : "";
+  const serial =
+    typeof item.serial === "string" && item.serial.trim().length > 0
+      ? item.serial.trim()
+      : null;
+
+  if (name && serial) {
+    return `${name} • ${serial}`;
+  }
+
+  if (name) {
+    return name;
+  }
+
+  const kind = getRentItemDepositKind(item) === "bottle" ? "Bottle" : "Asset";
+  const action =
+    getRentItemDepositAction(item) === "deposit" ? "Deposit" : "Return";
+  return `${kind} ${action}`;
+};
+
+const getDeliveryActionTypeLabel = (row: DeliveryActionRow): string => {
+  const kind = row.depositKind === "bottle" ? "Bottle" : "Asset";
+  const action = row.type === "deposit" ? "Deposit" : "Return";
+  return `${kind} ${action}`;
+};
+
+const buildActionSectionHtml = (rows: DeliveryActionRow[]): string => {
+  if (rows.length === 0) {
+    return "";
+  }
+
+  const hasPricedRows = rows.some((row) => hasLinePrice(row.unitPrice));
+  const rowsHtml = rows
+    .map(
+      (row) => `
+        <tr>
+          <td>${escapeHtml(getDeliveryActionTypeLabel(row))}</td>
+          <td>${escapeHtml(row.label)}</td>
+          <td class="qty-cell">${escapeHtml(formatQuantity(row.quantity))}</td>
+          ${
+            hasPricedRows
+              ? `<td class="amount-cell">${escapeHtml(formatOptionalLinePrice(row.unitPrice))}</td>`
+              : ""
+          }
+        </tr>
+      `,
+    )
+    .join("");
+
+  return `
+    <section class="section">
+      <div class="section-title">Deposits &amp; Returns</div>
+      <table class="table">
+        <thead>
+          <tr>
+            <th>Type</th>
+            <th>Item</th>
+            <th class="qty-head">Qty</th>
+            ${hasPricedRows ? `<th class="amount-head">Price (No VAT)</th>` : ""}
+          </tr>
+        </thead>
+        <tbody>${rowsHtml}</tbody>
+      </table>
+    </section>
+  `;
+};
+
+const buildCashCollectionSectionHtml = (
+  rows: CreditCollectionRow[],
+): string => {
+  if (rows.length === 0) {
+    return "";
+  }
+
+  const rowsHtml = rows
+    .map(
+      (row) => `
+        <tr>
+          <td>${escapeHtml(row.remark || "Cash Collection")}</td>
+          <td class="amount-cell">${escapeHtml(formatCurrency(row.amount))}</td>
+        </tr>
+      `,
+    )
+    .join("");
+  const totalAmount = rows.reduce((sum, row) => sum + row.amount, 0);
+
+  return `
+    <section class="section">
+      <div class="section-title">Cash Collection</div>
+      <table class="table">
+        <thead>
+          <tr>
+            <th>Remark</th>
+            <th class="amount-head">Amount (No VAT)</th>
+          </tr>
+        </thead>
+        <tbody>${rowsHtml}</tbody>
+        <tfoot>
+          <tr>
+            <td>Total Cash Collection</td>
+            <td class="amount-cell">${escapeHtml(formatCurrency(totalAmount))}</td>
+          </tr>
+        </tfoot>
+      </table>
+    </section>
+  `;
+};
+
+const DeliveryNoteInfoRow: React.FC<{
+  label: string;
+  value: string;
+}> = ({ label, value }) => {
+  return (
+    <View style={styles.deliveryNoteInfoRow}>
+      <Text style={styles.deliveryNoteInfoLabel}>{label}</Text>
+      <Text style={styles.deliveryNoteInfoValue}>{value}</Text>
+    </View>
+  );
+};
+
+const DeliveryNoteTableSection: React.FC<{
+  title: string;
+  rows: { id: string; label: string; quantity: number; unitPrice: number }[];
+}> = ({ title, rows }) => {
+  if (rows.length === 0) {
+    return null;
+  }
+
+  const hasPricedRows = rows.some((row) => hasLinePrice(row.unitPrice));
+
+  return (
+    <View style={styles.invoiceItemsSection}>
+      <Text style={styles.deliveryNoteSectionTitle}>{title}</Text>
+      <View style={styles.invoiceItemsHeaderRow}>
+        <Text
+          style={[styles.invoiceItemsHeaderText, styles.invoiceProductCell]}
+        >
+          Item
+        </Text>
+        <Text style={[styles.invoiceItemsHeaderText, styles.invoiceQtyCell]}>
+          Qty
+        </Text>
+        {hasPricedRows ? (
+          <Text
+            style={[
+              styles.invoiceItemsHeaderText,
+              styles.deliveryNotePriceCell,
+            ]}
+          >
+            Price (No VAT)
+          </Text>
+        ) : null}
+      </View>
+      {rows.map((row, index) => (
+        <View
+          key={row.id}
+          style={[
+            styles.invoiceItemRow,
+            index !== rows.length - 1 && styles.invoiceItemRowBorder,
+          ]}
+        >
+          <Text style={[styles.invoiceItemText, styles.invoiceProductCell]}>
+            {row.label}
+          </Text>
+          <Text style={[styles.invoiceItemText, styles.invoiceQtyCell]}>
+            {formatQuantity(row.quantity)}
+          </Text>
+          {hasPricedRows ? (
+            <Text
+              style={[styles.invoiceItemText, styles.deliveryNotePriceCell]}
+            >
+              {formatOptionalLinePrice(row.unitPrice)}
+            </Text>
+          ) : null}
+        </View>
+      ))}
+    </View>
+  );
+};
+
+const DeliveryNoteActionSection: React.FC<{
+  rows: DeliveryActionRow[];
+}> = ({ rows }) => {
+  if (rows.length === 0) {
+    return null;
+  }
+
+  const hasPricedRows = rows.some((row) => hasLinePrice(row.unitPrice));
+
+  return (
+    <View style={styles.invoiceItemsSection}>
+      <Text style={styles.deliveryNoteSectionTitle}>Deposits & Returns</Text>
+      <View style={styles.invoiceItemsHeaderRow}>
+        <Text
+          style={[styles.invoiceItemsHeaderText, styles.deliveryNoteTypeCell]}
+        >
+          Type
+        </Text>
+        <Text
+          style={[styles.invoiceItemsHeaderText, styles.invoiceProductCell]}
+        >
+          Item
+        </Text>
+        <Text style={[styles.invoiceItemsHeaderText, styles.invoiceQtyCell]}>
+          Qty
+        </Text>
+        {hasPricedRows ? (
+          <Text
+            style={[
+              styles.invoiceItemsHeaderText,
+              styles.deliveryNotePriceCell,
+            ]}
+          >
+            Price (No VAT)
+          </Text>
+        ) : null}
+      </View>
+      {rows.map((row, index) => (
+        <View
+          key={row.id}
+          style={[
+            styles.invoiceItemRow,
+            index !== rows.length - 1 && styles.invoiceItemRowBorder,
+          ]}
+        >
+          <Text style={[styles.invoiceItemText, styles.deliveryNoteTypeCell]}>
+            {getDeliveryActionTypeLabel(row)}
+          </Text>
+          <Text style={[styles.invoiceItemText, styles.invoiceProductCell]}>
+            {row.label}
+          </Text>
+          <Text style={[styles.invoiceItemText, styles.invoiceQtyCell]}>
+            {formatQuantity(row.quantity)}
+          </Text>
+          {hasPricedRows ? (
+            <Text
+              style={[styles.invoiceItemText, styles.deliveryNotePriceCell]}
+            >
+              {formatOptionalLinePrice(row.unitPrice)}
+            </Text>
+          ) : null}
+        </View>
+      ))}
+    </View>
+  );
+};
+
+const DeliveryNoteCashCollectionSection: React.FC<{
+  rows: CreditCollectionRow[];
+}> = ({ rows }) => {
+  if (rows.length === 0) {
+    return null;
+  }
+
+  const totalAmount = rows.reduce((sum, row) => sum + row.amount, 0);
+
+  return (
+    <View style={styles.invoiceItemsSection}>
+      <Text style={styles.deliveryNoteSectionTitle}>Cash Collection</Text>
+      <View style={styles.invoiceItemsHeaderRow}>
+        <Text
+          style={[
+            styles.invoiceItemsHeaderText,
+            styles.invoiceCollectionNoteCell,
+          ]}
+        >
+          Remark
+        </Text>
+        <Text
+          style={[
+            styles.invoiceItemsHeaderText,
+            styles.invoiceCollectionAmountCell,
+          ]}
+        >
+          Amount
+        </Text>
+      </View>
+      {rows.map((row, index) => (
+        <View
+          key={row.id}
+          style={[
+            styles.invoiceItemRow,
+            index !== rows.length - 1 && styles.invoiceItemRowBorder,
+          ]}
+        >
+          <Text
+            style={[styles.invoiceItemText, styles.invoiceCollectionNoteCell]}
+          >
+            {row.remark || "Cash Collection"}
+          </Text>
+          <Text
+            style={[
+              styles.invoiceItemText,
+              styles.invoiceItemTotalText,
+              styles.invoiceCollectionAmountCell,
+            ]}
+          >
+            {formatCurrency(row.amount)}
+          </Text>
+        </View>
+      ))}
+      <View style={styles.invoiceCollectionTotalRow}>
+        <Text
+          style={[
+            styles.invoiceCollectionTotalText,
+            styles.invoiceCollectionNoteCell,
+          ]}
+        >
+          Total (No VAT)
+        </Text>
+        <Text
+          style={[
+            styles.invoiceCollectionTotalText,
+            styles.invoiceCollectionAmountCell,
+          ]}
+        >
+          {formatCurrency(totalAmount)}
+        </Text>
+      </View>
+    </View>
+  );
+};
+
 const PaymentReceipt: React.FC = () => {
   const router = useRouter();
+  const insets = useSafeAreaInsets();
+  const params = useLocalSearchParams<{ view?: string | string[] }>();
   const {
     selectedOrder,
     assignedOrders,
@@ -46,405 +500,741 @@ const PaymentReceipt: React.FC = () => {
     cartItems,
     selectedPaymentMethod,
     lastConfirmPaymentResponse,
+    clearCart,
+    setLastConfirmPaymentResponse,
   } = useOrderStore();
-  // Check both assignedOrders and completedOrders since order might have been marked as delivered
+
   const orderDetail =
-    assignedOrders.find((item) => selectedOrder === item.id) ||
-    (completedOrders.find((item) => selectedOrder === item.id) as
-      | Order
-      | undefined);
+    assignedOrders.find((item) => item.id === selectedOrder) ||
+    completedOrders.find((item) => item.id === selectedOrder);
 
-  // Check if this is rent-items-only (no cart items)
-  const isRentItemsOnly =
-    cartItems.length === 0 &&
-    orderDetail?.rent_items?.some((item) => item.in_truck === true);
-
-  // Loading states for buttons
   const [isDownloading, setIsDownloading] = useState(false);
   const [isPrinting, setIsPrinting] = useState(false);
   const [isNavigating, setIsNavigating] = useState(false);
   const [isGeneratingInvoice, setIsGeneratingInvoice] = useState(false);
-  const [generatedInvoiceNumber, setGeneratedInvoiceNumber] = useState<
-    string | null
-  >(null);
+  const [generatedInvoice, setGeneratedInvoice] =
+    useState<DriverSaleInvoiceResponse | null>(null);
+
   const printNativeModule = useMemo(() => getPrintModule(), []);
+  const paramView = Array.isArray(params.view) ? params.view[0] : params.view;
+  const requestedView: ReceiptViewMode =
+    paramView === "invoice" ? "invoice" : "delivery-note";
 
-  // customer_id = customer.id from OrdersResponse (customer dictionary)
-  const shippingDetails = orderDetail
-    ? {
-        name: orderDetail.customer_name || "N/A",
-        address: orderDetail.customer_address || "N/A",
-        contact: orderDetail.customer_phone || "N/A",
-      }
-    : { name: "N/A", address: "N/A", contact: "N/A" };
-  const paymentMethodDisplay =
-    selectedPaymentMethod === "wallet"
-      ? "Wallet"
-      : selectedPaymentMethod === "check"
-        ? "Check"
-        : selectedPaymentMethod === "credit"
-          ? "Credit"
-          : ["invoice", "credit_invoice"].includes(selectedPaymentMethod ?? "")
-            ? "Credit"
-            : "Cash";
-  // Debug logging
-  console.log("Payment Receipt - orderDetail:", orderDetail);
-  console.log("Payment Receipt - cartItems:", cartItems);
-  console.log("Payment Receipt - shippingDetails:", shippingDetails);
-
-  // Calculate totals with safety checks
-  const productsSubtotal = cartItems.reduce((sum, item) => {
-    if (
-      !item ||
-      typeof item.price !== "number" ||
-      typeof item.quantity !== "number"
-    ) {
-      console.error("Invalid cart item for calculation in receipt:", item);
-      return sum;
-    }
-    return sum + item.price * item.quantity;
-  }, 0);
-  const subtotal = productsSubtotal.toFixed(2);
-  const vat = (Number(subtotal) * 0.05).toFixed(2);
-  // Rent items are not included in receipt totals
-  const totalWithVat = (Number(subtotal) + Number(vat)).toFixed(2);
-  const orderId = orderDetail?.order_number || "N/A";
-  // Use invoice_number from ConfirmPaymentResponse - if we have a matching confirm response, use ONLY that
-  // Don't fall back to orderDetail.invoice_number when confirm response explicitly has no invoice_number
   const matchesConfirmOrder =
-    orderDetail &&
-    lastConfirmPaymentResponse &&
+    !!lastConfirmPaymentResponse &&
+    !!orderDetail &&
     (lastConfirmPaymentResponse.orderId === orderDetail.id ||
-      lastConfirmPaymentResponse.order_number === orderDetail.order_number);
-  // If confirm response matches, use its invoice_number (may be undefined = no invoice = delivery note)
-  // Only fall back to orderDetail.invoice_number if no matching confirm response
-  // Also check for dynamically generated invoice number
-  const baseInvoiceNumber = matchesConfirmOrder
-    ? lastConfirmPaymentResponse?.invoice_number || ""
-    : (orderDetail?.invoice_number ?? "");
-  const invoiceNumber = generatedInvoiceNumber || baseInvoiceNumber;
-  const invoiceDisplay = invoiceNumber || "—";
-  // Invoice number is the source of truth:
-  // invoice_number present -> Invoice, absent -> Delivery Note
-  const hasInvoiceNumber =
-    typeof invoiceNumber === "string" && invoiceNumber.trim().length > 0;
-  const isDeliveryNote = !hasInvoiceNumber;
+      lastConfirmPaymentResponse.order_number === orderDetail.order_number ||
+      lastConfirmPaymentResponse.order_number === orderDetail.display_id);
 
-  // Get sale ID for invoice generation - use sale_id from lastConfirmPaymentResponse (delivery_report_id from normal sales, sale_id from direct sales)
-  const saleId = lastConfirmPaymentResponse?.sale_id || "";
+  const confirmationDetail =
+    matchesConfirmOrder && lastConfirmPaymentResponse?.detail
+      ? lastConfirmPaymentResponse.detail
+      : null;
 
-  // Debug: log delivery note determination and sale_id
-  console.log(
-    "Payment Receipt - lastConfirmPaymentResponse:",
-    JSON.stringify(lastConfirmPaymentResponse, null, 2),
+  const shippingDetails = useMemo(
+    () => ({
+      name:
+        confirmationDetail?.customer.name ||
+        orderDetail?.customer_name ||
+        "N/A",
+      address:
+        formatDetailAddress(confirmationDetail) ||
+        orderDetail?.customer_address ||
+        "N/A",
+      contact:
+        confirmationDetail?.customer.phone ||
+        orderDetail?.customer_phone ||
+        "N/A",
+    }),
+    [
+      confirmationDetail,
+      orderDetail?.customer_address,
+      orderDetail?.customer_name,
+      orderDetail?.customer_phone,
+    ],
   );
-  console.log("Payment Receipt - saleId for invoice generation:", saleId);
-  console.log(
-    "Payment Receipt - isDeliveryNote:",
-    isDeliveryNote,
-    "hasInvoiceNumber:",
+
+  const saleRows = useMemo<SaleRow[]>(() => {
+    if (confirmationDetail?.sale?.items?.length) {
+      return confirmationDetail.sale.items.map((item) => ({
+        id: item.id || item.itemId,
+        label: item.label,
+        quantity: item.quantity,
+        unitPrice: item.unitPrice,
+      }));
+    }
+
+    if (orderDetail?.products) {
+      return normalizeOrderProducts(orderDetail.products).productsArray.map(
+        (product) => ({
+          id: product.id,
+          label: product.name,
+          quantity: product.quantity,
+          unitPrice: typeof product.price === "number" ? product.price : 0,
+        }),
+      );
+    }
+
+    return cartItems
+      .filter((item) => item?.name)
+      .map((item) => ({
+        id: item.id,
+        label: item.name,
+        quantity: item.quantity,
+        unitPrice: item.price,
+      }));
+  }, [cartItems, confirmationDetail?.sale?.items, orderDetail?.products]);
+
+  const deliveryActionRows = useMemo<DeliveryActionRow[]>(() => {
+    if (confirmationDetail?.depositReturns?.length) {
+      return confirmationDetail.depositReturns.map((entry) => ({
+        id: entry.id,
+        label: entry.label,
+        quantity: entry.quantity,
+        unitPrice: entry.unitPrice,
+        type: entry.type,
+        depositKind: entry.depositKind,
+      }));
+    }
+
+    return getOrderSelectedDeliveryActions(orderDetail)
+      .filter((item) => (item.quantity || 0) > 0)
+      .map((item) => ({
+        id: item.id,
+        label: getFallbackRentItemLabel(item),
+        quantity: item.quantity,
+        unitPrice: typeof item.price === "number" ? item.price : 0,
+        type: getRentItemDepositAction(item),
+        depositKind: getRentItemDepositKind(item),
+      }));
+  }, [confirmationDetail?.depositReturns, orderDetail]);
+
+  const creditCollectionRows = useMemo<CreditCollectionRow[]>(() => {
+    if (confirmationDetail?.creditCollections?.length) {
+      return confirmationDetail.creditCollections.flatMap((entry, index) => {
+        const amount = Number(entry.amount);
+        if (!Number.isFinite(amount) || amount <= 0) {
+          return [];
+        }
+
+        const remark =
+          typeof entry.remark === "string" ? entry.remark.trim() : "";
+
+        return [
+          {
+            id: entry.id || `cash-collection-${index}`,
+            amount,
+            remark: remark || null,
+          },
+        ];
+      });
+    }
+
+    return (orderDetail?.draft_credit_collections ?? []).flatMap(
+      (entry, index) => {
+        const amount = Number(entry.amount);
+        if (!Number.isFinite(amount) || amount <= 0) {
+          return [];
+        }
+
+        const remark =
+          typeof entry.remark === "string" ? entry.remark.trim() : "";
+
+        return [
+          {
+            id: `cash-collection-${index}`,
+            amount,
+            remark: remark || null,
+          },
+        ];
+      },
+    );
+  }, [
+    confirmationDetail?.creditCollections,
+    orderDetail?.draft_credit_collections,
+  ]);
+
+  const computedSubtotal = useMemo(
+    () =>
+      saleRows.reduce((sum, row) => {
+        return sum + row.unitPrice * row.quantity;
+      }, 0),
+    [saleRows],
+  );
+
+  const subtotalAmount =
+    confirmationDetail?.sale?.totals.subtotal ?? computedSubtotal;
+  const vatAmount =
+    confirmationDetail?.sale?.totals.vat ?? computedSubtotal * 0.05;
+  const totalAmount =
+    confirmationDetail?.sale?.totals.total ?? subtotalAmount + vatAmount;
+
+  const invoiceNumber =
+    generatedInvoice?.displayId ||
+    (matchesConfirmOrder
+      ? lastConfirmPaymentResponse?.invoice_number
+      : orderDetail?.invoice_number) ||
+    confirmationDetail?.sale?.invoice?.displayId ||
+    "";
+  const hasInvoiceNumber = invoiceNumber.trim().length > 0;
+  const currentView: ReceiptViewMode =
+    requestedView === "invoice" && hasInvoiceNumber
+      ? "invoice"
+      : "delivery-note";
+  const isDeliveryNote = currentView === "delivery-note";
+
+  const saleId =
+    lastConfirmPaymentResponse?.sale_id ||
+    confirmationDetail?.sale?.saleId ||
+    "";
+  const canOpenInvoice = Boolean(hasInvoiceNumber || saleId);
+
+  const referenceNumber =
+    confirmationDetail?.displayId ||
+    orderDetail?.display_id ||
+    orderDetail?.order_number ||
+    lastConfirmPaymentResponse?.order_number ||
+    "—";
+  const documentTimestampSource =
+    generatedInvoice?.createdAt ||
+    confirmationDetail?.sale?.invoice?.createdAt ||
+    confirmationDetail?.createdAt ||
+    orderDetail?.date ||
+    null;
+  const documentTimestamp = formatDocumentDate(documentTimestampSource);
+  const { date: invoiceDateLabel, time: invoiceTimeLabel } = useMemo(
+    () => getDateParts(documentTimestampSource),
+    [documentTimestampSource],
+  );
+  const receiverName = confirmationDetail?.receiver?.name || "—";
+  const receiverPosition = confirmationDetail?.receiver?.position || "—";
+  const documentRemark =
+    confirmationDetail?.remark || orderDetail?.delivery_instructions || null;
+  const deliveryKindLabel =
+    confirmationDetail?.kind === "adhoc_delivery"
+      ? "Direct Sale"
+      : "Scheduled Delivery";
+  const hasReceiverName = receiverName.trim() !== "—";
+  const receiverDisplayName = hasReceiverName ? receiverName : "Not recorded";
+  const hasReceiverPosition = receiverPosition.trim() !== "—";
+  const hasContact = shippingDetails.contact.trim() !== "N/A";
+  const hasAddress = shippingDetails.address.trim() !== "N/A";
+  const hasRemark =
+    typeof documentRemark === "string" && documentRemark.trim().length > 0;
+  const paymentMethodDisplay = formatPaymentMethod(
+    generatedInvoice
+      ? confirmationDetail?.sale?.payment?.method || selectedPaymentMethod
+      : confirmationDetail?.sale?.payment?.method ||
+          orderDetail?.payment_method ||
+          selectedPaymentMethod,
+  );
+
+  const persistInvoiceInStore = useCallback(
+    (invoice: DriverSaleInvoiceResponse) => {
+      setGeneratedInvoice(invoice);
+
+      if (lastConfirmPaymentResponse) {
+        setLastConfirmPaymentResponse({
+          ...lastConfirmPaymentResponse,
+          invoice_number: invoice.displayId,
+          detail: confirmationDetail?.sale
+            ? {
+                ...confirmationDetail,
+                sale: {
+                  ...confirmationDetail.sale,
+                  invoice: {
+                    id: invoice.id,
+                    displayId: invoice.displayId,
+                    totalAmount: invoice.totalAmount,
+                    createdAt: invoice.createdAt,
+                    isPaid: invoice.isPaid,
+                    hasPendingPayment: invoice.hasPendingPayment,
+                    remark: invoice.remark,
+                  },
+                },
+              }
+            : lastConfirmPaymentResponse.detail || null,
+        });
+      }
+
+      const matchesOrder = (order: Order) => {
+        if (selectedOrder && order.id === selectedOrder) return true;
+        if (!lastConfirmPaymentResponse) return false;
+        return (
+          order.id === lastConfirmPaymentResponse.orderId ||
+          order.order_number === lastConfirmPaymentResponse.order_number ||
+          order.display_id === lastConfirmPaymentResponse.order_number
+        );
+      };
+
+      useOrderStore.setState((state) => ({
+        assignedOrders: state.assignedOrders.map((order) =>
+          matchesOrder(order)
+            ? {
+                ...order,
+                invoice_number: invoice.displayId,
+              }
+            : order,
+        ),
+        completedOrders: state.completedOrders.map((order) =>
+          matchesOrder(order)
+            ? {
+                ...order,
+                invoice_number: invoice.displayId,
+              }
+            : order,
+        ),
+      }));
+    },
+    [
+      confirmationDetail,
+      lastConfirmPaymentResponse,
+      selectedOrder,
+      setLastConfirmPaymentResponse,
+    ],
+  );
+
+  const navigateToInvoice = useCallback(() => {
+    router.replace({
+      pathname: "/(root)/(tabs)/payment-receipt",
+      params: { view: "invoice" },
+    });
+  }, [router]);
+
+  const handleGenerateInvoice = useCallback(async () => {
+    if (isGeneratingInvoice) return;
+
+    if (hasInvoiceNumber) {
+      navigateToInvoice();
+      return;
+    }
+
+    if (!saleId) {
+      showErrorAlert(
+        "Invoice unavailable",
+        "This sale does not have an invoice source.",
+      );
+      return;
+    }
+
+    setIsGeneratingInvoice(true);
+    try {
+      const response = await authenticatedFetch(
+        `${IP_ADDRESS}/sales/${encodeURIComponent(saleId)}/invoice`,
+        {
+          method: "POST",
+        },
+      );
+
+      const result =
+        await parseApiResponseWithSoftError<DriverSaleInvoiceResponse>(
+          response,
+        );
+
+      if (!result.ok) {
+        showErrorAlert(
+          "Invoice failed",
+          result.error || "Failed to generate invoice. Please try again.",
+        );
+        return;
+      }
+
+      persistInvoiceInStore(result.data);
+      navigateToInvoice();
+    } catch (error) {
+      console.error("Failed to generate invoice:", error);
+      showErrorAlert(
+        "Invoice failed",
+        "Failed to generate invoice. Please try again.",
+      );
+    } finally {
+      setIsGeneratingInvoice(false);
+    }
+  }, [
     hasInvoiceNumber,
-    "invoiceNumber:",
-    invoiceNumber,
-    "matchesConfirmOrder:",
-    matchesConfirmOrder,
-    "selectedPaymentMethod:",
-    selectedPaymentMethod,
-  );
-  const paymentDate = new Date().toLocaleDateString("en-GB", {
-    day: "2-digit",
-    month: "2-digit",
-    year: "numeric",
-    hour: "2-digit",
-    minute: "2-digit",
-  });
+    isGeneratingInvoice,
+    navigateToInvoice,
+    persistInvoiceInStore,
+    saleId,
+  ]);
+
+  const handleClose = useCallback(async () => {
+    if (isNavigating) return;
+
+    setIsNavigating(true);
+    try {
+      clearCart();
+      setLastConfirmPaymentResponse(null);
+      router.replace("/(root)/(tabs)/home");
+    } catch (error) {
+      console.error("Failed to close document flow:", error);
+      router.push("/(root)/(tabs)/home");
+    } finally {
+      setIsNavigating(false);
+    }
+  }, [clearCart, isNavigating, router, setLastConfirmPaymentResponse]);
 
   const generateDeliveryNoteHTML = useCallback(() => {
-    // Delivery note: simple list of items delivered, no invoice number, no payment, no amounts
-    const itemsWithNumbers = cartItems
-      .filter((item) => item?.name)
-      .map((item, index) => ({
-        itemNo: String(index + 1).padStart(2, "0"),
-        name: item.name,
-        quantity: item.quantity,
-      }));
+    const remarkHtml =
+      typeof documentRemark === "string" && documentRemark.trim().length > 0
+        ? escapeHtml(documentRemark.trim())
+        : "";
 
-    const itemsHTML = itemsWithNumbers
-      .map((item) => {
-        const checkboxHTML = Array.from(
-          { length: item.quantity },
-          () =>
-            '<span style="display: inline-block; width: 12px; height: 12px; border: 1px solid #000; margin: 2px;"></span>',
-        ).join("");
-        return `
-        <tr style="border-bottom: 1px solid #e5e7eb;">
-          <td style="padding: 6px; text-align: center; font-size: 11px;">${item.itemNo}</td>
-          <td style="padding: 6px; text-align: center; font-size: 11px;"></td>
-          <td style="padding: 6px; text-align: left; font-size: 11px;">${item.name}</td>
-          <td style="padding: 6px; text-align: center; font-size: 11px;">${checkboxHTML}</td>
-        </tr>
-      `;
-      })
-      .join("");
-
-    const currentDate = new Date();
-    const dateStr = currentDate.toLocaleDateString("en-GB", {
-      day: "2-digit",
-      month: "2-digit",
-      year: "numeric",
-    });
+    const hasPricedSaleRows = saleRows.some((row) =>
+      hasLinePrice(row.unitPrice),
+    );
+    const saleItemColumnCount = hasPricedSaleRows ? 3 : 2;
+    const itemsHtml =
+      saleRows.length > 0
+        ? saleRows
+            .map(
+              (row) => `
+                <tr>
+                  <td>${escapeHtml(row.label)}</td>
+                  <td class="qty-cell">${escapeHtml(formatQuantity(row.quantity))}</td>
+                  ${
+                    hasPricedSaleRows
+                      ? `<td class="amount-cell">${escapeHtml(formatOptionalLinePrice(row.unitPrice))}</td>`
+                      : ""
+                  }
+                </tr>
+              `,
+            )
+            .join("")
+        : `
+            <tr>
+              <td colspan="${saleItemColumnCount}" class="empty-cell">No sale items recorded.</td>
+            </tr>
+          `;
 
     return `
       <!DOCTYPE html>
       <html>
         <head>
-          <meta charset="utf-8">
-          <title>Delivery Note - ${orderId}</title>
+          <meta charset="utf-8" />
+          <title>Delivery Note - ${escapeHtml(referenceNumber)}</title>
           <style>
-            body { 
-              font-family: Arial, sans-serif; 
-              margin: 0; 
-              padding: 10px; 
-              color: #000; 
-              background: white;
-              font-size: 11px;
-              line-height: 1.3;
+            @page {
+              margin: 16mm;
             }
-            .delivery-container {
-              max-width: 300px;
-              margin: 0 auto;
-              background: white;
-            }
-            .company-header {
-              text-align: center;
-              margin-bottom: 15px;
-              border-bottom: 1px solid #000;
-              padding-bottom: 10px;
-            }
-            .company-name {
+            body {
+              font-family: Arial, sans-serif;
+              margin: 0;
+              padding: 0;
+              color: #0f172a;
+              background: #ffffff;
               font-size: 12px;
-              font-weight: bold;
-              margin-bottom: 5px;
-              color: #0066CC;
             }
-            .company-name-arabic {
-              font-size: 11px;
-              margin-bottom: 5px;
-              color: #0066CC;
+            .page {
+              max-width: 760px;
+              margin: 0 auto;
+              background: #ffffff;
+              border: 1px solid #cbd5e1;
             }
-            .contact-info {
-              font-size: 9px;
-              margin: 3px 0;
-              line-height: 1.4;
+            .header {
+              padding: 20px 22px 16px;
+              border-bottom: 1px solid #cbd5e1;
             }
-            .delivery-note-header {
-              text-align: center;
-              margin: 15px 0;
-              font-size: 14px;
-              font-weight: bold;
-            }
-            .info-section {
-              margin: 8px 0;
-              font-size: 10px;
-            }
-            .info-row {
-              display: flex;
-              margin: 4px 0;
-            }
-            .info-label {
-              min-width: 80px;
-              font-weight: bold;
-            }
-            .items-table {
-              width: 100%;
-              border-collapse: collapse;
-              margin: 15px 0;
-              font-size: 10px;
-            }
-            .items-table th {
-              text-align: center;
-              padding: 6px 4px;
-              border: 1px solid #000;
-              font-weight: bold;
-              background: #f0f0f0;
-            }
-            .items-table td {
-              padding: 6px 4px;
-              border: 1px solid #ccc;
-              text-align: center;
-            }
-            .footer-section {
-              margin-top: 20px;
-              border-top: 1px solid #000;
-              padding-top: 10px;
-              font-size: 10px;
-            }
-            .footer-row {
-              margin: 8px 0;
-            }
-            .signature-section {
-              margin-top: 15px;
+            .header-row {
               display: flex;
               justify-content: space-between;
+              align-items: flex-start;
+              gap: 20px;
             }
-            .signature-field {
-              flex: 1;
-              text-align: center;
-              margin: 0 5px;
-              padding-top: 40px;
-              border-top: 1px solid #000;
-            }
-            .disclaimer {
-              margin-top: 15px;
-              font-size: 8px;
+            .company {
+              font-size: 18px;
+              font-weight: 700;
               line-height: 1.4;
+            }
+            .title {
+              font-size: 22px;
+              font-weight: 700;
+              margin: 8px 0 4px;
+            }
+            .subtitle {
+              color: #475569;
+              font-size: 12px;
+            }
+            .ref-box {
+              min-width: 180px;
+              border: 1px solid #cbd5e1;
+              padding: 12px 14px;
+            }
+            .ref-row + .ref-row {
+              margin-top: 10px;
+            }
+            .ref-label {
+              color: #64748b;
+              font-size: 11px;
+              text-transform: uppercase;
+              margin-bottom: 6px;
+            }
+            .ref-value {
+              font-size: 16px;
+              font-weight: 700;
+            }
+            .content {
+              padding: 18px 22px 22px;
+            }
+            .meta-grid {
+              display: grid;
+              grid-template-columns: repeat(2, 1fr);
+              gap: 12px;
+              margin-bottom: 18px;
+            }
+            .meta-card {
+              border: 1px solid #cbd5e1;
+              padding: 10px 12px;
+            }
+            .meta-label {
+              color: #64748b;
+              font-size: 10px;
+              text-transform: uppercase;
+              margin-bottom: 4px;
+            }
+            .meta-value {
+              font-size: 13px;
+              font-weight: 600;
+            }
+            .section {
+              margin-top: 18px;
+            }
+            .section-title {
+              font-size: 12px;
+              font-weight: 700;
+              text-transform: uppercase;
+              margin-bottom: 8px;
+            }
+            .detail-box {
+              border: 1px solid #cbd5e1;
+              padding: 12px;
+              line-height: 1.55;
+            }
+            .detail-row {
+              display: flex;
+              border-bottom: 1px solid #e2e8f0;
+              padding: 8px 0;
+            }
+            .detail-row:last-child {
+              border-bottom: none;
+            }
+            .detail-term {
+              width: 150px;
+              color: #475569;
+              font-weight: 700;
+              padding-right: 12px;
+            }
+            .detail-value {
+              flex: 1;
+            }
+            table {
+              width: 100%;
+              border-collapse: collapse;
+              border: 1px solid #cbd5e1;
+            }
+            th {
+              text-align: left;
+              padding: 10px 12px;
+              background: #f8fafc;
+              border-bottom: 1px solid #cbd5e1;
+              font-size: 11px;
+              font-weight: 700;
+              text-transform: uppercase;
+            }
+            td {
+              padding: 10px 12px;
+              border-bottom: 1px solid #e2e8f0;
+              vertical-align: top;
+            }
+            tr:last-child td {
+              border-bottom: none;
+            }
+            .qty-head,
+            .qty-cell {
+              width: 90px;
               text-align: center;
+            }
+            .amount-head,
+            .amount-cell {
+              width: 130px;
+              text-align: right;
+            }
+            tfoot td {
+              font-weight: 700;
+              background: #f8fafc;
+            }
+            .empty-cell {
+              text-align: center;
+              color: #64748b;
+            }
+            .remark-box {
+              border: 1px solid #cbd5e1;
+              padding: 12px;
+              line-height: 1.6;
             }
           </style>
         </head>
         <body>
-          <div class="delivery-container">
-            <div class="company-header">
-              <div class="company-name">Al Ghadeer Drinking Water Factory L.L.C</div>
-              <div class="company-name-arabic">مياه شرب معبأة</div>
-              <div class="contact-info">
-                <strong>Al Ain Head Office:</strong><br>
-                Tel.: 03/7211353, Fax: 03/7216169<br>
-                P.O.Box: 80239, U.A.E.
-              </div>
-              <div class="contact-info">
-                <strong>Abu Dhabi Branch:</strong><br>
-                Tel.: 02/5551324, Fax: 02/5551325<br>
-                P.O.Box: 54272, U.A.E.
+          <div class="page">
+            <div class="header">
+              <div class="header-row">
+                <div>
+                  <div class="company">AL GHADEER DRINKING WATER FACTORY L.L.C</div>
+                  <div class="title">Delivery Note</div>
+                  <div class="subtitle">${escapeHtml(deliveryKindLabel)}</div>
+                </div>
+                <div class="ref-box">
+                  <div class="ref-row">
+                    <div class="ref-label">Reference</div>
+                    <div class="ref-value">${escapeHtml(referenceNumber)}</div>
+                  </div>
+                  <div class="ref-row">
+                    <div class="ref-label">Date</div>
+                    <div class="ref-value">${escapeHtml(documentTimestamp)}</div>
+                  </div>
+                </div>
               </div>
             </div>
+            <div class="content">
+              <div class="meta-grid">
+                <div class="meta-card">
+                  <div class="meta-label">Customer</div>
+                  <div class="meta-value">${escapeHtml(shippingDetails.name)}</div>
+                </div>
+                <div class="meta-card">
+                  <div class="meta-label">Received By</div>
+                  <div class="meta-value">${escapeHtml(receiverDisplayName)}</div>
+                </div>
+              </div>
 
-            <div class="delivery-note-header">
-              <div>Delivery Note</div>
-              <div style="font-size: 12px; margin-top: 3px;">سند تسليم</div>
-            </div>
+              <section class="section">
+                <div class="section-title">Delivery Details</div>
+                <div class="detail-box">
+                  ${
+                    hasAddress
+                      ? `
+                          <div class="detail-row">
+                            <div class="detail-term">Address</div>
+                            <div class="detail-value">${escapeHtml(shippingDetails.address)}</div>
+                          </div>
+                        `
+                      : ""
+                  }
+                  ${
+                    hasContact
+                      ? `
+                          <div class="detail-row">
+                            <div class="detail-term">Phone</div>
+                            <div class="detail-value">${escapeHtml(shippingDetails.contact)}</div>
+                          </div>
+                        `
+                      : ""
+                  }
+                  ${
+                    hasReceiverPosition
+                      ? `
+                          <div class="detail-row">
+                            <div class="detail-term">Position</div>
+                            <div class="detail-value">${escapeHtml(receiverPosition)}</div>
+                          </div>
+                        `
+                      : ""
+                  }
+                </div>
+              </section>
 
-            <div class="info-section">
-              <div class="info-row">
-                <span class="info-label">Date:</span>
-                <span>${dateStr}</span>
-              </div>
-              <div class="info-row">
-                <span class="info-label">Delivered to:</span>
-                <span>${shippingDetails.name || ""}</span>
-              </div>
-              <div class="info-row">
-                <span class="info-label">Address:</span>
-                <span>${shippingDetails.address || ""}</span>
-              </div>
-              <div class="info-row">
-                <span class="info-label">Contact:</span>
-                <span>${shippingDetails.contact || ""}</span>
-              </div>
+              <section class="section">
+                <div class="section-title">Delivered Items</div>
+                <table class="table">
+                  <thead>
+                    <tr>
+                      <th>Item</th>
+                      <th class="qty-head">Qty</th>
+                      ${
+                        hasPricedSaleRows
+                          ? `<th class="amount-head">Price (No VAT)</th>`
+                          : ""
+                      }
+                    </tr>
+                  </thead>
+                  <tbody>${itemsHtml}</tbody>
+                </table>
+              </section>
+
+              ${buildActionSectionHtml(deliveryActionRows)}
+              ${buildCashCollectionSectionHtml(creditCollectionRows)}
               ${
-                orderDetail?.delivery_instructions
+                remarkHtml
                   ? `
-              <div class="info-row">
-                <span class="info-label">Instructions:</span>
-                <span>${orderDetail.delivery_instructions}</span>
-              </div>
-              `
+                      <section class="section">
+                        <div class="section-title">Remarks</div>
+                        <div class="remark-box">${remarkHtml}</div>
+                      </section>
+                    `
                   : ""
               }
-              <div class="info-row" style="margin-top: 8px;">
-                <span class="info-label" style="color: #6b7280; font-style: italic;">Payment due (not paid)</span>
-              </div>
-            </div>
-
-            <table class="items-table">
-              <thead>
-                <tr>
-                  <th style="width: 15%;">Item No.<br>رقم الصنف</th>
-                  <th style="width: 15%;">Unit<br>الوحدة</th>
-                  <th style="width: 45%;">DESCRIPTION<br>التفاصيل</th>
-                  <th style="width: 25%;">Qty.<br>الكمية</th>
-                </tr>
-              </thead>
-              <tbody>
-                ${itemsHTML}
-              </tbody>
-            </table>
-
-            <div class="footer-section">
-              <div class="footer-row">
-                <div>Received the goods in good Condition</div>
-                <div style="margin-top: 5px;">استلمت البضاعة اعلاه بحالة جيدة</div>
-              </div>
-              
-              <div class="signature-section">
-                <div class="signature-field">
-                  <div>Salesman</div>
-                </div>
-                <div class="signature-field">
-                  <div>Stamp</div>
-                </div>
-                <div class="signature-field">
-                  <div>Received By</div>
-                </div>
-              </div>
-
-              <div class="disclaimer">
-                <div>The Factory is not Responsible for any Payment Paid to our Staff Without Receipt Voucher issued by us.</div>
-                <div style="margin-top: 5px;">المصنع غير مسؤول عن أي دفعات مالية تسدد لمندوبنا بدون سند استلام نقدية صادر من قبلنا.</div>
-                <div style="margin-top: 10px; font-size: 7px;">AGW-AC-FM-05A REV.01</div>
-              </div>
             </div>
           </div>
         </body>
       </html>
     `;
-  }, [cartItems, shippingDetails, orderId, orderDetail]);
+  }, [
+    creditCollectionRows,
+    deliveryKindLabel,
+    documentRemark,
+    documentTimestamp,
+    deliveryActionRows,
+    hasAddress,
+    hasContact,
+    hasReceiverPosition,
+    receiverPosition,
+    receiverDisplayName,
+    referenceNumber,
+    saleRows,
+    shippingDetails.address,
+    shippingDetails.contact,
+    shippingDetails.name,
+  ]);
 
-  const generateReceiptHTML = useCallback(() => {
-    const itemsHTML = cartItems
-      .map((item) => {
-        if (!item || !item.name) {
-          console.error("Invalid cart item in HTML generation:", item);
-          return "";
-        }
-        // Calculate price breakdown
-        const priceExVat = item.price;
-        const vatAmount = priceExVat * 0.05;
-        const itemVatTotal = (vatAmount * item.quantity).toFixed(2);
-        const itemTotal = ((priceExVat + vatAmount) * item.quantity).toFixed(2);
+  const generateInvoiceHTML = useCallback(() => {
+    const itemsHtml =
+      saleRows.length > 0
+        ? saleRows
+            .map((row) => {
+              const priceExVat = row.unitPrice;
+              const itemVatTotal = priceExVat * 0.05 * row.quantity;
+              const itemTotal = (priceExVat + priceExVat * 0.05) * row.quantity;
 
-        return `
-        <tr style="border-bottom: 1px solid #e5e7eb;">
-          <td style="padding: 6px; text-align: left; font-size: 11px;">${item.name || "Unknown Product"}</td>
-          <td style="padding: 6px; text-align: center; font-size: 11px;">${item.quantity || 0}</td>
-          <td style="padding: 6px; text-align: right; font-size: 11px;">${priceExVat.toFixed(2)}</td>
-          <td style="padding: 6px; text-align: right; font-size: 11px;">${itemVatTotal}</td>
-          <td style="padding: 6px; text-align: right; font-size: 11px; font-weight: bold;">${itemTotal}</td>
-        </tr>
-      `;
-      })
-      .filter(Boolean)
-      .join("");
-
-    // Rent items are not shown in receipt
-    const rentItemsHTML = "";
-
-    const currentDate = new Date();
-    const dateStr = currentDate.toISOString().split("T")[0];
-    const timeStr = currentDate.toTimeString().split(" ")[0];
+              return `
+                <tr style="border-bottom: 1px solid #e5e7eb;">
+                  <td style="padding: 6px; text-align: left; font-size: 11px;">${escapeHtml(row.label)}</td>
+                  <td style="padding: 6px; text-align: center; font-size: 11px;">${escapeHtml(formatQuantity(row.quantity))}</td>
+                  <td style="padding: 6px; text-align: right; font-size: 11px;">${priceExVat.toFixed(2)}</td>
+                  <td style="padding: 6px; text-align: right; font-size: 11px;">${itemVatTotal.toFixed(2)}</td>
+                  <td style="padding: 6px; text-align: right; font-size: 11px; font-weight: bold;">${itemTotal.toFixed(2)}</td>
+                </tr>
+              `;
+            })
+            .join("")
+        : `
+            <tr>
+              <td colspan="5" style="padding: 12px; text-align:center; color:#64748b;">No sale items recorded.</td>
+            </tr>
+          `;
 
     return `
       <!DOCTYPE html>
       <html>
         <head>
-          <meta charset="utf-8">
-          <title>Tax Invoice - Order ${orderId}</title>
+          <meta charset="utf-8" />
+          <title>Invoice - ${escapeHtml(invoiceNumber || referenceNumber)}</title>
           <style>
-            body { 
-              font-family: 'Courier New', monospace; 
-              margin: 0; 
-              padding: 10px; 
-              color: #000; 
+            body {
+              font-family: 'Courier New', monospace;
+              margin: 0;
+              padding: 10px;
+              color: #000;
               background: white;
               font-size: 12px;
               line-height: 1.2;
@@ -462,7 +1252,7 @@ const PaymentReceipt: React.FC = () => {
             }
             .company-name {
               font-size: 14px;
-              font-weight: bold;
+              font-weight: 700;
               margin-bottom: 2px;
             }
             .company-location {
@@ -543,7 +1333,7 @@ const PaymentReceipt: React.FC = () => {
             <div class="company-header">
               <div class="company-name">Al Ghadeer DRINKING WATER FACTORY L.L.C</div>
               <div class="company-location">Al Ain, UAE</div>
-          </div>
+            </div>
 
             <div class="invoice-title">Tax Invoice</div>
             <div class="trn">TRN: 100234134300003</div>
@@ -551,11 +1341,11 @@ const PaymentReceipt: React.FC = () => {
             <div class="info-section">
               <div class="info-row">
                 <span class="info-label">Date:</span>
-                <span>${dateStr}</span>
+                <span>${invoiceDateLabel}</span>
               </div>
               <div class="info-row">
                 <span class="info-label">Time:</span>
-                <span>${timeStr}</span>
+                <span>${invoiceTimeLabel}</span>
               </div>
               <div class="info-row">
                 <span class="info-label">User:</span>
@@ -563,11 +1353,11 @@ const PaymentReceipt: React.FC = () => {
               </div>
               <div class="info-row">
                 <span class="info-label">Invoice No:</span>
-                <span>${invoiceDisplay}</span>
+                <span>${escapeHtml(invoiceNumber || "—")}</span>
               </div>
               <div class="info-row">
                 <span class="info-label">Customer:</span>
-                <span>${shippingDetails.name || "N/A"}</span>
+                <span>${escapeHtml(shippingDetails.name || "N/A")}</span>
               </div>
             </div>
 
@@ -578,40 +1368,37 @@ const PaymentReceipt: React.FC = () => {
               </div>
               <div class="info-row">
                 <span class="info-label">Payment Mode:</span>
-                <span>${paymentMethodDisplay}</span>
+                <span>${escapeHtml(paymentMethodDisplay)}</span>
               </div>
-          </div>
+            </div>
 
             <table class="items-table">
-            <thead>
-              <tr>
-                  <th style="text-align: left;">Product</th>
-                  <th style="text-align: center;">Qty</th>
-                  <th style="text-align: right;">Price (ex VAT)</th>
-                  <th style="text-align: right;">VAT</th>
-                  <th style="text-align: right;">Total</th>
-              </tr>
-            </thead>
-            <tbody>
-              ${itemsHTML}
-              ${rentItemsHTML}
-            </tbody>
-          </table>
+                <thead>
+                  <tr>
+                    <th style="text-align: left;">Product</th>
+                    <th style="text-align: center;">Qty</th>
+                    <th style="text-align: right;">Price (ex VAT)</th>
+                    <th style="text-align:right;">VAT</th>
+                    <th style="text-align:right;">Total</th>
+                  </tr>
+                </thead>
+                <tbody>${itemsHtml}</tbody>
+            </table>
 
-          <div class="total-section">
-            <div class="total-row">
+            <div class="total-section">
+              <div class="total-row">
                 <span>Subtotal (Excluding VAT):</span>
-                <span>${subtotal}</span>
-            </div>
-            <div class="total-row">
+                <span>${subtotalAmount.toFixed(2)}</span>
+              </div>
+              <div class="total-row">
                 <span>VAT (5%):</span>
-                <span>${vat}</span>
-            </div>
-            <div class="total-row final-total">
+                <span>${vatAmount.toFixed(2)}</span>
+              </div>
+              <div class="total-row final-total">
                 <span>Total (Including VAT):</span>
-                <span>${totalWithVat}</span>
+                <span>${totalAmount.toFixed(2)}</span>
+              </div>
             </div>
-          </div>
 
             <div class="contact-section">
               <div class="contact-row">Tel: +97137211353</div>
@@ -623,1216 +1410,1183 @@ const PaymentReceipt: React.FC = () => {
       </html>
     `;
   }, [
-    cartItems,
-    shippingDetails,
-    selectedPaymentMethod,
-    subtotal,
-    vat,
-    totalWithVat,
-    orderId,
-    invoiceDisplay,
-    orderDetail,
+    invoiceNumber,
+    invoiceDateLabel,
+    invoiceTimeLabel,
+    paymentMethodDisplay,
+    referenceNumber,
+    saleRows,
+    shippingDetails.name,
+    subtotalAmount,
+    totalAmount,
+    vatAmount,
   ]);
 
-  // Handle generating invoice from delivery note
-  const handleGenerateInvoice = useCallback(async () => {
-    console.log(
-      "Generate Invoice clicked - saleId:",
-      saleId,
-      "isGeneratingInvoice:",
-      isGeneratingInvoice,
-    );
-    console.log(
-      "Generate Invoice - lastConfirmPaymentResponse:",
-      JSON.stringify(lastConfirmPaymentResponse, null, 2),
-    );
-
-    if (isGeneratingInvoice || !saleId) {
-      console.log(
-        "Generate Invoice aborted - isGeneratingInvoice:",
-        isGeneratingInvoice,
-        "saleId empty:",
-        !saleId,
-      );
-      return;
-    }
-
-    setIsGeneratingInvoice(true);
-    try {
-      const url = `${IP_ADDRESS}/sales/${encodeURIComponent(saleId)}/invoice`;
-      console.log("Generating invoice - URL:", url);
-
-      const response = await authenticatedFetch(url, {
-        method: "POST",
-      });
-
-      const result =
-        await parseApiResponseWithSoftError<DriverSaleInvoiceResponse>(
-          response,
-        );
-
-      if (!result.ok) {
-        showErrorAlert(
-          "Error",
-          result.error || "Failed to generate invoice. Please try again.",
-        );
-        return;
-      }
-
-      const data = result.data;
-      console.log("Invoice generated:", data);
-
-      // Update the invoice number state
-      setGeneratedInvoiceNumber(data.displayId);
-
-      // Also update the store if needed
-      const { setLastConfirmPaymentResponse } = useOrderStore.getState();
-      if (lastConfirmPaymentResponse) {
-        setLastConfirmPaymentResponse({
-          ...lastConfirmPaymentResponse,
-          invoice_number: data.displayId,
-        });
-      }
-
-      showSuccessAlert(
-        "Invoice Generated",
-        `Invoice ${data.displayId} has been generated successfully.`,
-      );
-    } catch (error) {
-      console.error("Error generating invoice:", error);
-      showErrorAlert("Error", "Failed to generate invoice. Please try again.");
-    } finally {
-      setIsGeneratingInvoice(false);
-    }
-  }, [saleId, isGeneratingInvoice, lastConfirmPaymentResponse]);
-
-  const handleDownloadInvoice = useCallback(async () => {
-    if (isDownloading) return; // Prevent multiple simultaneous downloads
+  const handleDownloadDocument = useCallback(async () => {
+    if (isDownloading) return;
     if (!printNativeModule) {
       showErrorAlert(
-        "Download Unavailable",
-        "This app build is missing Expo Print. Rebuild and reinstall the Android app.",
+        "Download unavailable",
+        "This build is missing Expo Print. Rebuild and reinstall the app.",
       );
       return;
     }
 
     setIsDownloading(true);
     try {
-      console.log("Starting document download...");
       const html = isDeliveryNote
         ? generateDeliveryNoteHTML()
-        : generateReceiptHTML();
+        : generateInvoiceHTML();
       const documentType = isDeliveryNote ? "Delivery_Note" : "Invoice";
+      const filePart = toSafeFilePart(
+        invoiceNumber || referenceNumber || "document",
+      );
+      const timestamp = new Date().toISOString().replace(/[:.]/g, "-");
 
-      // Generate PDF
       const { uri } = await printNativeModule.printToFileAsync({
         html,
         base64: false,
-        width: 300, // Thermal receipt width
-        height: 400, // Estimated height
       });
 
-      // Create a unique filename
-      const timestamp = new Date().toISOString().replace(/[:.]/g, "-");
-      const newPath = `${FileSystem.documentDirectory}${documentType}_${orderId}_${timestamp}.pdf`;
+      const nextPath = `${FileSystem.documentDirectory}${documentType}_${filePart}_${timestamp}.pdf`;
+      await FileSystem.moveAsync({ from: uri, to: nextPath });
 
-      // Move file to permanent location
-      await FileSystem.moveAsync({
-        from: uri,
-        to: newPath,
-      });
-
-      console.log("PDF generated successfully:", newPath);
-
-      // Check if sharing is available
       if (await Sharing.isAvailableAsync()) {
-        await Sharing.shareAsync(newPath, {
+        await Sharing.shareAsync(nextPath, {
           mimeType: "application/pdf",
-          dialogTitle: `Download ${documentType}`,
+          dialogTitle: `Share ${documentType.replace("_", " ")}`,
           UTI: "com.adobe.pdf",
         });
-        console.log(`${documentType} shared successfully`);
       } else {
-        showSuccessAlert(
-          `${documentType} Saved`,
-          `${documentType} has been saved to your device.\nLocation: ${newPath}`,
-        );
+        showSuccessAlert("Document saved", `Saved to ${nextPath}`);
       }
     } catch (error) {
-      console.error("Download error:", error);
+      console.error("Failed to download document:", error);
       showErrorAlert(
-        "Download Failed",
-        `Unable to download the ${isDeliveryNote ? "delivery note" : "invoice"}. Please check your device storage and try again.`,
+        "Download failed",
+        `Unable to download the ${isDeliveryNote ? "delivery note" : "invoice"}.`,
       );
     } finally {
       setIsDownloading(false);
     }
   }, [
-    generateReceiptHTML,
     generateDeliveryNoteHTML,
+    generateInvoiceHTML,
+    invoiceNumber,
     isDeliveryNote,
-    orderId,
     isDownloading,
     printNativeModule,
+    referenceNumber,
   ]);
 
-  const handlePrintInvoice = useCallback(async () => {
-    if (isPrinting) return; // Prevent multiple simultaneous print requests
+  const handlePrintDocument = useCallback(async () => {
+    if (isPrinting) return;
     if (!printNativeModule) {
       showErrorAlert(
-        "Print Unavailable",
-        "This app build is missing Expo Print. Rebuild and reinstall the Android app.",
+        "Print unavailable",
+        "This build is missing Expo Print. Rebuild and reinstall the app.",
       );
       return;
     }
 
     setIsPrinting(true);
     try {
-      console.log("Starting document print...");
       const html = isDeliveryNote
         ? generateDeliveryNoteHTML()
-        : generateReceiptHTML();
+        : generateInvoiceHTML();
 
-      // Try different approaches based on platform
-      try {
-        // First try: Direct HTML print (should open system print dialog)
-        await printNativeModule.printAsync({
-          html: html,
-        });
-        console.log("System print dialog opened successfully");
-      } catch (directPrintError) {
-        console.log(
-          "Direct print failed, trying PDF approach:",
-          directPrintError,
-        );
-
-        // Second try: Generate PDF and print with URI
-        const { uri } = await printNativeModule.printToFileAsync({
-          html: html,
-          base64: false,
-        });
-
-        await printNativeModule.printAsync({
-          uri: uri,
-        });
-        console.log("PDF print dialog opened successfully");
-      }
+      await printNativeModule.printAsync({ html });
     } catch (error) {
-      console.error("Print error:", error);
+      console.error("Failed to print document:", error);
       showErrorAlert(
-        "Print Failed",
-        "Unable to open print dialog. Please check your printer connection and try again.",
+        "Print failed",
+        `Unable to print the ${isDeliveryNote ? "delivery note" : "invoice"}.`,
       );
     } finally {
       setIsPrinting(false);
     }
   }, [
-    generateReceiptHTML,
     generateDeliveryNoteHTML,
+    generateInvoiceHTML,
     isDeliveryNote,
     isPrinting,
     printNativeModule,
   ]);
 
-  const handleBackToHome = useCallback(async () => {
-    if (isNavigating) return; // Prevent multiple navigation attempts
+  const hasDocumentContext = Boolean(
+    orderDetail || confirmationDetail || lastConfirmPaymentResponse,
+  );
 
-    setIsNavigating(true);
-    try {
-      console.log("Navigating back to home...");
-
-      // Clear any order-related state if needed
-      // This ensures a clean state when returning to home
-
-      // Navigate to home
-      router.replace("/(root)/(tabs)/home");
-
-      console.log("Navigation to home completed");
-    } catch (error) {
-      console.error("Navigation error:", error);
-      // Fallback navigation method
-      router.push("/(root)/(tabs)/home");
-    } finally {
-      setIsNavigating(false);
-    }
-  }, [router, isNavigating]);
-
-  // If rent-items-only, show message and redirect
-  useEffect(() => {
-    if (isRentItemsOnly) {
-      showSuccessAlert(
-        "Delivery Confirmed",
-        "This delivery contains only rent items. No receipt is available.",
-        [{ text: "OK", onPress: () => router.push("/(root)/(tabs)/home") }],
-      );
-    }
-  }, [isRentItemsOnly, router]);
-
-  if (isRentItemsOnly) {
+  if (!hasDocumentContext) {
     return (
-      <View
-        style={{
-          flex: 1,
-          backgroundColor: "#F8F9FA",
-          justifyContent: "center",
-          alignItems: "center",
-          padding: 20,
-        }}
-      >
-        <Ionicons name="checkmark-circle" size={64} color="#28A745" />
-        <Text
-          style={{
-            color: "#212529",
-            fontSize: 18,
-            fontWeight: "600",
-            marginTop: 16,
-            textAlign: "center",
-          }}
-        >
-          Delivery Confirmed
+      <View style={[styles.screen, styles.centered]}>
+        <Ionicons name="document-text-outline" size={52} color="#94A3B8" />
+        <Text style={styles.emptyTitle}>No document found</Text>
+        <Text style={styles.emptyText}>
+          There is no active delivery note or invoice in progress.
         </Text>
-        <Text
-          style={{
-            color: "#6C757D",
-            fontSize: 14,
-            marginTop: 8,
-            textAlign: "center",
-          }}
-        >
-          This delivery contains only rent items.{"\n"}No receipt is available.
-        </Text>
+        <TouchableOpacity style={styles.primaryButton} onPress={handleClose}>
+          <Text style={styles.primaryButtonText}>Close</Text>
+        </TouchableOpacity>
       </View>
     );
   }
 
   return (
-    <View style={{ flex: 1, backgroundColor: "#F8F9FA" }}>
-      {/* Header */}
+    <View style={styles.screen}>
       <View
-        style={{
-          backgroundColor: "#FFFFFF",
-          paddingHorizontal: 20,
-          paddingTop: 16,
-          paddingBottom: 20,
-          borderBottomWidth: 1,
-          borderBottomColor: "#E9ECEF",
-        }}
+        style={[
+          styles.header,
+          {
+            paddingTop: Math.max(insets.top, 16),
+          },
+        ]}
       >
-        <View
-          style={{
-            flexDirection: "row",
-            alignItems: "center",
-            justifyContent: "space-between",
-            marginBottom: 12,
-          }}
+        <TouchableOpacity
+          onPress={handleClose}
+          style={styles.headerAction}
+          disabled={isNavigating}
         >
-          <TouchableOpacity onPress={handleBackToHome} style={{ padding: 8 }}>
-            <Ionicons name="home" size={24} color="#495057" />
-          </TouchableOpacity>
-          <Text style={{ color: "#212529", fontSize: 18, fontWeight: "600" }}>
-            {isDeliveryNote ? "Delivery Note" : "Payment Receipt"}
+          <Ionicons name="close" size={22} color="#0F172A" />
+        </TouchableOpacity>
+        <View style={styles.headerCenter}>
+          <Text style={styles.headerTitle}>
+            {isDeliveryNote ? "Delivery Note" : "Invoice"}
           </Text>
-          <View style={{ width: 40 }} />
+          <Text style={styles.headerSubtitle}>
+            {isDeliveryNote
+              ? "Review the delivery note and print it if needed."
+              : "Invoice generated for the completed sale."}
+          </Text>
         </View>
-
-        {orderDetail && (
-          <View
-            style={{
-              backgroundColor: isDeliveryNote ? "#FFF8E6" : "#E8F5E8",
-              borderRadius: 8,
-              padding: 12,
-              borderWidth: 1,
-              borderColor: isDeliveryNote ? "#FFE082" : "#C8E6C9",
-            }}
+        {isDeliveryNote ? (
+          <TouchableOpacity
+            style={[
+              styles.headerUtilityButton,
+              (!printNativeModule || isPrinting) &&
+                styles.headerUtilityButtonDisabled,
+            ]}
+            onPress={handlePrintDocument}
+            disabled={!printNativeModule || isPrinting}
+            activeOpacity={0.85}
           >
-            <View
-              style={{
-                flexDirection: "row",
-                alignItems: "center",
-                marginBottom: 4,
-              }}
-            >
-              <Ionicons
-                name={isDeliveryNote ? "document-text" : "checkmark-circle"}
-                size={16}
-                color={isDeliveryNote ? "#F57C00" : "#28A745"}
-              />
-              <Text
-                style={{
-                  color: isDeliveryNote ? "#E65100" : "#28A745",
-                  fontSize: 14,
-                  fontWeight: "600",
-                  marginLeft: 6,
-                }}
-              >
-                {isDeliveryNote ? "Delivery note ready" : "Receipt ready"}
-              </Text>
-            </View>
-            <View style={{ flexDirection: "row", alignItems: "center" }}>
-              <Ionicons
-                name="time"
-                size={14}
-                color={isDeliveryNote ? "#F57C00" : "#28A745"}
-              />
-              <Text
-                style={{
-                  color: isDeliveryNote ? "#E65100" : "#28A745",
-                  fontSize: 12,
-                  marginLeft: 6,
-                }}
-              >
-                {isDeliveryNote
-                  ? "Items delivered – Payment due"
-                  : "Payment completed successfully"}
-              </Text>
-            </View>
-          </View>
+            {isPrinting ? (
+              <ActivityIndicator size="small" color="#0F172A" />
+            ) : (
+              <>
+                <Ionicons name="print-outline" size={16} color="#0F172A" />
+                <Text style={styles.headerUtilityText}>Print</Text>
+              </>
+            )}
+          </TouchableOpacity>
+        ) : (
+          <View style={styles.headerSpacer} />
         )}
       </View>
 
-      {/* Content */}
       <ScrollView
-        contentContainerStyle={{ padding: 20, paddingBottom: 150 }}
+        contentContainerStyle={[
+          styles.content,
+          { paddingBottom: Math.max(insets.bottom + 132, 148) },
+        ]}
         showsVerticalScrollIndicator={false}
       >
-        {/* Receipt Preview */}
-        <View
-          style={{
-            backgroundColor: "#FFFFFF",
-            borderRadius: 8,
-            padding: 20,
-            marginBottom: 16,
-            borderWidth: 1,
-            borderColor: "#E9ECEF",
-            shadowColor: "#1E40AF",
-            shadowOffset: { width: 0, height: 2 },
-            shadowOpacity: 0.05,
-            shadowRadius: 8,
-            elevation: 2,
-          }}
-        >
-          {/* Company Header */}
-          <View
-            style={{
-              alignItems: "center",
-              marginBottom: 16,
-              borderBottomWidth: 1,
-              borderBottomColor: "#E9ECEF",
-              paddingBottom: 12,
-            }}
-          >
-            <Text
-              style={{
-                color: "#212529",
-                fontSize: 16,
-                fontWeight: "700",
-                marginBottom: 2,
-              }}
-            >
-              AL GHADEER DRINKING WATER
-            </Text>
-            <Text
-              style={{
-                color: "#212529",
-                fontSize: 16,
-                fontWeight: "700",
-                marginBottom: 2,
-              }}
-            >
-              FACTORY L.L.C
-            </Text>
-            <Text style={{ color: "#6C757D", fontSize: 12, marginBottom: 8 }}>
-              Al Ain, UAE
-            </Text>
-            <Text style={{ color: "#212529", fontSize: 14, fontWeight: "600" }}>
-              {isDeliveryNote ? "Delivery Note" : "Tax Invoice"}
-            </Text>
-            {!isDeliveryNote && (
-              <Text style={{ color: "#6C757D", fontSize: 10 }}>
-                TRN: 100234134300003
+        {isDeliveryNote ? (
+          <View style={styles.invoicePreviewCard}>
+            <View style={styles.invoicePreviewHeader}>
+              <Text style={styles.invoiceCompanyText}>
+                AL GHADEER DRINKING WATER
               </Text>
-            )}
-          </View>
+              <Text style={styles.invoiceCompanyText}>FACTORY L.L.C</Text>
+              <Text style={styles.invoiceCompanySubtext}>Al Ain, UAE</Text>
+              <Text style={styles.invoiceDocumentTitle}>Delivery Note</Text>
+              <Text style={styles.deliveryNoteHeaderSubtext}>
+                {deliveryKindLabel}
+              </Text>
+            </View>
 
-          {isDeliveryNote ? (
-            /* Delivery Note: simple summary - items only, no invoice/amounts/payment */
-            <>
-              <View style={{ marginBottom: 16 }}>
-                <View
-                  style={{
-                    flexDirection: "row",
-                    justifyContent: "space-between",
-                    marginBottom: 4,
-                  }}
-                >
-                  <Text
-                    style={{
-                      color: "#6C757D",
-                      fontSize: 11,
-                      fontWeight: "600",
-                    }}
-                  >
-                    Date:
-                  </Text>
-                  <Text style={{ color: "#212529", fontSize: 11 }}>
-                    {new Date().toISOString().split("T")[0]}
-                  </Text>
-                </View>
-                <View
-                  style={{
-                    flexDirection: "row",
-                    justifyContent: "space-between",
-                    marginBottom: 4,
-                  }}
-                >
-                  <Text
-                    style={{
-                      color: "#6C757D",
-                      fontSize: 11,
-                      fontWeight: "600",
-                    }}
-                  >
-                    Delivered to:
-                  </Text>
-                  <Text style={{ color: "#212529", fontSize: 11 }}>
-                    {shippingDetails.name || "N/A"}
-                  </Text>
-                </View>
-                <View
-                  style={{
-                    flexDirection: "row",
-                    justifyContent: "space-between",
-                    marginBottom: 4,
-                  }}
-                >
-                  <Text
-                    style={{
-                      color: "#6C757D",
-                      fontSize: 11,
-                      fontWeight: "600",
-                    }}
-                  >
-                    Address:
-                  </Text>
-                  <Text
-                    style={{
-                      color: "#212529",
-                      fontSize: 11,
-                      flex: 1,
-                      textAlign: "right",
-                    }}
-                  >
-                    {shippingDetails.address || "N/A"}
-                  </Text>
-                </View>
-                <View
-                  style={{
-                    flexDirection: "row",
-                    justifyContent: "space-between",
-                    marginBottom: 4,
-                  }}
-                >
-                  <Text
-                    style={{
-                      color: "#6C757D",
-                      fontSize: 11,
-                      fontWeight: "600",
-                    }}
-                  >
-                    Contact:
-                  </Text>
-                  <Text style={{ color: "#212529", fontSize: 11 }}>
-                    {shippingDetails.contact || "—"}
-                  </Text>
-                </View>
-                {orderDetail?.delivery_instructions ? (
-                  <View
-                    style={{
-                      flexDirection: "row",
-                      justifyContent: "space-between",
-                      marginBottom: 4,
-                    }}
-                  >
-                    <Text
-                      style={{
-                        color: "#6C757D",
-                        fontSize: 11,
-                        fontWeight: "600",
-                      }}
-                    >
-                      Instructions:
-                    </Text>
-                    <Text
-                      style={{
-                        color: "#212529",
-                        fontSize: 11,
-                        flex: 1,
-                        textAlign: "right",
-                      }}
-                    >
-                      {orderDetail.delivery_instructions}
-                    </Text>
-                  </View>
+            <View style={styles.invoiceInfoSection}>
+              <DeliveryNoteInfoRow label="Date:" value={invoiceDateLabel} />
+              <DeliveryNoteInfoRow label="Time:" value={invoiceTimeLabel} />
+              <DeliveryNoteInfoRow label="Reference:" value={referenceNumber} />
+              <DeliveryNoteInfoRow
+                label="Customer:"
+                value={shippingDetails.name || "—"}
+              />
+              <DeliveryNoteInfoRow
+                label="Received By:"
+                value={receiverDisplayName}
+              />
+            </View>
+
+            {(hasContact || hasReceiverPosition || hasAddress || hasRemark) && (
+              <View style={styles.invoiceInfoSection}>
+                {hasContact ? (
+                  <DeliveryNoteInfoRow
+                    label="Phone:"
+                    value={shippingDetails.contact}
+                  />
                 ) : null}
-                <View
-                  style={{
-                    marginTop: 8,
-                    paddingTop: 8,
-                    borderTopWidth: 1,
-                    borderTopColor: "#F1F3F4",
-                  }}
-                >
-                  <Text
-                    style={{
-                      color: "#6b7280",
-                      fontSize: 11,
-                      fontStyle: "italic",
-                    }}
-                  >
-                    Payment due (not paid)
-                  </Text>
-                </View>
+                {hasReceiverPosition ? (
+                  <DeliveryNoteInfoRow
+                    label="Receiver Position:"
+                    value={receiverPosition}
+                  />
+                ) : null}
+                {hasAddress ? (
+                  <DeliveryNoteInfoRow
+                    label="Address:"
+                    value={shippingDetails.address}
+                  />
+                ) : null}
+                {hasRemark ? (
+                  <DeliveryNoteInfoRow
+                    label="Remarks:"
+                    value={documentRemark || ""}
+                  />
+                ) : null}
               </View>
-              <View style={{ marginBottom: 16 }}>
-                <View
-                  style={{
-                    flexDirection: "row",
-                    borderBottomWidth: 1,
-                    borderBottomColor: "#E9ECEF",
-                    paddingBottom: 6,
-                    marginBottom: 8,
-                  }}
+            )}
+
+            <DeliveryNoteTableSection
+              title="Delivered Items"
+              rows={saleRows.map((row) => ({
+                id: row.id,
+                label: row.label,
+                quantity: row.quantity,
+                unitPrice: row.unitPrice,
+              }))}
+            />
+            <DeliveryNoteActionSection rows={deliveryActionRows} />
+            <DeliveryNoteCashCollectionSection rows={creditCollectionRows} />
+
+            {saleRows.length === 0 &&
+            deliveryActionRows.length === 0 &&
+            creditCollectionRows.length === 0 ? (
+              <Text style={styles.placeholderText}>
+                No delivery items were recorded in the confirmation response.
+              </Text>
+            ) : null}
+
+            <View style={styles.invoiceContactSection}>
+              <Text style={styles.invoiceContactText}>Tel: +97137211353</Text>
+              <Text style={styles.invoiceContactText}>
+                Website: www.alghadeerwater.com
+              </Text>
+              <Text style={styles.invoiceContactText}>
+                Email: Info@alghadeerwater.com
+              </Text>
+            </View>
+          </View>
+        ) : (
+          <View style={styles.invoicePreviewCard}>
+            <View style={styles.invoicePreviewHeader}>
+              <Text style={styles.invoiceCompanyText}>
+                AL GHADEER DRINKING WATER
+              </Text>
+              <Text style={styles.invoiceCompanyText}>FACTORY L.L.C</Text>
+              <Text style={styles.invoiceCompanySubtext}>Al Ain, UAE</Text>
+              <Text style={styles.invoiceDocumentTitle}>Tax Invoice</Text>
+              <Text style={styles.invoiceTrnText}>TRN: 100234134300003</Text>
+            </View>
+
+            <View style={styles.invoiceInfoSection}>
+              <View style={styles.invoiceDetailRow}>
+                <Text style={styles.invoiceDetailLabel}>Date:</Text>
+                <Text style={styles.invoiceDetailValue}>
+                  {invoiceDateLabel}
+                </Text>
+              </View>
+              <View style={styles.invoiceDetailRow}>
+                <Text style={styles.invoiceDetailLabel}>Time:</Text>
+                <Text style={styles.invoiceDetailValue}>
+                  {invoiceTimeLabel}
+                </Text>
+              </View>
+              <View style={styles.invoiceDetailRow}>
+                <Text style={styles.invoiceDetailLabel}>User:</Text>
+                <Text style={styles.invoiceDetailValue}>Driver</Text>
+              </View>
+              <View style={styles.invoiceDetailRow}>
+                <Text style={styles.invoiceDetailLabel}>Invoice No:</Text>
+                <Text style={styles.invoiceDetailValue}>
+                  {invoiceNumber || "—"}
+                </Text>
+              </View>
+              <View style={styles.invoiceDetailRow}>
+                <Text style={styles.invoiceDetailLabel}>Customer:</Text>
+                <Text style={styles.invoiceDetailValue}>
+                  {shippingDetails.name || "N/A"}
+                </Text>
+              </View>
+            </View>
+
+            <View style={styles.invoiceInfoSection}>
+              <View style={styles.invoiceDetailRow}>
+                <Text style={styles.invoiceDetailLabel}>Customer TRN:</Text>
+                <Text style={styles.invoiceDetailValue}></Text>
+              </View>
+              <View style={styles.invoiceDetailRow}>
+                <Text style={styles.invoiceDetailLabel}>Payment Mode:</Text>
+                <Text style={styles.invoiceDetailValue}>
+                  {paymentMethodDisplay}
+                </Text>
+              </View>
+            </View>
+
+            <View style={styles.invoiceItemsSection}>
+              <View style={styles.invoiceItemsHeaderRow}>
+                <Text
+                  style={[
+                    styles.invoiceItemsHeaderText,
+                    styles.invoiceProductCell,
+                  ]}
                 >
-                  <Text
-                    style={{
-                      flex: 1,
-                      color: "#6C757D",
-                      fontSize: 10,
-                      fontWeight: "600",
-                      textTransform: "uppercase",
-                    }}
-                  >
-                    Item
-                  </Text>
-                  <Text
-                    style={{
-                      width: 50,
-                      color: "#6C757D",
-                      fontSize: 10,
-                      fontWeight: "600",
-                      textAlign: "center",
-                      textTransform: "uppercase",
-                    }}
-                  >
-                    Qty
-                  </Text>
-                </View>
-                {cartItems.map((item, index) => {
-                  if (!item || !item.name) return null;
+                  Product
+                </Text>
+                <Text
+                  style={[styles.invoiceItemsHeaderText, styles.invoiceQtyCell]}
+                >
+                  Qty
+                </Text>
+                <Text
+                  style={[
+                    styles.invoiceItemsHeaderText,
+                    styles.invoiceAmountCell,
+                  ]}
+                >
+                  Price (ex VAT)
+                </Text>
+                <Text
+                  style={[styles.invoiceItemsHeaderText, styles.invoiceVatCell]}
+                >
+                  VAT
+                </Text>
+                <Text
+                  style={[
+                    styles.invoiceItemsHeaderText,
+                    styles.invoiceAmountCell,
+                  ]}
+                >
+                  Total
+                </Text>
+              </View>
+
+              {saleRows.length > 0 ? (
+                saleRows.map((row, index) => {
+                  const priceExVat = row.unitPrice;
+                  const itemVatTotal = priceExVat * 0.05 * row.quantity;
+                  const itemTotal =
+                    (priceExVat + priceExVat * 0.05) * row.quantity;
+
                   return (
                     <View
-                      key={item.id}
-                      style={{ flexDirection: "row", marginBottom: 6 }}
+                      key={row.id}
+                      style={[
+                        styles.invoiceItemRow,
+                        index !== saleRows.length - 1 &&
+                          styles.invoiceItemRowBorder,
+                      ]}
                     >
-                      <Text style={{ flex: 1, color: "#212529", fontSize: 11 }}>
-                        {item.name}
-                      </Text>
                       <Text
-                        style={{
-                          width: 50,
-                          color: "#212529",
-                          fontSize: 11,
-                          textAlign: "center",
-                        }}
+                        style={[
+                          styles.invoiceItemText,
+                          styles.invoiceProductCell,
+                        ]}
                       >
-                        {item.quantity}
-                      </Text>
-                    </View>
-                  );
-                })}
-              </View>
-            </>
-          ) : (
-            /* Invoice: full receipt with amounts */
-            <>
-              <View style={{ marginBottom: 16 }}>
-                <View
-                  style={{
-                    flexDirection: "row",
-                    justifyContent: "space-between",
-                    marginBottom: 4,
-                  }}
-                >
-                  <Text
-                    style={{
-                      color: "#6C757D",
-                      fontSize: 11,
-                      fontWeight: "600",
-                    }}
-                  >
-                    Date:
-                  </Text>
-                  <Text style={{ color: "#212529", fontSize: 11 }}>
-                    {new Date().toISOString().split("T")[0]}
-                  </Text>
-                </View>
-                <View
-                  style={{
-                    flexDirection: "row",
-                    justifyContent: "space-between",
-                    marginBottom: 4,
-                  }}
-                >
-                  <Text
-                    style={{
-                      color: "#6C757D",
-                      fontSize: 11,
-                      fontWeight: "600",
-                    }}
-                  >
-                    Time:
-                  </Text>
-                  <Text style={{ color: "#212529", fontSize: 11 }}>
-                    {new Date().toTimeString().split(" ")[0]}
-                  </Text>
-                </View>
-                <View
-                  style={{
-                    flexDirection: "row",
-                    justifyContent: "space-between",
-                    marginBottom: 4,
-                  }}
-                >
-                  <Text
-                    style={{
-                      color: "#6C757D",
-                      fontSize: 11,
-                      fontWeight: "600",
-                    }}
-                  >
-                    Invoice No:
-                  </Text>
-                  <Text style={{ color: "#212529", fontSize: 11 }}>
-                    {invoiceDisplay}
-                  </Text>
-                </View>
-                <View
-                  style={{
-                    flexDirection: "row",
-                    justifyContent: "space-between",
-                    marginBottom: 4,
-                  }}
-                >
-                  <Text
-                    style={{
-                      color: "#6C757D",
-                      fontSize: 11,
-                      fontWeight: "600",
-                    }}
-                  >
-                    Customer:
-                  </Text>
-                  <Text style={{ color: "#212529", fontSize: 11 }}>
-                    {shippingDetails.name || "N/A"}
-                  </Text>
-                </View>
-              </View>
-              <View style={{ marginBottom: 16 }}>
-                <View
-                  style={{
-                    flexDirection: "row",
-                    justifyContent: "space-between",
-                    marginBottom: 4,
-                  }}
-                >
-                  <Text
-                    style={{
-                      color: "#6C757D",
-                      fontSize: 11,
-                      fontWeight: "600",
-                    }}
-                  >
-                    Payment Mode:
-                  </Text>
-                  <Text style={{ color: "#212529", fontSize: 11 }}>
-                    {paymentMethodDisplay}
-                  </Text>
-                </View>
-              </View>
-              <View style={{ marginBottom: 16 }}>
-                <View
-                  style={{
-                    flexDirection: "row",
-                    borderBottomWidth: 1,
-                    borderBottomColor: "#E9ECEF",
-                    paddingBottom: 6,
-                    marginBottom: 8,
-                  }}
-                >
-                  <Text
-                    style={{
-                      flex: 1,
-                      color: "#6C757D",
-                      fontSize: 10,
-                      fontWeight: "600",
-                      textTransform: "uppercase",
-                    }}
-                  >
-                    Product
-                  </Text>
-                  <Text
-                    style={{
-                      width: 35,
-                      color: "#6C757D",
-                      fontSize: 10,
-                      fontWeight: "600",
-                      textAlign: "center",
-                      textTransform: "uppercase",
-                    }}
-                  >
-                    Qty
-                  </Text>
-                  <Text
-                    style={{
-                      width: 65,
-                      color: "#6C757D",
-                      fontSize: 10,
-                      fontWeight: "600",
-                      textAlign: "right",
-                      textTransform: "uppercase",
-                    }}
-                  >
-                    Price (ex VAT)
-                  </Text>
-                  <Text
-                    style={{
-                      width: 60,
-                      color: "#6C757D",
-                      fontSize: 10,
-                      fontWeight: "600",
-                      textAlign: "right",
-                      textTransform: "uppercase",
-                    }}
-                  >
-                    VAT
-                  </Text>
-                  <Text
-                    style={{
-                      width: 65,
-                      color: "#6C757D",
-                      fontSize: 10,
-                      fontWeight: "600",
-                      textAlign: "right",
-                      textTransform: "uppercase",
-                    }}
-                  >
-                    Total
-                  </Text>
-                </View>
-                {cartItems.map((item, index) => {
-                  if (!item || !item.name) return null;
-                  const priceExVat = item.price;
-                  const vatAmount = priceExVat * 0.05;
-                  const itemVatTotal = vatAmount * item.quantity;
-                  const itemTotal = (priceExVat + vatAmount) * item.quantity;
-                  return (
-                    <View
-                      key={item.id}
-                      style={{
-                        flexDirection: "row",
-                        marginBottom: 6,
-                        borderBottomWidth:
-                          index !== cartItems.length - 1 ? 1 : 0,
-                        borderBottomColor: "#F1F3F4",
-                        paddingBottom: index !== cartItems.length - 1 ? 6 : 0,
-                      }}
-                    >
-                      <Text style={{ flex: 1, color: "#212529", fontSize: 11 }}>
-                        {item.name}
+                        {row.label}
                       </Text>
                       <Text
-                        style={{
-                          width: 35,
-                          color: "#212529",
-                          fontSize: 11,
-                          textAlign: "center",
-                        }}
+                        style={[styles.invoiceItemText, styles.invoiceQtyCell]}
                       >
-                        {item.quantity}
+                        {formatQuantity(row.quantity)}
                       </Text>
                       <Text
-                        style={{
-                          width: 65,
-                          color: "#212529",
-                          fontSize: 11,
-                          textAlign: "right",
-                        }}
+                        style={[
+                          styles.invoiceItemText,
+                          styles.invoiceAmountCell,
+                        ]}
                       >
                         AED {priceExVat.toFixed(2)}
                       </Text>
                       <Text
-                        style={{
-                          width: 60,
-                          color: "#212529",
-                          fontSize: 11,
-                          textAlign: "right",
-                        }}
+                        style={[styles.invoiceItemText, styles.invoiceVatCell]}
                       >
                         AED {itemVatTotal.toFixed(2)}
                       </Text>
                       <Text
-                        style={{
-                          width: 65,
-                          color: "#212529",
-                          fontSize: 11,
-                          fontWeight: "600",
-                          textAlign: "right",
-                        }}
+                        style={[
+                          styles.invoiceItemText,
+                          styles.invoiceItemTotalText,
+                          styles.invoiceAmountCell,
+                        ]}
                       >
                         AED {itemTotal.toFixed(2)}
                       </Text>
                     </View>
                   );
-                })}
-              </View>
-              {/* Totals - Invoice only */}
-              <View
-                style={{
-                  borderTopWidth: 1,
-                  borderTopColor: "#E9ECEF",
-                  paddingTop: 12,
-                }}
-              >
-                <View
-                  style={{
-                    flexDirection: "row",
-                    justifyContent: "space-between",
-                    marginBottom: 4,
-                  }}
-                >
-                  <Text style={{ color: "#6C757D", fontSize: 11 }}>
-                    Subtotal (Excluding VAT):
-                  </Text>
-                  <Text style={{ color: "#212529", fontSize: 11 }}>
-                    AED {subtotal}
-                  </Text>
-                </View>
-                <View
-                  style={{
-                    flexDirection: "row",
-                    justifyContent: "space-between",
-                    marginBottom: 4,
-                  }}
-                >
-                  <Text style={{ color: "#6C757D", fontSize: 11 }}>
-                    VAT (5%):
-                  </Text>
-                  <Text style={{ color: "#212529", fontSize: 11 }}>
-                    AED {vat}
-                  </Text>
-                </View>
-                <View
-                  style={{
-                    flexDirection: "row",
-                    justifyContent: "space-between",
-                    borderTopWidth: 1,
-                    borderTopColor: "#E9ECEF",
-                    paddingTop: 8,
-                    marginTop: 4,
-                  }}
-                >
-                  <Text
-                    style={{
-                      color: "#212529",
-                      fontSize: 13,
-                      fontWeight: "700",
-                    }}
-                  >
-                    Total (Including VAT):
-                  </Text>
-                  <Text
-                    style={{
-                      color: "#212529",
-                      fontSize: 13,
-                      fontWeight: "700",
-                    }}
-                  >
-                    AED {totalWithVat}
-                  </Text>
-                </View>
-              </View>
+                })
+              ) : (
+                <Text style={styles.placeholderText}>
+                  No sale items were recorded for this invoice.
+                </Text>
+              )}
+            </View>
 
-              {/* Contact Info - Invoice only */}
-              <View
-                style={{
-                  marginTop: 20,
-                  borderTopWidth: 1,
-                  borderTopColor: "#E9ECEF",
-                  paddingTop: 12,
-                  alignItems: "center",
-                }}
-              >
-                <Text
-                  style={{ color: "#6C757D", fontSize: 10, marginBottom: 2 }}
-                >
-                  Tel: +97137211353
+            <View style={styles.invoiceTotalsSection}>
+              <View style={styles.invoiceDetailRow}>
+                <Text style={styles.invoiceSummaryLabel}>
+                  Subtotal (Excluding VAT)
                 </Text>
-                <Text
-                  style={{ color: "#6C757D", fontSize: 10, marginBottom: 2 }}
-                >
-                  Website: www.alghadeerwater.com
-                </Text>
-                <Text style={{ color: "#6C757D", fontSize: 10 }}>
-                  Email: Info@alghadeerwater.com
+                <Text style={styles.invoiceDetailValue}>
+                  {formatCurrency(subtotalAmount)}
                 </Text>
               </View>
-            </>
-          )}
-        </View>
-
-        {/* Action Buttons */}
-        <View style={{ gap: 12 }}>
-          {!printNativeModule && (
-            <View
-              style={{
-                backgroundColor: "#FEF2F2",
-                borderWidth: 1,
-                borderColor: "#FECACA",
-                borderRadius: 8,
-                padding: 12,
-              }}
-            >
-              <Text
-                style={{
-                  color: "#991B1B",
-                  fontSize: 13,
-                  fontWeight: "600",
-                  textAlign: "center",
-                }}
+              <View style={styles.invoiceDetailRow}>
+                <Text style={styles.invoiceSummaryLabel}>VAT (5%)</Text>
+                <Text style={styles.invoiceDetailValue}>
+                  {formatCurrency(vatAmount)}
+                </Text>
+              </View>
+              <View
+                style={[styles.invoiceDetailRow, styles.invoiceTotalFinalRow]}
               >
-                Print/download is unavailable in this app build. Rebuild and
-                reinstall the Android app.
+                <Text style={styles.invoiceFinalLabel}>
+                  Total (Including VAT)
+                </Text>
+                <Text style={styles.invoiceFinalValue}>
+                  {formatCurrency(totalAmount)}
+                </Text>
+              </View>
+            </View>
+
+            <View style={styles.invoiceContactSection}>
+              <Text style={styles.invoiceContactText}>Tel: +97137211353</Text>
+              <Text style={styles.invoiceContactText}>
+                Website: www.alghadeerwater.com
+              </Text>
+              <Text style={styles.invoiceContactText}>
+                Email: Info@alghadeerwater.com
               </Text>
             </View>
-          )}
+          </View>
+        )}
+      </ScrollView>
 
-          {/* Generate Invoice Button - Only for Delivery Notes */}
-          {isDeliveryNote && saleId && (
+      <View
+        style={[
+          styles.bottomBar,
+          {
+            paddingBottom: Math.max(insets.bottom, 16),
+          },
+        ]}
+      >
+        {isDeliveryNote ? (
+          <>
             <TouchableOpacity
-              style={{
-                backgroundColor: isGeneratingInvoice ? "#E9ECEF" : "#FF9800",
-                paddingVertical: 16,
-                paddingHorizontal: 24,
-                borderRadius: 8,
-                flexDirection: "row",
-                alignItems: "center",
-                justifyContent: "center",
-                borderWidth: 1,
-                borderColor: isGeneratingInvoice ? "#E9ECEF" : "#FF9800",
-                shadowColor: "#FF9800",
-                shadowOffset: { width: 0, height: 2 },
-                shadowOpacity: isGeneratingInvoice ? 0.05 : 0.15,
-                shadowRadius: 8,
-                elevation: isGeneratingInvoice ? 2 : 4,
-              }}
+              style={[
+                styles.primaryButton,
+                (!canOpenInvoice || isGeneratingInvoice) &&
+                  styles.primaryButtonDisabled,
+              ]}
               onPress={handleGenerateInvoice}
-              disabled={isGeneratingInvoice}
+              disabled={!canOpenInvoice || isGeneratingInvoice}
+              activeOpacity={0.9}
             >
               {isGeneratingInvoice ? (
                 <>
-                  <ActivityIndicator color="#6C757D" size="small" />
-                  <Text
-                    style={{
-                      color: "#6C757D",
-                      fontSize: 16,
-                      fontWeight: "600",
-                      marginLeft: 8,
-                    }}
-                  >
-                    Generating...
+                  <ActivityIndicator color="#FFFFFF" size="small" />
+                  <Text style={styles.primaryButtonText}>
+                    Generating Invoice...
                   </Text>
                 </>
               ) : (
                 <>
-                  <Ionicons name="receipt" size={20} color="white" />
-                  <Text
-                    style={{
-                      color: "white",
-                      fontSize: 16,
-                      fontWeight: "600",
-                      marginLeft: 8,
-                    }}
-                  >
-                    Generate Invoice
+                  <Ionicons
+                    name={
+                      hasInvoiceNumber
+                        ? "document-text-outline"
+                        : "add-circle-outline"
+                    }
+                    size={18}
+                    color="#FFFFFF"
+                  />
+                  <Text style={styles.primaryButtonText}>
+                    {hasInvoiceNumber ? "View Invoice" : "Generate Invoice"}
                   </Text>
                 </>
               )}
             </TouchableOpacity>
-          )}
 
-          <TouchableOpacity
-            style={{
-              backgroundColor:
-                isDownloading || !printNativeModule ? "#E9ECEF" : "#1976D2",
-              paddingVertical: 16,
-              paddingHorizontal: 24,
-              borderRadius: 8,
-              flexDirection: "row",
-              alignItems: "center",
-              justifyContent: "center",
-              borderWidth: 1,
-              borderColor:
-                isDownloading || !printNativeModule ? "#E9ECEF" : "#1976D2",
-              shadowColor: "#1E40AF",
-              shadowOffset: { width: 0, height: 2 },
-              shadowOpacity: isDownloading ? 0.05 : 0.1,
-              shadowRadius: 8,
-              elevation: isDownloading ? 2 : 4,
-            }}
-            onPress={handleDownloadInvoice}
-            disabled={isDownloading || !printNativeModule}
-          >
-            {isDownloading ? (
-              <>
-                <ActivityIndicator color="#6C757D" size="small" />
-                <Text
-                  style={{
-                    color: "#6C757D",
-                    fontSize: 16,
-                    fontWeight: "600",
-                    marginLeft: 8,
-                  }}
-                >
-                  Downloading...
-                </Text>
-              </>
-            ) : (
-              <>
-                <Ionicons
-                  name="download"
-                  size={20}
-                  color={printNativeModule ? "white" : "#6C757D"}
-                />
-                <Text
-                  style={{
-                    color: printNativeModule ? "white" : "#6C757D",
-                    fontSize: 16,
-                    fontWeight: "600",
-                    marginLeft: 8,
-                  }}
-                >
-                  {printNativeModule
-                    ? `Download ${isDeliveryNote ? "Delivery Note" : "Invoice"}`
-                    : "Download Unavailable"}
-                </Text>
-              </>
-            )}
-          </TouchableOpacity>
+            <TouchableOpacity
+              style={styles.secondaryButton}
+              onPress={handleClose}
+              disabled={isNavigating}
+              activeOpacity={0.9}
+            >
+              {isNavigating ? (
+                <>
+                  <ActivityIndicator color="#0F172A" size="small" />
+                  <Text style={styles.secondaryButtonText}>Closing...</Text>
+                </>
+              ) : (
+                <>
+                  <Ionicons name="home-outline" size={18} color="#0F172A" />
+                  <Text style={styles.secondaryButtonText}>Close</Text>
+                </>
+              )}
+            </TouchableOpacity>
+          </>
+        ) : (
+          <>
+            <TouchableOpacity
+              style={[
+                styles.secondaryButton,
+                (!printNativeModule || isDownloading) &&
+                  styles.secondaryButtonDisabled,
+              ]}
+              onPress={handleDownloadDocument}
+              disabled={!printNativeModule || isDownloading}
+              activeOpacity={0.9}
+            >
+              {isDownloading ? (
+                <>
+                  <ActivityIndicator color="#0F172A" size="small" />
+                  <Text style={styles.secondaryButtonText}>
+                    Preparing PDF...
+                  </Text>
+                </>
+              ) : (
+                <>
+                  <Ionicons name="download-outline" size={18} color="#0F172A" />
+                  <Text style={styles.secondaryButtonText}>
+                    Download Invoice
+                  </Text>
+                </>
+              )}
+            </TouchableOpacity>
 
-          <TouchableOpacity
-            style={{
-              paddingVertical: 16,
-              paddingHorizontal: 24,
-              borderRadius: 8,
-              borderWidth: 1,
-              borderColor:
-                isPrinting || !printNativeModule ? "#E9ECEF" : "#E9ECEF",
-              backgroundColor:
-                isPrinting || !printNativeModule ? "#F8F9FA" : "#FFFFFF",
-              flexDirection: "row",
-              alignItems: "center",
-              justifyContent: "center",
-              shadowColor: "#1E40AF",
-              shadowOffset: { width: 0, height: 1 },
-              shadowOpacity: 0.05,
-              shadowRadius: 4,
-              elevation: 2,
-            }}
-            onPress={handlePrintInvoice}
-            disabled={isPrinting || !printNativeModule}
-          >
-            {isPrinting ? (
-              <>
-                <ActivityIndicator color="#6C757D" size="small" />
-                <Text
-                  style={{
-                    color: "#6C757D",
-                    fontSize: 16,
-                    fontWeight: "600",
-                    marginLeft: 8,
-                  }}
-                >
-                  Printing...
-                </Text>
-              </>
-            ) : (
-              <>
-                <Ionicons name="print" size={20} color="#6C757D" />
-                <Text
-                  style={{
-                    color: "#6C757D",
-                    fontSize: 16,
-                    fontWeight: "600",
-                    marginLeft: 8,
-                  }}
-                >
-                  {printNativeModule
-                    ? `Print ${isDeliveryNote ? "Delivery Note" : "Invoice"}`
-                    : "Print Unavailable"}
-                </Text>
-              </>
-            )}
-          </TouchableOpacity>
+            <TouchableOpacity
+              style={[
+                styles.secondaryButton,
+                (!printNativeModule || isPrinting) &&
+                  styles.secondaryButtonDisabled,
+              ]}
+              onPress={handlePrintDocument}
+              disabled={!printNativeModule || isPrinting}
+              activeOpacity={0.9}
+            >
+              {isPrinting ? (
+                <>
+                  <ActivityIndicator color="#0F172A" size="small" />
+                  <Text style={styles.secondaryButtonText}>
+                    Opening Print...
+                  </Text>
+                </>
+              ) : (
+                <>
+                  <Ionicons name="print-outline" size={18} color="#0F172A" />
+                  <Text style={styles.secondaryButtonText}>Print Invoice</Text>
+                </>
+              )}
+            </TouchableOpacity>
 
-          <TouchableOpacity
-            style={{
-              paddingVertical: 16,
-              paddingHorizontal: 24,
-              borderRadius: 8,
-              backgroundColor: isNavigating ? "#E9ECEF" : "#F8F9FA",
-              borderWidth: 1,
-              borderColor: "#E9ECEF",
-              flexDirection: "row",
-              alignItems: "center",
-              justifyContent: "center",
-            }}
-            onPress={handleBackToHome}
-            disabled={isNavigating}
-          >
-            {isNavigating ? (
-              <>
-                <ActivityIndicator color="#6C757D" size="small" />
-                <Text
-                  style={{
-                    color: "#6C757D",
-                    fontSize: 16,
-                    fontWeight: "600",
-                    marginLeft: 8,
-                  }}
-                >
-                  Loading...
-                </Text>
-              </>
-            ) : (
-              <>
-                <Ionicons name="home" size={20} color="#6C757D" />
-                <Text
-                  style={{
-                    color: "#6C757D",
-                    fontSize: 16,
-                    fontWeight: "600",
-                    marginLeft: 8,
-                  }}
-                >
-                  Back to Home
-                </Text>
-              </>
-            )}
-          </TouchableOpacity>
-        </View>
-      </ScrollView>
+            <TouchableOpacity
+              style={styles.primaryButton}
+              onPress={handleClose}
+              disabled={isNavigating}
+              activeOpacity={0.9}
+            >
+              {isNavigating ? (
+                <>
+                  <ActivityIndicator color="#FFFFFF" size="small" />
+                  <Text style={styles.primaryButtonText}>Closing...</Text>
+                </>
+              ) : (
+                <>
+                  <Ionicons name="home-outline" size={18} color="#FFFFFF" />
+                  <Text style={styles.primaryButtonText}>Close</Text>
+                </>
+              )}
+            </TouchableOpacity>
+          </>
+        )}
+      </View>
     </View>
   );
 };
+
+const styles = StyleSheet.create({
+  screen: {
+    flex: 1,
+    backgroundColor: "#F4F7FB",
+  },
+  centered: {
+    justifyContent: "center",
+    alignItems: "center",
+    paddingHorizontal: 24,
+  },
+  header: {
+    paddingHorizontal: 20,
+    paddingBottom: 18,
+    flexDirection: "row",
+    alignItems: "center",
+    borderBottomWidth: 1,
+    borderBottomColor: "#E2E8F0",
+    backgroundColor: "#FFFFFF",
+  },
+  headerAction: {
+    width: 40,
+    height: 40,
+    borderRadius: 12,
+    alignItems: "center",
+    justifyContent: "center",
+    backgroundColor: "#F8FAFC",
+    borderWidth: 1,
+    borderColor: "#E2E8F0",
+  },
+  headerCenter: {
+    flex: 1,
+    paddingHorizontal: 16,
+  },
+  headerTitle: {
+    color: "#0F172A",
+    fontSize: 18,
+    fontFamily: "Jakarta-Bold",
+  },
+  headerSubtitle: {
+    color: "#64748B",
+    fontSize: 12,
+    marginTop: 2,
+    lineHeight: 18,
+    fontFamily: "Jakarta-Regular",
+  },
+  headerSpacer: {
+    width: 40,
+  },
+  headerUtilityButton: {
+    minWidth: 78,
+    height: 36,
+    paddingHorizontal: 12,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: "#E2E8F0",
+    backgroundColor: "#F8FAFC",
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 6,
+  },
+  headerUtilityButtonDisabled: {
+    opacity: 0.6,
+  },
+  headerUtilityText: {
+    color: "#0F172A",
+    fontSize: 13,
+    fontFamily: "Jakarta-SemiBold",
+  },
+  content: {
+    padding: 20,
+    gap: 16,
+  },
+  notePaper: {
+    backgroundColor: "#FFFFFF",
+    borderRadius: 18,
+    borderWidth: 1,
+    borderColor: "#E4E9EF",
+    padding: 22,
+    shadowColor: "#0F172A",
+    shadowOffset: { width: 0, height: 8 },
+    shadowOpacity: 0.04,
+    shadowRadius: 18,
+    elevation: 3,
+  },
+  notePaperHeader: {
+    marginBottom: 18,
+    borderBottomWidth: 1,
+    borderBottomColor: "#EEF2F6",
+    paddingBottom: 16,
+  },
+  noteHeaderRow: {
+    flexDirection: "row",
+    alignItems: "flex-start",
+    justifyContent: "space-between",
+    gap: 16,
+  },
+  noteHeaderBrand: {
+    flex: 1,
+  },
+  notePaperCompany: {
+    color: "#212529",
+    fontSize: 16,
+    marginBottom: 2,
+    fontFamily: "Jakarta-Bold",
+  },
+  noteLocationText: {
+    color: "#6C757D",
+    fontSize: 12,
+    fontFamily: "Jakarta-Regular",
+  },
+  notePaperTitle: {
+    color: "#212529",
+    fontSize: 18,
+    marginTop: 12,
+    fontFamily: "Jakarta-Bold",
+  },
+  notePaperSubtitle: {
+    color: "#6C757D",
+    fontSize: 12,
+    marginTop: 4,
+    lineHeight: 18,
+    fontFamily: "Jakarta-Regular",
+  },
+  noteDocumentBox: {
+    width: 148,
+    borderWidth: 1,
+    borderColor: "#E4E9EF",
+    borderRadius: 16,
+    overflow: "hidden",
+    backgroundColor: "#FAFBFD",
+  },
+  noteDocumentRow: {
+    paddingHorizontal: 14,
+    paddingVertical: 11,
+    borderBottomWidth: 1,
+    borderBottomColor: "#EDF1F5",
+  },
+  noteDocumentRowLast: {
+    borderBottomWidth: 0,
+  },
+  noteDocumentLabel: {
+    color: "#6C757D",
+    fontSize: 10,
+    textTransform: "uppercase",
+    letterSpacing: 0.4,
+    marginBottom: 4,
+    fontFamily: "Jakarta-SemiBold",
+  },
+  noteDocumentValue: {
+    color: "#212529",
+    fontSize: 12,
+    lineHeight: 17,
+    fontFamily: "Jakarta-Bold",
+  },
+  noteMetaGrid: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    justifyContent: "space-between",
+    marginBottom: 8,
+  },
+  noteSummaryCell: {
+    width: "48.5%",
+    paddingHorizontal: 14,
+    paddingVertical: 12,
+    marginBottom: 12,
+    borderWidth: 1,
+    borderColor: "#E7ECF2",
+    borderRadius: 14,
+    backgroundColor: "#FBFCFD",
+  },
+  noteSummaryLabel: {
+    color: "#6C757D",
+    fontSize: 10,
+    textTransform: "uppercase",
+    letterSpacing: 0.4,
+    marginBottom: 5,
+    fontFamily: "Jakarta-SemiBold",
+  },
+  noteSummaryValue: {
+    color: "#212529",
+    fontSize: 14,
+    lineHeight: 21,
+    fontFamily: "Jakarta-Bold",
+  },
+  noteSection: {
+    marginTop: 20,
+    paddingTop: 16,
+    borderTopWidth: 1,
+    borderTopColor: "#EEF2F6",
+  },
+  noteSectionTitle: {
+    color: "#0F172A",
+    fontSize: 12,
+    textTransform: "uppercase",
+    letterSpacing: 0.4,
+    marginBottom: 8,
+    fontFamily: "Jakarta-Bold",
+  },
+  noteFieldGrid: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    justifyContent: "space-between",
+  },
+  noteField: {
+    width: "48.5%",
+    paddingHorizontal: 10,
+    paddingVertical: 12,
+    marginBottom: 12,
+    borderWidth: 1,
+    borderColor: "#E9EDF2",
+    borderRadius: 14,
+    backgroundColor: "#FBFCFD",
+  },
+  noteFieldFull: {
+    width: "100%",
+  },
+  noteFieldLabel: {
+    color: "#64748B",
+    fontSize: 10,
+    textTransform: "uppercase",
+    letterSpacing: 0.4,
+    marginBottom: 5,
+    fontFamily: "Jakarta-SemiBold",
+  },
+  noteFieldValue: {
+    color: "#0F172A",
+    fontSize: 14,
+    lineHeight: 21,
+    fontFamily: "Jakarta-SemiBold",
+  },
+  noteTable: {
+    borderWidth: 1,
+    borderColor: "#D8E0E8",
+    borderRadius: 16,
+    overflow: "hidden",
+    backgroundColor: "#FFFFFF",
+  },
+  noteTableRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    paddingVertical: 13,
+    paddingHorizontal: 14,
+  },
+  noteTableHead: {
+    backgroundColor: "#F6F8FA",
+  },
+  noteTableHeadText: {
+    color: "#475569",
+    fontSize: 11,
+    textTransform: "uppercase",
+    letterSpacing: 0.4,
+    fontFamily: "Jakarta-SemiBold",
+  },
+  noteTableLabel: {
+    flex: 1,
+    color: "#0F172A",
+    fontSize: 14,
+    lineHeight: 20,
+    paddingRight: 12,
+    fontFamily: "Jakarta-SemiBold",
+  },
+  noteActionTypeCell: {
+    width: 110,
+    color: "#475569",
+    fontSize: 12,
+    lineHeight: 18,
+    paddingRight: 12,
+    fontFamily: "Jakarta-SemiBold",
+  },
+  noteTableQty: {
+    width: 68,
+    color: "#0F172A",
+    fontSize: 14,
+    fontFamily: "Jakarta-Bold",
+    textAlign: "center",
+  },
+  notePlaceholder: {
+    borderWidth: 1,
+    borderColor: "#E4E9EF",
+    borderRadius: 14,
+    backgroundColor: "#FBFCFD",
+    padding: 14,
+    marginTop: 18,
+  },
+  invoicePreviewCard: {
+    backgroundColor: "#FFFFFF",
+    borderRadius: 8,
+    padding: 20,
+    borderWidth: 1,
+    borderColor: "#E9ECEF",
+    shadowColor: "#1E40AF",
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.05,
+    shadowRadius: 8,
+    elevation: 2,
+  },
+  invoicePreviewHeader: {
+    alignItems: "center",
+    marginBottom: 16,
+    borderBottomWidth: 1,
+    borderBottomColor: "#E9ECEF",
+    paddingBottom: 12,
+  },
+  invoiceCompanyText: {
+    color: "#212529",
+    fontSize: 16,
+    marginBottom: 2,
+    fontFamily: "Jakarta-Bold",
+  },
+  invoiceCompanySubtext: {
+    color: "#6C757D",
+    fontSize: 12,
+    marginBottom: 8,
+    fontFamily: "Jakarta-Regular",
+  },
+  invoiceDocumentTitle: {
+    color: "#212529",
+    fontSize: 14,
+    fontFamily: "Jakarta-SemiBold",
+  },
+  deliveryNoteHeaderSubtext: {
+    color: "#6C757D",
+    fontSize: 12,
+    marginTop: 4,
+    fontFamily: "Jakarta-Regular",
+  },
+  invoiceTrnText: {
+    color: "#6C757D",
+    fontSize: 10,
+    marginTop: 2,
+    fontFamily: "Jakarta-SemiBold",
+  },
+  invoiceInfoSection: {
+    marginBottom: 16,
+  },
+  invoiceDetailRow: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    marginBottom: 4,
+  },
+  invoiceDetailLabel: {
+    color: "#6C757D",
+    fontSize: 11,
+    fontFamily: "Jakarta-SemiBold",
+  },
+  invoiceDetailValue: {
+    color: "#212529",
+    fontSize: 11,
+    textAlign: "right",
+    fontFamily: "Jakarta-Bold",
+  },
+  deliveryNoteInfoRow: {
+    flexDirection: "row",
+    alignItems: "flex-start",
+    justifyContent: "space-between",
+    gap: 12,
+    marginBottom: 6,
+  },
+  deliveryNoteInfoLabel: {
+    color: "#6C757D",
+    fontSize: 11,
+    fontFamily: "Jakarta-SemiBold",
+  },
+  deliveryNoteInfoValue: {
+    flex: 1,
+    color: "#212529",
+    fontSize: 11,
+    lineHeight: 18,
+    textAlign: "right",
+    fontFamily: "Jakarta-Bold",
+  },
+  invoiceItemsSection: {
+    marginBottom: 16,
+  },
+  invoiceItemsHeaderRow: {
+    flexDirection: "row",
+    paddingBottom: 6,
+    marginBottom: 8,
+    borderBottomWidth: 1,
+    borderBottomColor: "#E9ECEF",
+  },
+  invoiceItemsHeaderText: {
+    color: "#6C757D",
+    fontSize: 10,
+    textTransform: "uppercase",
+    letterSpacing: 0.2,
+    fontFamily: "Jakarta-SemiBold",
+  },
+  deliveryNoteSectionTitle: {
+    color: "#212529",
+    fontSize: 12,
+    marginBottom: 8,
+    textTransform: "uppercase",
+    letterSpacing: 0.2,
+    fontFamily: "Jakarta-Bold",
+  },
+  invoiceProductCell: {
+    flex: 1,
+  },
+  invoiceQtyCell: {
+    width: 35,
+    textAlign: "center",
+  },
+  invoiceVatCell: {
+    width: 60,
+    textAlign: "right",
+  },
+  invoiceAmountCell: {
+    width: 65,
+    textAlign: "right",
+  },
+  deliveryNotePriceCell: {
+    width: 82,
+    textAlign: "right",
+  },
+  invoiceCollectionNoteCell: {
+    flex: 1,
+    paddingRight: 12,
+  },
+  invoiceCollectionAmountCell: {
+    width: 96,
+    textAlign: "right",
+  },
+  invoiceCollectionTotalRow: {
+    flexDirection: "row",
+    paddingTop: 8,
+    borderTopWidth: 1,
+    borderTopColor: "#E9ECEF",
+  },
+  invoiceCollectionTotalText: {
+    color: "#212529",
+    fontSize: 11,
+    fontFamily: "Jakarta-Bold",
+  },
+  deliveryNoteTypeCell: {
+    width: 110,
+    color: "#475569",
+    paddingRight: 12,
+  },
+  invoiceItemRow: {
+    flexDirection: "row",
+    marginBottom: 6,
+    paddingBottom: 6,
+  },
+  invoiceItemRowBorder: {
+    borderBottomWidth: 1,
+    borderBottomColor: "#F1F3F4",
+  },
+  invoiceItemText: {
+    color: "#212529",
+    fontSize: 11,
+    fontFamily: "Jakarta-Regular",
+  },
+  invoiceItemTotalText: {
+    fontFamily: "Jakarta-SemiBold",
+  },
+  invoiceTotalsSection: {
+    borderTopWidth: 1,
+    borderTopColor: "#E9ECEF",
+    paddingTop: 12,
+  },
+  invoiceSummaryLabel: {
+    color: "#6C757D",
+    fontSize: 11,
+    fontFamily: "Jakarta-Regular",
+  },
+  invoiceTotalFinalRow: {
+    borderTopWidth: 1,
+    borderTopColor: "#E9ECEF",
+    paddingTop: 8,
+    marginTop: 4,
+  },
+  invoiceFinalLabel: {
+    color: "#212529",
+    fontSize: 13,
+    fontFamily: "Jakarta-Bold",
+  },
+  invoiceFinalValue: {
+    color: "#212529",
+    fontSize: 13,
+    fontFamily: "Jakarta-Bold",
+  },
+  invoiceContactSection: {
+    marginTop: 20,
+    borderTopWidth: 1,
+    borderTopColor: "#E9ECEF",
+    paddingTop: 12,
+    alignItems: "center",
+  },
+  invoiceContactText: {
+    color: "#6C757D",
+    fontSize: 10,
+    marginBottom: 2,
+    fontFamily: "Jakarta-Medium",
+  },
+  deliveryRowBorder: {
+    borderBottomWidth: 1,
+    borderBottomColor: "#E2E8F0",
+  },
+  placeholderText: {
+    color: "#64748B",
+    fontSize: 14,
+    lineHeight: 21,
+    fontFamily: "Jakarta-Regular",
+  },
+  bottomBar: {
+    position: "absolute",
+    left: 0,
+    right: 0,
+    bottom: 0,
+    paddingHorizontal: 20,
+    paddingTop: 14,
+    backgroundColor: "#FFFFFF",
+    borderTopWidth: 1,
+    borderTopColor: "#E2E8F0",
+    gap: 10,
+  },
+  primaryButton: {
+    backgroundColor: "#0284C7",
+    borderRadius: 16,
+    paddingVertical: 16,
+    paddingHorizontal: 18,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 8,
+  },
+  primaryButtonDisabled: {
+    backgroundColor: "#93C5FD",
+  },
+  primaryButtonText: {
+    color: "#FFFFFF",
+    fontSize: 15,
+    fontFamily: "Jakarta-SemiBold",
+  },
+  secondaryButton: {
+    backgroundColor: "#F8FAFC",
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: "#E2E8F0",
+    paddingVertical: 16,
+    paddingHorizontal: 18,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 8,
+  },
+  secondaryButtonDisabled: {
+    opacity: 0.6,
+  },
+  secondaryButtonText: {
+    color: "#0F172A",
+    fontSize: 15,
+    fontFamily: "Jakarta-SemiBold",
+  },
+  emptyTitle: {
+    color: "#0F172A",
+    fontSize: 22,
+    marginTop: 16,
+    fontFamily: "Jakarta-Bold",
+  },
+  emptyText: {
+    color: "#64748B",
+    fontSize: 14,
+    lineHeight: 22,
+    textAlign: "center",
+    marginTop: 8,
+    marginBottom: 18,
+    fontFamily: "Jakarta-Regular",
+  },
+});
 
 export default PaymentReceipt;

@@ -5,8 +5,8 @@ import { showErrorAlert, showSuccessAlert } from "@/store/utils/alert";
 import { parseApiResponseWithSoftError } from "@/utils/api";
 import { getDriverRequestId } from "@/utils/driverIdentity";
 import { Ionicons } from "@expo/vector-icons";
-import { useRouter } from "expo-router";
-import React, { useCallback, useEffect, useMemo, useState } from "react";
+import { useFocusEffect } from "expo-router";
+import React, { useCallback, useMemo, useRef, useState } from "react";
 import {
   ActivityIndicator,
   RefreshControl,
@@ -67,7 +67,6 @@ const formatTruckLabel = (truck: TruckInfo): string => {
 
 const LoadedItems = () => {
   const insets = useSafeAreaInsets();
-  const router = useRouter();
   const { user } = useAuthStore();
   const { currentDriver } = useOrderStore();
 
@@ -77,6 +76,7 @@ const LoadedItems = () => {
   const [accepting, setAccepting] = useState(false);
   const [apiError, setApiError] = useState<string | null>(null);
   const [noTruckToday, setNoTruckToday] = useState(false);
+  const hasLoadedOnceRef = useRef(false);
 
   const driverId = useMemo(
     () =>
@@ -130,6 +130,13 @@ const LoadedItems = () => {
       chipColor: "#334155",
       icon: "alert-circle" as const,
     };
+  }, [truckData?.verificationStatus]);
+  const headerStatusLabel = useMemo(() => {
+    if (truckData?.verificationStatus === "verified") return "Verified";
+    if (truckData?.verificationStatus === "pending-verification") {
+      return "Pending";
+    }
+    return "None";
   }, [truckData?.verificationStatus]);
 
   const fetchTruckData = useCallback(
@@ -234,9 +241,13 @@ const LoadedItems = () => {
     }
   }, [driverId, truckData?.verificationId, fetchTruckData]);
 
-  useEffect(() => {
-    void fetchTruckData(true);
-  }, [fetchTruckData]);
+  useFocusEffect(
+    useCallback(() => {
+      const shouldUseInitialLoader = !hasLoadedOnceRef.current;
+      hasLoadedOnceRef.current = true;
+      void fetchTruckData(shouldUseInitialLoader);
+    }, [fetchTruckData]),
+  );
 
   if (loading) {
     return (
@@ -250,14 +261,24 @@ const LoadedItems = () => {
   return (
     <View style={[styles.container, { paddingTop: insets.top }]}>
       <View style={styles.header}>
-        <TouchableOpacity
-          style={styles.backButton}
-          onPress={() => router.back()}
+        <Text style={styles.headerTitle}>Truck</Text>
+        <View
+          style={[
+            styles.headerStatusBadge,
+            { backgroundColor: statusConfig.chipBg },
+          ]}
         >
-          <Ionicons name="arrow-back" size={22} color="#0F172A" />
-        </TouchableOpacity>
-        <Text style={styles.headerTitle}>Today&apos;s Truck</Text>
-        <View style={styles.headerRight} />
+          <Ionicons
+            name={statusConfig.icon}
+            size={13}
+            color={statusConfig.chipColor}
+          />
+          <Text
+            style={[styles.headerStatusText, { color: statusConfig.chipColor }]}
+          >
+            {headerStatusLabel}
+          </Text>
+        </View>
       </View>
 
       <ApiErrorText error={apiError} className="px-4" />
@@ -280,11 +301,8 @@ const LoadedItems = () => {
             <View style={styles.emptyIcon}>
               <Ionicons name="car-sport-outline" size={42} color="#94A3B8" />
             </View>
-            <Text style={styles.emptyTitle}>No truck assigned today</Text>
-            <Text style={styles.emptySubtitle}>
-              There is no truck assignment for today yet. Pull down to refresh
-              later.
-            </Text>
+            <Text style={styles.emptyTitle}>No truck today</Text>
+            <Text style={styles.emptySubtitle}>Pull to refresh later.</Text>
           </View>
         ) : (
           <>
@@ -308,7 +326,7 @@ const LoadedItems = () => {
 
             <View style={styles.statusCard}>
               <View style={styles.statusTopRow}>
-                <Text style={styles.sectionTitle}>Verification Status</Text>
+                <Text style={styles.sectionTitle}>Verify</Text>
                 <View
                   style={[
                     styles.statusChip,
@@ -331,9 +349,6 @@ const LoadedItems = () => {
                 </View>
               </View>
 
-              <Text style={styles.statusDescription}>
-                {statusConfig.description}
-              </Text>
               {canAccept ? (
                 <TouchableOpacity
                   style={[
@@ -348,9 +363,7 @@ const LoadedItems = () => {
                     <ActivityIndicator size="small" color="#FFFFFF" />
                   ) : (
                     <>
-                      <Text style={styles.acceptButtonText}>
-                        Accept Truck Hand-off
-                      </Text>
+                      <Text style={styles.acceptButtonText}>Accept</Text>
                       <Ionicons
                         name="checkmark-circle"
                         size={18}
@@ -369,22 +382,19 @@ const LoadedItems = () => {
                   size={18}
                   color="#334155"
                 />
-                <Text style={styles.infoCardText}>
-                  Load details will appear once verification is requested and
-                  linked.
-                </Text>
+                <Text style={styles.infoCardText}>Load will appear here.</Text>
               </View>
             ) : (
               <>
                 <View style={styles.summaryBar}>
                   <View style={styles.summaryItem}>
                     <Text style={styles.summaryValue}>{bulkItems.length}</Text>
-                    <Text style={styles.summaryLabel}>Bulk Items</Text>
+                    <Text style={styles.summaryLabel}>Bulk</Text>
                   </View>
                   <View style={styles.summaryDivider} />
                   <View style={styles.summaryItem}>
                     <Text style={styles.summaryValue}>{bulkUnitsTotal}</Text>
-                    <Text style={styles.summaryLabel}>Bulk Units</Text>
+                    <Text style={styles.summaryLabel}>Units</Text>
                   </View>
                   <View style={styles.summaryDivider} />
                   <View style={styles.summaryItem}>
@@ -394,11 +404,9 @@ const LoadedItems = () => {
                 </View>
 
                 <View style={styles.sectionCard}>
-                  <Text style={styles.sectionTitle}>Bulk Items</Text>
+                  <Text style={styles.sectionTitle}>Bulk</Text>
                   {bulkItems.length === 0 ? (
-                    <Text style={styles.sectionEmptyText}>
-                      No bulk items in the current load.
-                    </Text>
+                    <Text style={styles.sectionEmptyText}>No bulk items.</Text>
                   ) : (
                     bulkItems.map((item) => (
                       <View key={item.id} style={styles.listRow}>
@@ -423,9 +431,7 @@ const LoadedItems = () => {
                 <View style={styles.sectionCard}>
                   <Text style={styles.sectionTitle}>Assets</Text>
                   {assets.length === 0 ? (
-                    <Text style={styles.sectionEmptyText}>
-                      No assets in the current load.
-                    </Text>
+                    <Text style={styles.sectionEmptyText}>No assets.</Text>
                   ) : (
                     assets.map((asset) => (
                       <View key={asset.id} style={styles.assetCard}>
@@ -503,6 +509,18 @@ const styles = StyleSheet.create({
     fontWeight: "700",
     color: "#0F172A",
     letterSpacing: -0.3,
+  },
+  headerStatusBadge: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
+    paddingHorizontal: 10,
+    paddingVertical: 8,
+    borderRadius: 999,
+  },
+  headerStatusText: {
+    fontSize: 12,
+    fontWeight: "700",
   },
   headerRight: {
     width: 40,

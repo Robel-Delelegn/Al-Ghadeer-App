@@ -11,7 +11,7 @@ import { DeliveryStop, mapDeliveryToOrder } from "@/utils/deliveries";
 import { getDriverRequestId } from "@/utils/driverIdentity";
 import { resolveResourceUrl } from "@/utils/resources";
 import * as Location from "expo-location";
-import { useRouter } from "expo-router";
+import { useFocusEffect, useRouter } from "expo-router";
 import React, { useEffect, useState, useCallback } from "react";
 import {
   FlatList,
@@ -24,14 +24,8 @@ import {
 } from "react-native";
 import { GestureHandlerRootView } from "react-native-gesture-handler";
 import { ActivityIndicator } from "react-native-paper";
+import { SafeAreaView } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
-
-const formatDate = (date: Date) =>
-  date.toLocaleDateString(undefined, {
-    weekday: "long",
-    month: "short",
-    day: "numeric",
-  });
 
 const IP_ADDRESS = process.env.EXPO_PUBLIC_IP_ADDRESS;
 
@@ -54,11 +48,10 @@ const Home = () => {
     [currentDriver, user?.helper_name],
   );
 
-  const avatar = React.useMemo(() => {
-    const url = resolveResourceUrl(currentDriver?.profile_image);
-    return url || icons.person;
-  }, [currentDriver]);
-  const today = new Date();
+  const avatarUrl = React.useMemo(
+    () => resolveResourceUrl(currentDriver?.profile_image),
+    [currentDriver?.profile_image],
+  );
   const [searchQuery, setSearchQuery] = useState("");
   const [isloading, setIsloading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
@@ -191,187 +184,218 @@ const Home = () => {
     router.push("/(root)/(tabs)/order-details");
   };
 
-  const fetchDeliveries = useCallback(async () => {
-    if (!driverId) {
-      setAssignedOrders([]);
-      setApiError("Driver ID is missing. Please sign in again.");
-      setIsloading(false);
-      setRefreshing(false);
-      return;
-    }
-
-    try {
-      setIsloading(true);
-      setApiError(null);
-      const url = `${IP_ADDRESS}/deliveries`;
-      const response = await authenticatedFetch(url, {
-        method: "GET",
-        headers: {
-          "X-Driver-Id": driverId,
-        },
-      });
-      const result =
-        await parseApiResponseWithSoftError<DeliveryStop[]>(response);
-
-      if (!result.ok) {
+  const fetchDeliveries = useCallback(
+    async ({
+      preserveExistingOnEmpty = false,
+    }: {
+      preserveExistingOnEmpty?: boolean;
+    } = {}) => {
+      if (!driverId) {
         setAssignedOrders([]);
-        setApiError(result.error);
+        setApiError("Driver ID is missing. Please sign in again.");
+        setIsloading(false);
+        setRefreshing(false);
         return;
       }
 
-      const deliveries = Array.isArray(result.data) ? result.data : [];
-      const transformedOrders: Order[] = deliveries.map((delivery) =>
-        mapDeliveryToOrder(delivery),
-      );
-      setAssignedOrders(transformedOrders);
-    } catch (err) {
-      console.error("Error fetching deliveries:", err);
-      setAssignedOrders([]);
-      setApiError(
-        err instanceof Error ? err.message : "Failed to load deliveries.",
-      );
-    } finally {
-      setIsloading(false);
-      setRefreshing(false);
-    }
-  }, [driverId, setAssignedOrders]);
+      try {
+        setIsloading(true);
+        setApiError(null);
+        const url = `${IP_ADDRESS}/deliveries`;
+        const response = await authenticatedFetch(url, {
+          method: "GET",
+          headers: {
+            "X-Driver-Id": driverId,
+          },
+        });
+        const result =
+          await parseApiResponseWithSoftError<DeliveryStop[]>(response);
+
+        if (!result.ok) {
+          setAssignedOrders([]);
+          setApiError(result.error);
+          return;
+        }
+
+        const deliveries = Array.isArray(result.data) ? result.data : [];
+        const transformedOrders: Order[] = deliveries.map((delivery) =>
+          mapDeliveryToOrder(delivery),
+        );
+
+        const currentAssignedOrders = useOrderStore.getState().assignedOrders;
+        if (
+          preserveExistingOnEmpty &&
+          transformedOrders.length === 0 &&
+          currentAssignedOrders.length > 0
+        ) {
+          return;
+        }
+
+        setAssignedOrders(transformedOrders);
+      } catch (err) {
+        console.error("Error fetching deliveries:", err);
+        setAssignedOrders([]);
+        setApiError(
+          err instanceof Error ? err.message : "Failed to load deliveries.",
+        );
+      } finally {
+        setIsloading(false);
+        setRefreshing(false);
+      }
+    },
+    [driverId, setAssignedOrders],
+  );
 
   const onRefresh = useCallback(() => {
     setRefreshing(true);
-    fetchDeliveries();
+    void fetchDeliveries();
   }, [fetchDeliveries]);
 
-  useEffect(() => {
-    fetchDeliveries();
-  }, [fetchDeliveries]);
+  useFocusEffect(
+    useCallback(() => {
+      setSearchQuery("");
+      void fetchDeliveries({ preserveExistingOnEmpty: true });
+    }, [fetchDeliveries]),
+  );
+
   return (
     <GestureHandlerRootView style={{ flex: 1 }}>
-      <View className="flex-1 bg-white">
-        {/* Map fills the whole screen */}
-        <MyMap orders={filteredDeliveries} />
-        {/* Transparent header overlay */}
-        <View className="absolute top-0 left-0 right-0 px-6 pt-14 pb-4">
-          <View className="flex-row items-center justify-between mb-4">
-            <View className="flex-row items-center">
-              <TouchableOpacity onPress={() => setIsProfileModalVisible(true)}>
-                <Image
-                  source={typeof avatar === "string" ? { uri: avatar } : avatar}
-                  className="w-12 h-12 rounded-full border-2 border-white mr-4"
-                />
-              </TouchableOpacity>
-              <View>
-                <Text className="text-gray-700 text-xs">Good morning,</Text>
-                <Text className="text-gray-900 text-xl font-JakartaSemiBold">
-                  {driverName}
-                </Text>
-                {helperName ? (
-                  <Text className="text-gray-600 text-xs mt-0.5">
-                    Helper: {helperName}
+      <View className="flex-1 bg-slate-50">
+        <View className="flex-[0.6] overflow-hidden bg-slate-200">
+          <MyMap orders={filteredDeliveries} />
+
+          <SafeAreaView
+            edges={["top"]}
+            className="absolute inset-x-0 top-0 z-10"
+          >
+            <View className="px-4 pb-4 pt-2">
+              <View className="flex-row items-center justify-between">
+                <TouchableOpacity
+                  onPress={() => setIsProfileModalVisible(true)}
+                  activeOpacity={0.85}
+                  accessibilityLabel={`Open profile for ${driverName}`}
+                  className="h-14 w-14 items-center justify-center overflow-hidden rounded-full border-2 border-white bg-white"
+                  style={{
+                    shadowColor: "#0F172A",
+                    shadowOpacity: 0.12,
+                    shadowRadius: 14,
+                    shadowOffset: { width: 0, height: 6 },
+                    elevation: 5,
+                  }}
+                >
+                  {avatarUrl ? (
+                    <Image
+                      source={{ uri: avatarUrl }}
+                      className="h-full w-full"
+                      resizeMode="cover"
+                    />
+                  ) : (
+                    <View className="h-full w-full items-center justify-center bg-slate-100">
+                      <Ionicons name="person" size={22} color="#475569" />
+                    </View>
+                  )}
+                </TouchableOpacity>
+
+                <TouchableOpacity
+                  onPress={() => router.push("/(root)/(tabs)/direct-sales")}
+                  accessibilityLabel="Direct sale"
+                  activeOpacity={0.85}
+                  className="h-12 min-w-[84px] flex-row items-center justify-center rounded-full px-4"
+                  style={{
+                    backgroundColor: "#0284C7",
+                    shadowColor: "#0284C7",
+                    shadowOpacity: 0.22,
+                    shadowRadius: 10,
+                    shadowOffset: { width: 0, height: 6 },
+                    elevation: 6,
+                  }}
+                >
+                  <Ionicons name="add" size={20} color="#FFFFFF" />
+                  <Text className="ml-1.5 text-[13px] font-JakartaBold text-white">
+                    Sale
                   </Text>
-                ) : null}
+                </TouchableOpacity>
               </View>
             </View>
-            <View
-              className="bg-white/80 rounded-full px-3 py-1"
-              style={{
-                shadowColor: "#1E40AF",
-                shadowOpacity: 0.06,
-                shadowRadius: 10,
-                shadowOffset: { width: 0, height: 6 },
-                elevation: 3,
-              }}
-            >
-              <Text className="text-gray-700 text-xs font-JakartaSemiBold">
-                {formatDate(today)}
-              </Text>
-            </View>
-          </View>
+          </SafeAreaView>
         </View>
 
-        {/* Search Section */}
-        <View className="px-4 py-2 bg-transparent">
-          <View className="flex-row items-center gap-3">
+        {/* Today's Deliveries Section */}
+        <View
+          className="-mt-16 flex-1 rounded-t-[32px] bg-slate-50"
+          style={{
+            shadowColor: "#0F172A",
+            shadowOpacity: 0.12,
+            shadowRadius: 16,
+            shadowOffset: { width: 0, height: -4 },
+            elevation: 12,
+          }}
+        >
+          <View className="px-4 pb-2 pt-4">
             <View
-              className="flex-1 flex-row items-center rounded-full px-4 py-[1px] bg-white border border-gray-200"
+              className="flex-row items-center rounded-2xl border border-slate-200 bg-white px-4 py-3"
               style={{
-                shadowColor: "#1E40AF",
+                shadowColor: "#0F172A",
                 shadowOpacity: 0.06,
-                shadowRadius: 12,
-                shadowOffset: { width: 0, height: 8 },
-                elevation: 4,
+                shadowRadius: 10,
+                shadowOffset: { width: 0, height: 4 },
+                elevation: 3,
               }}
             >
               <Image
                 source={icons.search}
-                className="w-5 h-5 mr-3"
+                className="mr-3 h-5 w-5"
                 resizeMode="contain"
               />
               <TextInput
-                className="flex-1 text-[14px] font-JakartaSemiBold text-gray-800"
-                placeholder="Search for customers..."
-                placeholderTextColor="#9CA3AF"
+                className="flex-1 text-[14px] font-JakartaSemiBold text-slate-800"
+                placeholder="Search deliveries"
+                placeholderTextColor="#94A3B8"
                 value={searchQuery}
                 onChangeText={setSearchQuery}
               />
               {searchQuery.length > 0 && (
-                <TouchableOpacity onPress={() => setSearchQuery("")}>
+                <TouchableOpacity
+                  onPress={() => setSearchQuery("")}
+                  className="ml-2 h-8 w-8 items-center justify-center rounded-full"
+                  activeOpacity={0.8}
+                >
                   <Image
                     source={icons.close}
-                    className="w-5 h-5 ml-2 opacity-70"
+                    className="h-4 w-4 opacity-70"
                     resizeMode="contain"
                   />
                 </TouchableOpacity>
               )}
             </View>
-            <TouchableOpacity
-              onPress={() => router.push("/(root)/(tabs)/direct-sales")}
-              className="rounded-full px-3 py-[10px] flex-row items-center justify-center"
-              style={{
-                backgroundColor: "#0EA5E9",
-                shadowColor: "#0EA5E9",
-                shadowOpacity: 0.28,
-                shadowRadius: 10,
-                shadowOffset: { width: 0, height: 6 },
-                elevation: 8,
-              }}
-            >
-              <View className="flex-row items-center gap-2">
-                <Ionicons name="flash-outline" size={18} color="white" />
-                <Text className="text-white text-sm font-JakartaSemiBold">
-                  Direct Sale
-                </Text>
-              </View>
-            </TouchableOpacity>
           </View>
-        </View>
 
-        {/* Today's Deliveries Section */}
-        <View className="flex-1 bg-gray-50">
           <ApiErrorText error={apiError} className="px-6" />
-          <View className="px-6 py-4 flex-row items-center justify-between">
-            <Text className="text-xl font-JakartaSemiBold text-gray-900">
-              Today&apos;s Deliveries
-            </Text>
+
+          <View className="flex-row items-center justify-between px-5 pb-2 pt-1">
+            <View className="flex-1 pr-3">
+              <Text className="text-lg font-JakartaSemiBold text-slate-900">
+                Today&apos;s Deliveries
+              </Text>
+              <Text
+                className="mt-0.5 text-[12px] font-JakartaMedium text-slate-500"
+                numberOfLines={1}
+              >
+                {helperName ? `${driverName} with ${helperName}` : driverName}
+              </Text>
+            </View>
+
             <View className="flex-row items-center gap-2">
               {!searchQuery && availableOrdersCount > 0 && (
-                <View className="flex-row items-center gap-1 bg-green-50 border border-green-200 rounded-full px-2 py-1">
-                  <View
-                    className="w-2 h-2 bg-green-500 rounded-full"
-                    style={{
-                      shadowColor: "#10B981",
-                      shadowOpacity: 0.8,
-                      shadowRadius: 3,
-                      shadowOffset: { width: 0, height: 1 },
-                      elevation: 2,
-                    }}
-                  ></View>
-                  <Text className="text-green-700 text-xs font-JakartaSemiBold">
+                <View className="flex-row items-center gap-1 rounded-full border border-emerald-200 bg-emerald-50 px-2.5 py-1.5">
+                  <Ionicons name="navigate" size={12} color="#047857" />
+                  <Text className="text-[11px] font-JakartaSemiBold text-emerald-700">
                     {availableOrdersCount}
                   </Text>
                 </View>
               )}
-              <View className="bg-[#0286FF] rounded-full px-3 py-1">
-                <Text className="text-sm text-white font-JakartaSemiBold">
+              <View className="rounded-full bg-[#0284C7] px-2.5 py-1.5">
+                <Text className="text-[11px] font-JakartaSemiBold text-white">
                   {searchQuery
                     ? `${filteredDeliveries.length} found`
                     : `${assignedOrders.length} total`}
@@ -379,6 +403,7 @@ const Home = () => {
               </View>
             </View>
           </View>
+
           {isloading ? (
             <View className="mt-16 items-center">
               <ActivityIndicator className="mt-10 items-center justify-center" />
@@ -396,7 +421,8 @@ const Home = () => {
                 />
               )}
               contentContainerStyle={{
-                paddingHorizontal: 24,
+                paddingHorizontal: 20,
+                paddingTop: 6,
                 paddingBottom: 100,
               }}
               refreshControl={
@@ -408,19 +434,19 @@ const Home = () => {
                 />
               }
               ListEmptyComponent={
-                <View className="flex-1 items-center justify-center mt-24">
+                <View className="mt-24 flex-1 items-center justify-center">
                   <Image
                     source={images.noResult}
-                    className="w-40 h-40 mb-6"
+                    className="mb-6 h-40 w-40"
                     resizeMode="contain"
                   />
-                  <Text className="text-lg text-gray-400 font-semibold">
+                  <Text className="text-lg font-semibold text-gray-400">
                     {searchQuery
                       ? "No deliveries found"
                       : "No deliveries for today"}
                   </Text>
                   {searchQuery && (
-                    <Text className="text-sm text-gray-300 mt-2">
+                    <Text className="mt-2 text-sm text-gray-300">
                       Try adjusting your search
                     </Text>
                   )}

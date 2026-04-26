@@ -20,9 +20,16 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { parseApiResponseOrRawWithSoftError } from "@/utils/api";
 import {
   buildDeliveryTaskOutcomes,
+  getDeliveryEarlierAttemptsTodayCount,
   toDeliverySaleItemType,
   toMoney,
 } from "@/utils/deliveries";
+import {
+  getOrderSelectedDeliveryActions,
+  getRentItemDepositAction,
+  getRentItemDepositKind,
+  getRentItemDisplayLabel,
+} from "@/utils/rentItems";
 import {
   DriverHistoryDetail,
   getDriverHistoryInvoiceDisplayId,
@@ -33,26 +40,12 @@ import {
 
 const IP_ADDRESS = process.env.EXPO_PUBLIC_IP_ADDRESS;
 
-const getDepositReturnType = (
-  actionType?: string,
-): "deposit" | "deposit_return" => {
-  const normalized = (actionType || "").toLowerCase();
-  if (
-    normalized.includes("refund") ||
-    normalized.includes("return") ||
-    normalized.includes("from-customer")
-  ) {
-    return "deposit_return";
-  }
-  return "deposit";
-};
-
-const getDepositKind = (
-  value?: string,
-  fallbackCategory?: string,
-): "asset" | "bottle" => {
-  const normalized = (value || fallbackCategory || "").toLowerCase();
-  return normalized.includes("bottle") ? "bottle" : "asset";
+const readDeliveryNoteId = (value: unknown): string | undefined => {
+  if (!value || typeof value !== "object") return undefined;
+  const deliveryNoteId = (value as { deliveryNoteId?: unknown }).deliveryNoteId;
+  return typeof deliveryNoteId === "string" && deliveryNoteId.trim().length > 0
+    ? deliveryNoteId.trim()
+    : undefined;
 };
 
 const PaymentConfirmation: React.FC = () => {
@@ -74,9 +67,8 @@ const PaymentConfirmation: React.FC = () => {
     (item) => selectedOrder === item.id,
   ) as Order | undefined;
   const editableRentItems = useMemo(
-    () =>
-      (orderDetail?.rent_items || []).filter((item) => item.in_truck === true),
-    [orderDetail?.rent_items],
+    () => getOrderSelectedDeliveryActions(orderDetail),
+    [orderDetail],
   );
   const [rentItemQuantities, setRentItemQuantities] = useState<
     Record<string, number>
@@ -100,6 +92,13 @@ const PaymentConfirmation: React.FC = () => {
     },
     [],
   );
+
+  const handleBack = useCallback(() => {
+    router.replace({
+      pathname: "/(root)/(tabs)/checkout",
+      params: { backTo: "bottles-assets" },
+    });
+  }, [router]);
 
   // Get signature data from params if available (for organization orders)
   const signatureData = params.signature_data as string | undefined;
@@ -128,7 +127,7 @@ const PaymentConfirmation: React.FC = () => {
     }, 0);
     const vatAmount = sub * 0.05;
 
-    // Calculate rent items total (no VAT) from editable quantities
+    // Calculate bottle/asset movement total (no VAT) from editable quantities.
     const rentTotal = editableRentItems.reduce((sum, item) => {
       const quantity = Math.max(
         0,
@@ -137,7 +136,7 @@ const PaymentConfirmation: React.FC = () => {
       return sum + (item.price || 0) * quantity;
     }, 0);
 
-    // Check if any rent items have a positive quantity
+    // Check if any bottle/asset actions have a positive quantity.
     const hasRentItems = editableRentItems.some((item) => {
       const quantity = Math.max(
         0,
@@ -146,7 +145,7 @@ const PaymentConfirmation: React.FC = () => {
       return quantity > 0;
     });
 
-    // Total = products (with VAT) + rent items (no VAT)
+    // Total = products (with VAT) + bottle/asset movement (no VAT).
     const total = sub + vatAmount + rentTotal;
     const count = cartItems.reduce(
       (sum, item) => sum + (item?.quantity || 0),
@@ -162,6 +161,31 @@ const PaymentConfirmation: React.FC = () => {
       hasRentItemsSelected: hasRentItems,
     };
   }, [cartItems, editableRentItems, rentItemQuantities]);
+  const creditCollections = useMemo(
+    () =>
+      (orderDetail?.draft_credit_collections ?? []).flatMap((entry) => {
+        if (
+          !entry ||
+          typeof entry.amount !== "number" ||
+          !Number.isFinite(entry.amount) ||
+          entry.amount <= 0
+        ) {
+          return [];
+        }
+
+        const remark =
+          typeof entry.remark === "string" ? entry.remark.trim() : "";
+
+        return [
+          {
+            amount: toMoney(entry.amount),
+            ...(remark ? { remark } : {}),
+          },
+        ];
+      }),
+    [orderDetail?.draft_credit_collections],
+  );
+  const hasDraftCreditCollections = creditCollections.length > 0;
 
   const paymentIcon = useMemo(() => {
     switch (selectedPaymentMethod) {
@@ -191,17 +215,23 @@ const PaymentConfirmation: React.FC = () => {
       return;
     }
 
-    // Allow confirmation if either cart has items OR rent items are selected
-    if (cartItems.length === 0 && !hasRentItemsSelected) {
-      showErrorAlert("Error", "No items selected.");
+    // Allow confirmation if products, bottle/asset movement, or credit collection exists.
+    if (
+      cartItems.length === 0 &&
+      !hasRentItemsSelected &&
+      !hasDraftCreditCollections
+    ) {
+      showErrorAlert(
+        "Error",
+        "No items, actions, or credit collection selected.",
+      );
       return;
     }
 
     setIsProcessing(true);
     setApiError(null);
     try {
-      const rentItems = (orderDetail?.rent_items || [])
-        .filter((item) => item.in_truck === true)
+      const rentItems = editableRentItems
         .map((item) => ({
           ...item,
           quantity: Math.max(
@@ -221,9 +251,9 @@ const PaymentConfirmation: React.FC = () => {
         }));
 
       const depositsReturns = rentItems.map((item) => ({
-        type: getDepositReturnType(item.other_action_type),
-        depositKind: getDepositKind(item.other_action_item_type, item.category),
-        itemId: item.id,
+        type: getRentItemDepositAction(item),
+        depositKind: getRentItemDepositKind(item),
+        itemId: item.item_id || item.id,
         quantity: item.quantity,
         unitPrice: toMoney(item.price),
       }));
@@ -243,6 +273,8 @@ const PaymentConfirmation: React.FC = () => {
         status: "success" as const,
         displayId:
           orderDetail.display_id || orderDetail.order_number || orderDetail.id,
+        earlierAttemptsTodayCount:
+          getDeliveryEarlierAttemptsTodayCount(orderDetail),
         tasks: buildDeliveryTaskOutcomes(orderDetail.tasks || [], "success"),
         ...(saleItems.length > 0
           ? {
@@ -261,6 +293,7 @@ const PaymentConfirmation: React.FC = () => {
             }
           : {}),
         ...(depositsReturns.length > 0 ? { depositsReturns } : {}),
+        ...(creditCollections.length > 0 ? { creditCollections } : {}),
         ...(receiver ? { receiver } : {}),
         ...(notes?.trim() ? { remark: notes.trim() } : {}),
       };
@@ -268,9 +301,11 @@ const PaymentConfirmation: React.FC = () => {
       console.log("[delivery-confirm] request payload", {
         deliveryId: orderDetail.id,
         displayId: requestBody.displayId,
+        earlierAttemptsTodayCount: requestBody.earlierAttemptsTodayCount,
         tasks: requestBody.tasks,
         saleItems: saleItems.length,
         depositsReturns: depositsReturns.length,
+        creditCollections: creditCollections.length,
       });
 
       const response = await authenticatedFetch(
@@ -292,7 +327,8 @@ const PaymentConfirmation: React.FC = () => {
         return;
       }
       const result = normalizeDeliveryConfirmationResponse(parseResult.data);
-      if (!result) {
+      const legacyDeliveryNoteId = readDeliveryNoteId(parseResult.data);
+      if (!result && !legacyDeliveryNoteId) {
         setApiError("Invalid response from server.");
         return;
       }
@@ -300,39 +336,27 @@ const PaymentConfirmation: React.FC = () => {
       // Mark order as delivered and store delivery note id for traceability
       if (orderDetail) {
         // Persist adjusted rent item quantities before moving order to completed orders
-        if (orderDetail.rent_items && orderDetail.rent_items.length > 0) {
-          const quantityMap = new Map(
-            rentItems.map((item) => [item.id, item.quantity] as const),
-          );
+        if (editableRentItems.length > 0) {
           const store = useOrderStore.getState();
           const updatedAssignedOrders = store.assignedOrders.map((order) => {
             if (order.id !== orderDetail.id) return order;
             return {
               ...order,
               display_id:
-                result.displayId ||
+                result?.displayId ||
                 order.display_id ||
                 order.order_number ||
                 order.id,
-              order_number: result.displayId || order.order_number || order.id,
+              order_number: result?.displayId || order.order_number || order.id,
               invoice_number:
-                getDriverHistoryInvoiceDisplayId(result) ||
+                getDriverHistoryInvoiceDisplayId(result || undefined) ||
                 order.invoice_number,
-              total_amount: result.sale?.totals.total ?? order.total_amount,
+              total_amount: result?.sale?.totals.total ?? order.total_amount,
               payment_method:
-                result.sale?.payment?.method ||
+                result?.sale?.payment?.method ||
                 selectedPaymentMethod ||
                 order.payment_method,
-              rent_items: (order.rent_items || []).map((item) => {
-                const updatedQuantity = quantityMap.has(item.id)
-                  ? quantityMap.get(item.id)!
-                  : 0;
-                return {
-                  ...item,
-                  quantity: updatedQuantity,
-                  in_truck: updatedQuantity > 0,
-                };
-              }),
+              draft_delivery_actions: rentItems,
             };
           });
           useOrderStore.setState({ assignedOrders: updatedAssignedOrders });
@@ -340,14 +364,20 @@ const PaymentConfirmation: React.FC = () => {
 
         setLastConfirmPaymentResponse({
           orderId: orderDetail.id,
-          sale_id: getDriverHistorySaleId(result),
-          invoice_number: getDriverHistoryInvoiceDisplayId(result),
-          order_number: getDriverHistoryPrimaryId(result),
+          sale_id: getDriverHistorySaleId(result || undefined),
+          invoice_number: getDriverHistoryInvoiceDisplayId(result || undefined),
+          detail: result || null,
+          order_number: result
+            ? getDriverHistoryPrimaryId(result)
+            : legacyDeliveryNoteId!,
         });
         updateOrderStatus(orderDetail.id, "delivered");
       }
 
-      router.replace("/(root)/(tabs)/payment-receipt");
+      router.replace({
+        pathname: "/(root)/(tabs)/payment-receipt",
+        params: { view: "delivery-note" },
+      });
     } catch (error) {
       setApiError(error instanceof Error ? error.message : "Please try again.");
     } finally {
@@ -368,6 +398,9 @@ const PaymentConfirmation: React.FC = () => {
     receiverPosition,
     notes,
     hasRentItemsSelected,
+    hasDraftCreditCollections,
+    creditCollections,
+    editableRentItems,
     rentItemQuantities,
   ]);
 
@@ -392,7 +425,7 @@ const PaymentConfirmation: React.FC = () => {
       <View style={styles.header}>
         <TouchableOpacity
           style={styles.backButton}
-          onPress={() => router.back()}
+          onPress={handleBack}
           activeOpacity={0.7}
         >
           <Ionicons name="chevron-back" size={20} color="#1E40AF" />
@@ -514,11 +547,11 @@ const PaymentConfirmation: React.FC = () => {
           )}
         </View>
 
-        {/* Rent Items */}
+        {/* Bottle and Asset Movement */}
         {editableRentItems.length > 0 && (
           <View style={styles.card}>
             <View style={styles.itemsTableHeader}>
-              <Text style={styles.tableHeaderText}>Rent Items</Text>
+              <Text style={styles.tableHeaderText}>Bottles & Assets</Text>
               <Text
                 style={[styles.tableHeaderText, styles.tableHeaderQtyControl]}
               >
@@ -533,6 +566,8 @@ const PaymentConfirmation: React.FC = () => {
                 0,
                 rentItemQuantities[item.id] ?? item.quantity ?? 0,
               );
+              const isReturnAction =
+                getRentItemDepositAction(item) === "deposit_return";
               return (
                 <View key={item.id}>
                   <View style={styles.itemsTableRow}>
@@ -540,28 +575,31 @@ const PaymentConfirmation: React.FC = () => {
                       <View
                         style={[
                           styles.itemTableIconBox,
-                          item.category === "borrow"
+                          isReturnAction
                             ? styles.rentItemIconBorrow
                             : styles.rentItemIconDeposit,
                         ]}
                       >
                         <Ionicons
                           name={
-                            item.category === "borrow"
-                              ? "arrow-down-circle"
-                              : "arrow-up-circle"
+                            isReturnAction
+                              ? "arrow-undo-circle"
+                              : "arrow-redo-circle"
                           }
                           size={14}
-                          color={
-                            item.category === "borrow" ? "#10B981" : "#3B82F6"
-                          }
+                          color={isReturnAction ? "#10B981" : "#3B82F6"}
                         />
                       </View>
                       <View style={styles.itemInfo}>
                         <Text style={styles.itemName}>{item.name}</Text>
                         <Text style={styles.itemMeta}>
-                          {item.category === "borrow" ? "Borrow" : "Deposit"}
+                          {getRentItemDisplayLabel(item)}
                         </Text>
+                        {item.serial ? (
+                          <Text style={styles.itemMeta}>
+                            Serial: {item.serial}
+                          </Text>
+                        ) : null}
                       </View>
                     </View>
                     <View style={styles.rentQtyControl}>
@@ -708,7 +746,7 @@ const PaymentConfirmation: React.FC = () => {
           </View>
           {parseFloat(rentItemsTotal) > 0 && (
             <View style={styles.totalRow}>
-              <Text style={styles.totalLabel}>Rent Items</Text>
+              <Text style={styles.totalLabel}>Bottles & Assets</Text>
               <Text style={styles.totalValue}>AED {rentItemsTotal}</Text>
             </View>
           )}
@@ -722,7 +760,7 @@ const PaymentConfirmation: React.FC = () => {
         <View style={styles.actionSection}>
           <TouchableOpacity
             style={styles.editButton}
-            onPress={() => router.back()}
+            onPress={handleBack}
             disabled={isProcessing}
             activeOpacity={0.7}
           >
@@ -737,7 +775,10 @@ const PaymentConfirmation: React.FC = () => {
             ]}
             onPress={handleConfirmPayment}
             disabled={
-              isProcessing || (cartItems.length === 0 && !hasRentItemsSelected)
+              isProcessing ||
+              (cartItems.length === 0 &&
+                !hasRentItemsSelected &&
+                !hasDraftCreditCollections)
             }
             activeOpacity={0.8}
           >

@@ -1,7 +1,14 @@
-import { TruckAsset } from "@/utils/truckLoad";
 import { Ionicons } from "@expo/vector-icons";
 import React from "react";
-import { StyleSheet, Text, View } from "react-native";
+import { Image, StyleSheet, Text, TouchableOpacity, View } from "react-native";
+
+export interface TruckAssetPanelItem {
+  id: string;
+  label: string;
+  serial: string | null;
+  category: string | null;
+  imageUrl?: string | null;
+}
 
 const getAssetIconName = (category: string | null) => {
   const normalized = (category || "").trim().toLowerCase();
@@ -16,16 +23,26 @@ const getAssetIconName = (category: string | null) => {
 
 const getAssetCategoryLabel = (category: string | null) => {
   const normalized = (category || "").trim();
-  return normalized.length > 0 ? normalized : "Truck asset";
+  return normalized.length > 0 ? normalized : "Transfer asset";
 };
 
-const TruckAssetsPanel = ({ assets }: { assets: TruckAsset[] }) => {
+const TruckAssetsPanel = ({
+  assets,
+  selectedAssetIds,
+  onToggleAsset,
+}: {
+  assets: TruckAssetPanelItem[];
+  selectedAssetIds?: Record<string, boolean>;
+  onToggleAsset?: (asset: TruckAssetPanelItem) => void;
+}) => {
+  const isInteractive = typeof onToggleAsset === "function";
+
   return (
     <View style={styles.panel}>
       <View style={styles.headerRow}>
         <View style={styles.headerBadge}>
           <Ionicons name="cube-outline" size={14} color="#0F172A" />
-          <Text style={styles.headerTitle}>Truck Assets</Text>
+          <Text style={styles.headerTitle}>Assets To Transfer</Text>
         </View>
         <View style={styles.countBadge}>
           <Text style={styles.countText}>{assets.length}</Text>
@@ -33,7 +50,9 @@ const TruckAssetsPanel = ({ assets }: { assets: TruckAsset[] }) => {
       </View>
 
       <Text style={styles.subtitle}>
-        Serial-tracked assets currently loaded on the truck.
+        {isInteractive
+          ? "Serial-tracked assets available for customer transfer. They are not billed or taxed, and once confirmed they are deducted from truck stock."
+          : "Serial-tracked assets currently loaded on the truck."}
       </Text>
 
       {assets.length === 0 ? (
@@ -48,11 +67,19 @@ const TruckAssetsPanel = ({ assets }: { assets: TruckAsset[] }) => {
           {assets.map((asset) => (
             <View key={asset.id} style={styles.assetCard}>
               <View style={styles.assetIconBox}>
-                <Ionicons
-                  name={getAssetIconName(asset.category)}
-                  size={18}
-                  color="#0369A1"
-                />
+                {asset.imageUrl ? (
+                  <Image
+                    source={{ uri: asset.imageUrl }}
+                    style={styles.assetImage}
+                    resizeMode="cover"
+                  />
+                ) : (
+                  <Ionicons
+                    name={getAssetIconName(asset.category)}
+                    size={18}
+                    color="#0369A1"
+                  />
+                )}
               </View>
 
               <View style={styles.assetContent}>
@@ -60,9 +87,44 @@ const TruckAssetsPanel = ({ assets }: { assets: TruckAsset[] }) => {
                   <Text style={styles.assetLabel} numberOfLines={2}>
                     {asset.label}
                   </Text>
-                  <View style={styles.assetStatusBadge}>
-                    <Text style={styles.assetStatusText}>On Truck</Text>
-                  </View>
+                  {isInteractive ? (
+                    <TouchableOpacity
+                      style={[
+                        styles.assetSelectButton,
+                        selectedAssetIds?.[asset.id] &&
+                          styles.assetSelectButtonActive,
+                      ]}
+                      activeOpacity={0.85}
+                      onPress={() => onToggleAsset?.(asset)}
+                    >
+                      <Ionicons
+                        name={
+                          selectedAssetIds?.[asset.id]
+                            ? "checkmark-circle"
+                            : "add-circle-outline"
+                        }
+                        size={15}
+                        color={
+                          selectedAssetIds?.[asset.id] ? "#FFFFFF" : "#1D4ED8"
+                        }
+                      />
+                      <Text
+                        style={[
+                          styles.assetSelectButtonText,
+                          selectedAssetIds?.[asset.id] &&
+                            styles.assetSelectButtonTextActive,
+                        ]}
+                      >
+                        {selectedAssetIds?.[asset.id]
+                          ? "Marked For Transfer"
+                          : "Transfer To Customer"}
+                      </Text>
+                    </TouchableOpacity>
+                  ) : (
+                    <View style={styles.assetStatusBadge}>
+                      <Text style={styles.assetStatusText}>On Truck</Text>
+                    </View>
+                  )}
                 </View>
 
                 <Text style={styles.assetCategory}>
@@ -155,18 +217,32 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     alignItems: "flex-start",
     gap: 12,
-    borderRadius: 16,
-    backgroundColor: "#F8FAFC",
+    borderRadius: 18,
+    backgroundColor: "#FFFFFF",
     paddingHorizontal: 14,
     paddingVertical: 14,
+    borderWidth: 1,
+    borderColor: "#E2E8F0",
+    shadowColor: "#0F172A",
+    shadowOffset: { width: 0, height: 8 },
+    shadowOpacity: 0.04,
+    shadowRadius: 16,
+    elevation: 2,
   },
   assetIconBox: {
-    width: 40,
-    height: 40,
-    borderRadius: 12,
+    width: 52,
+    height: 52,
+    borderRadius: 14,
     backgroundColor: "#E0F2FE",
     alignItems: "center",
     justifyContent: "center",
+    overflow: "hidden",
+    borderWidth: 1,
+    borderColor: "#DBEAFE",
+  },
+  assetImage: {
+    width: "100%",
+    height: "100%",
   },
   assetContent: {
     flex: 1,
@@ -196,10 +272,36 @@ const styles = StyleSheet.create({
     textTransform: "uppercase",
     letterSpacing: 0.4,
   },
+  assetSelectButton: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
+    borderRadius: 999,
+    borderWidth: 1,
+    borderColor: "#BFDBFE",
+    backgroundColor: "#EFF6FF",
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+  },
+  assetSelectButtonActive: {
+    borderColor: "#1D4ED8",
+    backgroundColor: "#1D4ED8",
+  },
+  assetSelectButtonText: {
+    fontSize: 10,
+    fontWeight: "700",
+    color: "#1D4ED8",
+    textTransform: "uppercase",
+    letterSpacing: 0.3,
+  },
+  assetSelectButtonTextActive: {
+    color: "#FFFFFF",
+  },
   assetCategory: {
     marginTop: 6,
     fontSize: 12,
     color: "#475569",
+    fontWeight: "600",
   },
   assetSerialRow: {
     flexDirection: "row",

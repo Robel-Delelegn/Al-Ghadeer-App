@@ -34,10 +34,65 @@ export interface DeliveryStop {
   earlierVisitsTodayCount: number;
   hasNewItems: boolean;
   hasExactLocation: boolean;
-  tasks: unknown[];
+  tasks: DeliveryTask[];
 }
 
 export type Delivery = DeliveryStop;
+
+export interface DeliveryTaskItem {
+  id: string;
+  label: string;
+  type: "asset" | "retail" | "refill";
+  unit: string | null;
+  image_url: string | null;
+}
+
+export type DeliveryTaskLineKind = "sale" | "deposit" | "return";
+
+export interface DeliveryTaskLine {
+  id: string;
+  itemId: string;
+  kind: DeliveryTaskLineKind;
+  item: DeliveryTaskItem;
+  quantity: number;
+  unit_price: number;
+}
+
+export interface DeliveryTaskCreditCollection {
+  id: string;
+  amount: number;
+  remark: string | null;
+}
+
+export type DeliveryTask =
+  | {
+      type: "subscription";
+      id: string;
+      item_id: string;
+      lines: DeliveryTaskLine[];
+      earlierAttemptsTodayCount: number;
+    }
+  | {
+      type: "order";
+      id: string;
+      order_id: string;
+      lines: DeliveryTaskLine[];
+    }
+  | {
+      type: "prepaid_order";
+      id: string;
+      order_id: string;
+      invoice_id: string;
+      lines: DeliveryTaskLine[];
+      earlierAttemptsTodayCount: number;
+    }
+  | {
+      type: "staff_order";
+      id: string;
+      staff_order_id: string;
+      lines: DeliveryTaskLine[];
+      creditCollections: DeliveryTaskCreditCollection[];
+    };
 
 type DeliveryTaskBucket =
   | "pay_on_delivery_orders"
@@ -71,11 +126,14 @@ export interface DeliveryTaskOutcomes {
 export interface ParsedDeliveryTask {
   key: string;
   id: string;
+  referenceId: string | null;
+  invoiceId: string | null;
   bucket: DeliveryTaskBucket;
   label: string;
-  type: string;
+  type: DeliveryTask["type"];
   earlierAttemptsTodayCount: number;
   lines: ParsedDeliveryTaskLine[];
+  creditCollections: ParsedDeliveryTaskCreditCollection[];
   raw: unknown;
 }
 
@@ -91,6 +149,13 @@ export interface ParsedDeliveryTaskLine {
   quantity: number;
   unitPrice: number;
   totalPrice: number;
+  raw: unknown;
+}
+
+export interface ParsedDeliveryTaskCreditCollection {
+  id: string;
+  amount: number;
+  remark: string | null;
   raw: unknown;
 }
 
@@ -149,9 +214,26 @@ const normalizeItemType = (value: unknown): "asset" | "retail" | "refill" => {
   return "retail";
 };
 
+const normalizeTaskType = (value: unknown): DeliveryTask["type"] | null => {
+  const normalized = toText(value)
+    .toLowerCase()
+    .replace(/[\s-]+/g, "_");
+  if (normalized === "subscription") return "subscription";
+  if (normalized === "order") return "order";
+  if (normalized === "prepaid_order") return "prepaid_order";
+  if (normalized === "staff_order") return "staff_order";
+  return null;
+};
+
+const normalizeTaskLineKind = (value: unknown): DeliveryTaskLineKind => {
+  const normalized = toText(value).toLowerCase();
+  if (normalized === "deposit") return "deposit";
+  if (normalized === "return") return "return";
+  return "sale";
+};
+
 const isSaleTaskLine = (value: unknown): boolean => {
-  const kind = toText(value).toLowerCase();
-  return kind.length === 0 || kind === "sale";
+  return normalizeTaskLineKind(value) === "sale";
 };
 
 const parseDeliveryTaskLines = (
@@ -159,56 +241,77 @@ const parseDeliveryTaskLines = (
   taskKey: string,
 ): ParsedDeliveryTaskLine[] => {
   const lines = Array.isArray(task.lines) ? task.lines : [];
+  const parsedLines: ParsedDeliveryTaskLine[] = [];
 
-  return lines
-    .map((lineValue, index) => {
-      const line = asObject(lineValue);
-      if (!line) return null;
+  lines.forEach((lineValue, index) => {
+    const line = asObject(lineValue);
+    if (!line) return;
 
-      const item = asObject(line.item);
-      const id =
-        toText(line.id) ||
-        toText(line.itemId) ||
-        toText(line.item_id) ||
-        `${taskKey}:line:${index}`;
-      const itemId =
-        toText(line.itemId) || toText(line.item_id) || toText(item?.id) || id;
-      const label =
-        pickFirstText(item || line, ["label", "name", "title"]) ||
-        `Item ${index + 1}`;
-      const quantity = Math.max(0, toNumber(line.quantity) ?? 0);
-      const unitPrice = toMoney(
-        line.unit_price ??
-          line.unitPrice ??
-          line.price_per_unit ??
-          line.price ??
-          0,
-      );
+    const item = asObject(line.item);
+    const id =
+      toText(line.id) ||
+      toText(line.itemId) ||
+      toText(line.item_id) ||
+      `${taskKey}:line:${index}`;
+    const itemId =
+      toText(line.itemId) || toText(line.item_id) || toText(item?.id) || id;
+    const label =
+      pickFirstText(item || line, ["label", "name", "title"]) ||
+      `Item ${index + 1}`;
+    const quantity = Math.max(0, toNumber(line.quantity) ?? 0);
+    const unitPrice = toMoney(
+      line.unit_price ??
+        line.unitPrice ??
+        line.price_per_unit ??
+        line.price ??
+        0,
+    );
 
-      return {
-        key: `${taskKey}:line:${itemId}:${index}`,
-        id,
-        itemId,
-        kind: toText(line.kind) || "sale",
-        label,
-        itemType: normalizeItemType(
-          line.item_type ?? line.itemType ?? item?.type,
-        ),
-        unit: toNullableText(line.unit ?? line.unit_name ?? item?.unit) ?? null,
-        imageUrl:
-          toNullableText(
-            line.image_url ??
-              line.imageUrl ??
-              item?.image_url ??
-              item?.imageUrl,
-          ) ?? null,
-        quantity,
-        unitPrice,
-        totalPrice: toMoney(quantity * unitPrice),
-        raw: lineValue,
-      };
-    })
-    .filter((line): line is ParsedDeliveryTaskLine => line !== null);
+    parsedLines.push({
+      key: `${taskKey}:line:${itemId}:${index}`,
+      id,
+      itemId,
+      kind: normalizeTaskLineKind(line.kind),
+      label,
+      itemType: normalizeItemType(
+        line.item_type ?? line.itemType ?? item?.type,
+      ),
+      unit: toNullableText(line.unit ?? line.unit_name ?? item?.unit) ?? null,
+      imageUrl:
+        toNullableText(
+          line.image_url ?? line.imageUrl ?? item?.image_url ?? item?.imageUrl,
+        ) ?? null,
+      quantity,
+      unitPrice,
+      totalPrice: toMoney(quantity * unitPrice),
+      raw: lineValue,
+    });
+  });
+
+  return parsedLines;
+};
+
+const parseCreditCollections = (
+  task: Record<string, unknown>,
+): ParsedDeliveryTaskCreditCollection[] => {
+  const creditCollections = Array.isArray(task.creditCollections)
+    ? task.creditCollections
+    : [];
+  const parsedCollections: ParsedDeliveryTaskCreditCollection[] = [];
+
+  creditCollections.forEach((entry, index) => {
+    const record = asObject(entry);
+    if (!record) return;
+
+    parsedCollections.push({
+      id: toText(record.id) || `credit-collection-${index}`,
+      amount: toMoney(record.amount),
+      remark: toNullableText(record.remark),
+      raw: entry,
+    });
+  });
+
+  return parsedCollections;
 };
 
 interface PlannedOrderProduct {
@@ -221,6 +324,29 @@ interface PlannedOrderProduct {
   image_url: string | null;
   type: "asset" | "retail" | "refill";
   category: string;
+}
+
+interface PlannedRentItem {
+  id: string;
+  item_id: string;
+  name: string;
+  category: "deposit";
+  price: number;
+  quantity: number;
+  image_url: string;
+  unit: string | null;
+  serial?: string | null;
+  in_truck: boolean;
+  max_quantity?: number;
+  deposit_action: "deposit" | "deposit_return";
+  deposit_kind: "asset" | "bottle";
+  action_source: "task";
+  other_action_type:
+    | "item-movement-from-customer"
+    | "item-movement-to-customer"
+    | "asset-movement-from-customer"
+    | "asset-movement-to-customer";
+  other_action_item_type: "asset" | "bottle";
 }
 
 const derivePlannedOrderProducts = (
@@ -276,8 +402,65 @@ const derivePlannedOrderProducts = (
   return { products, totalAmount };
 };
 
+const toTaskDepositKind = (
+  line: ParsedDeliveryTaskLine,
+): "asset" | "bottle" => {
+  return line.itemType === "asset" ? "asset" : "bottle";
+};
+
+const derivePlannedRentItems = (tasks: unknown[]): PlannedRentItem[] => {
+  const parsedTasks = parseDeliveryTasks(tasks);
+  const rentItemsByKey = new Map<string, PlannedRentItem>();
+
+  parsedTasks.forEach((task) => {
+    task.lines.forEach((line, index) => {
+      if (line.kind !== "deposit" && line.kind !== "return") {
+        return;
+      }
+
+      const quantity = Math.max(0, Math.floor(line.quantity || 0));
+      if (quantity <= 0) {
+        return;
+      }
+
+      const depositAction =
+        line.kind === "return" ? "deposit_return" : "deposit";
+      const depositKind = toTaskDepositKind(line);
+      const key = `${task.id}:${line.id}:${line.itemId}:${index}`;
+
+      rentItemsByKey.set(key, {
+        id: key,
+        item_id: line.itemId,
+        name: line.label,
+        category: "deposit",
+        price: line.unitPrice,
+        quantity,
+        image_url: line.imageUrl || "",
+        unit: line.unit,
+        in_truck: true,
+        max_quantity: quantity,
+        deposit_action: depositAction,
+        deposit_kind: depositKind,
+        action_source: "task",
+        other_action_type:
+          depositKind === "asset"
+            ? depositAction === "deposit"
+              ? "asset-movement-to-customer"
+              : "asset-movement-from-customer"
+            : depositAction === "deposit"
+              ? "item-movement-to-customer"
+              : "item-movement-from-customer",
+        other_action_item_type: depositKind,
+      });
+    });
+  });
+
+  return Array.from(rentItemsByKey.values());
+};
+
 export const mapDeliveryToOrder = (delivery: DeliveryStop): Order => {
   const { products, totalAmount } = derivePlannedOrderProducts(delivery.tasks);
+  const rentItems = derivePlannedRentItems(delivery.tasks);
 
   return {
     id: delivery.id,
@@ -310,28 +493,18 @@ export const mapDeliveryToOrder = (delivery: DeliveryStop): Order => {
     ),
     tasks: Array.isArray(delivery.tasks) ? delivery.tasks : [],
     ...(products.length > 0 ? { products } : {}),
+    ...(rentItems.length > 0 ? { rent_items: rentItems } : {}),
     total_amount: totalAmount,
   };
 };
 
-const detectBucketFromType = (typeText: string): DeliveryTaskBucket | null => {
-  const normalized = typeText
-    .trim()
-    .toLowerCase()
-    .replace(/[\s-]+/g, "_");
-  if (!normalized) return null;
-
-  if (normalized.includes("prepaid")) return "prepaid_orders";
-  if (normalized.includes("staff")) return "staff_orders";
-  if (normalized.includes("subscription")) return "subscriptions";
-  if (
-    normalized.includes("pay_on_delivery") ||
-    normalized === "order" ||
-    normalized.includes("order")
-  ) {
-    return "pay_on_delivery_orders";
-  }
-
+const detectBucketFromType = (
+  taskType: DeliveryTask["type"] | null,
+): DeliveryTaskBucket | null => {
+  if (taskType === "prepaid_order") return "prepaid_orders";
+  if (taskType === "staff_order") return "staff_orders";
+  if (taskType === "subscription") return "subscriptions";
+  if (taskType === "order") return "pay_on_delivery_orders";
   return null;
 };
 
@@ -362,137 +535,104 @@ const pickFromNested = (
 
 const getTaskIdForBucket = (
   task: Record<string, unknown>,
-  bucket: DeliveryTaskBucket,
+  fallbackReferenceId: string | null,
 ): string | null => {
-  if (bucket === "pay_on_delivery_orders") {
+  return toText(task.id) || fallbackReferenceId || null;
+};
+
+const getTaskReferenceId = (
+  task: Record<string, unknown>,
+  taskType: DeliveryTask["type"] | null,
+): string | null => {
+  if (taskType === "order") {
     return (
       pickFirstText(task, [
-        "orderId",
         "order_id",
-        "payOnDeliveryOrderId",
+        "orderId",
         "pay_on_delivery_order_id",
+        "payOnDeliveryOrderId",
       ]) ||
       pickFromNested(
         task,
         ["order", "task", "payload", "data"],
-        ["orderId", "order_id", "id"],
+        ["order_id", "orderId", "id"],
       ) ||
-      toText(task.id) ||
       null
     );
   }
 
-  if (bucket === "prepaid_orders") {
+  if (taskType === "prepaid_order") {
     return (
       pickFirstText(task, [
-        "prepaidOrderId",
+        "order_id",
+        "orderId",
         "prepaid_order_id",
-        "orderId",
-        "order_id",
+        "prepaidOrderId",
       ]) ||
       pickFromNested(
         task,
-        ["prepaidOrder", "prepaid_order", "order", "task", "payload", "data"],
-        ["prepaidOrderId", "prepaid_order_id", "orderId", "order_id", "id"],
+        ["order", "prepaidOrder", "prepaid_order", "task", "payload", "data"],
+        ["order_id", "orderId", "prepaid_order_id", "prepaidOrderId", "id"],
       ) ||
-      toText(task.id) ||
       null
     );
   }
 
-  if (bucket === "staff_orders") {
+  if (taskType === "staff_order") {
     return (
-      pickFirstText(task, [
-        "staffOrderId",
-        "staff_order_id",
-        "orderId",
-        "order_id",
-      ]) ||
+      pickFirstText(task, ["staff_order_id", "staffOrderId"]) ||
       pickFromNested(
         task,
-        ["staffOrder", "staff_order", "order", "task", "payload", "data"],
-        ["staffOrderId", "staff_order_id", "orderId", "order_id", "id"],
+        ["staffOrder", "staff_order", "task", "payload", "data"],
+        ["staff_order_id", "staffOrderId", "id"],
       ) ||
-      toText(task.id) ||
+      null
+    );
+  }
+
+  if (taskType === "subscription") {
+    return (
+      pickFirstText(task, ["item_id", "itemId"]) ||
+      pickFromNested(
+        task,
+        ["item", "subscription", "task", "payload", "data"],
+        ["item_id", "itemId", "id"],
+      ) ||
       null
     );
   }
 
   return (
     pickFirstText(task, [
-      "subscriptionId",
-      "subscription_id",
-      "itemId",
+      "order_id",
+      "orderId",
+      "staff_order_id",
+      "staffOrderId",
       "item_id",
-      "subscriptionItemId",
-      "subscription_item_id",
-    ]) ||
+      "itemId",
+    ]) || null
+  );
+};
+
+const getTaskInvoiceId = (
+  task: Record<string, unknown>,
+  taskType: DeliveryTask["type"] | null,
+): string | null => {
+  if (taskType !== "prepaid_order") return null;
+  return (
+    pickFirstText(task, ["invoice_id", "invoiceId"]) ||
     pickFromNested(
       task,
-      ["subscription", "item", "task", "payload", "data"],
-      [
-        "subscriptionId",
-        "subscription_id",
-        "itemId",
-        "item_id",
-        "subscriptionItemId",
-        "subscription_item_id",
-        "id",
-      ],
+      ["invoice", "task", "payload", "data"],
+      ["invoice_id", "invoiceId", "id"],
     ) ||
-    toText(task.id) ||
     null
   );
 };
 
-const getBucketByIdKey = (
-  task: Record<string, unknown>,
-): DeliveryTaskBucket | null => {
-  const typeHint = toText(task.taskType).toLowerCase();
-  if (typeHint.includes("subscription")) return "subscriptions";
-  if (typeHint.includes("prepaid")) return "prepaid_orders";
-  if (typeHint.includes("staff")) return "staff_orders";
-  if (typeHint.includes("order")) return "pay_on_delivery_orders";
-
-  if (toText(task.prepaidOrderId) || toText(task.prepaid_order_id)) {
-    return "prepaid_orders";
-  }
-  if (toText(task.staffOrderId) || toText(task.staff_order_id)) {
-    return "staff_orders";
-  }
-  if (toText(task.subscriptionId) || toText(task.subscription_id)) {
-    return "subscriptions";
-  }
-  if (toText(task.orderId) || toText(task.order_id)) {
-    return "pay_on_delivery_orders";
-  }
-
-  const orderContainer = asObject(task.order);
-  if (orderContainer && toText(orderContainer.id)) {
-    return "pay_on_delivery_orders";
-  }
-
-  const prepaidContainer = asObject(task.prepaidOrder || task.prepaid_order);
-  if (prepaidContainer && toText(prepaidContainer.id)) {
-    return "prepaid_orders";
-  }
-
-  const staffContainer = asObject(task.staffOrder || task.staff_order);
-  if (staffContainer && toText(staffContainer.id)) {
-    return "staff_orders";
-  }
-
-  const subscriptionContainer = asObject(task.subscription);
-  if (subscriptionContainer && toText(subscriptionContainer.id)) {
-    return "subscriptions";
-  }
-
-  return null;
-};
-
 const getTaskLabel = (
   task: Record<string, unknown>,
-  fallbackId: string,
+  fallbackReferenceId: string | null,
   fallbackBucket: DeliveryTaskBucket,
   lines: ParsedDeliveryTaskLine[],
 ): string => {
@@ -513,18 +653,20 @@ const getTaskLabel = (
   }
 
   if (fallbackBucket === "prepaid_orders") {
-    return `Prepaid Order ${fallbackId}`;
+    return `Prepaid Order ${fallbackReferenceId || "Task"}`;
   }
   if (fallbackBucket === "staff_orders") {
-    return `Staff Order ${fallbackId}`;
+    return `Staff Order ${fallbackReferenceId || "Task"}`;
   }
   if (fallbackBucket === "subscriptions") {
-    return `Subscription ${fallbackId}`;
+    return `Subscription ${fallbackReferenceId || "Task"}`;
   }
-  return `Order ${fallbackId}`;
+  return `Order ${fallbackReferenceId || "Task"}`;
 };
 
-export const parseDeliveryTasks = (tasks: unknown[]): ParsedDeliveryTask[] => {
+export const parseDeliveryTasks = (
+  tasks: DeliveryTask[] | unknown[],
+): ParsedDeliveryTask[] => {
   if (!Array.isArray(tasks)) return [];
 
   const parsed: ParsedDeliveryTask[] = [];
@@ -532,21 +674,24 @@ export const parseDeliveryTasks = (tasks: unknown[]): ParsedDeliveryTask[] => {
     const task = asObject(taskValue);
     if (!task) return;
 
-    const bucketFromType = detectBucketFromType(toText(task.type));
-    const bucketFromKey = getBucketByIdKey(task);
-    const bucket = bucketFromType || bucketFromKey;
-    if (!bucket) return;
+    const taskType = normalizeTaskType(task.type);
+    const bucket = detectBucketFromType(taskType);
+    if (!taskType || !bucket) return;
 
-    const taskId = getTaskIdForBucket(task, bucket);
+    const referenceId = getTaskReferenceId(task, taskType);
+    const taskId = getTaskIdForBucket(task, referenceId);
     if (!taskId) return;
     const lines = parseDeliveryTaskLines(task, `${bucket}:${taskId}:${index}`);
+    const creditCollections = parseCreditCollections(task);
 
     parsed.push({
       key: `${bucket}:${taskId}:${index}`,
       id: taskId,
+      referenceId,
+      invoiceId: getTaskInvoiceId(task, taskType),
       bucket,
-      label: getTaskLabel(task, taskId, bucket, lines),
-      type: toText(task.type) || bucket,
+      label: getTaskLabel(task, referenceId, bucket, lines),
+      type: taskType,
       earlierAttemptsTodayCount: Math.max(
         0,
         Math.floor(
@@ -556,6 +701,7 @@ export const parseDeliveryTasks = (tasks: unknown[]): ParsedDeliveryTask[] => {
         ),
       ),
       lines,
+      creditCollections,
       raw: taskValue,
     });
   });
@@ -623,11 +769,30 @@ export const buildDeliveryTaskOutcomes = (
       return;
     }
 
-    outcomes.subscriptions[task.id] =
+    const subscriptionOutcomeId = task.referenceId || task.id;
+    outcomes.subscriptions[subscriptionOutcomeId] =
       outcome === "failure" ? "not_done" : outcome;
   });
 
   return outcomes;
+};
+
+export const getDeliveryEarlierAttemptsTodayCount = (
+  order?: Pick<Order, "earlier_visits_today_count"> | null,
+): number => {
+  const rawValue = order?.earlier_visits_today_count;
+  const numericValue =
+    typeof rawValue === "number"
+      ? rawValue
+      : typeof rawValue === "string"
+        ? Number(rawValue)
+        : 0;
+
+  if (!Number.isFinite(numericValue)) {
+    return 0;
+  }
+
+  return Math.max(0, Math.floor(numericValue));
 };
 
 export const toDeliverySaleItemType = (value: unknown) =>

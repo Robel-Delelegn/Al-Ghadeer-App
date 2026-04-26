@@ -21,6 +21,8 @@ export interface AssignmentsPayload {
   days: AssignmentDay[];
 }
 
+export type DriverAssignments = AssignmentsPayload;
+
 const DAY_NAMES = [
   "Sunday",
   "Monday",

@@ -28,9 +28,16 @@ import { showWarningAlert, showErrorAlert } from "@/store/utils/alert";
 import { parseApiResponseOrRawWithSoftError } from "@/utils/api";
 import {
   buildDeliveryTaskOutcomes,
+  getDeliveryEarlierAttemptsTodayCount,
   toDeliverySaleItemType,
   toMoney,
 } from "@/utils/deliveries";
+import {
+  getOrderSelectedDeliveryActions,
+  getRentItemDepositAction,
+  getRentItemDepositKind,
+  getRentItemDisplayLabel,
+} from "@/utils/rentItems";
 import {
   DriverHistoryDetail,
   getDriverHistoryInvoiceDisplayId,
@@ -43,26 +50,12 @@ import type { SignatureViewRef } from "react-native-signature-canvas";
 
 const IP_ADDRESS = process.env.EXPO_PUBLIC_IP_ADDRESS;
 
-const getDepositReturnType = (
-  actionType?: string,
-): "deposit" | "deposit_return" => {
-  const normalized = (actionType || "").toLowerCase();
-  if (
-    normalized.includes("refund") ||
-    normalized.includes("return") ||
-    normalized.includes("from-customer")
-  ) {
-    return "deposit_return";
-  }
-  return "deposit";
-};
-
-const getDepositKind = (
-  value?: string,
-  fallbackCategory?: string,
-): "asset" | "bottle" => {
-  const normalized = (value || fallbackCategory || "").toLowerCase();
-  return normalized.includes("bottle") ? "bottle" : "asset";
+const readDeliveryNoteId = (value: unknown): string | undefined => {
+  if (!value || typeof value !== "object") return undefined;
+  const deliveryNoteId = (value as { deliveryNoteId?: unknown }).deliveryNoteId;
+  return typeof deliveryNoteId === "string" && deliveryNoteId.trim().length > 0
+    ? deliveryNoteId.trim()
+    : undefined;
 };
 
 type SignatureCanvasComponent =
@@ -107,6 +100,13 @@ const OrganizationSignature: React.FC = () => {
   const [hasDrawnSignature, setHasDrawnSignature] = useState(false);
   const [apiError, setApiError] = useState<string | null>(null);
 
+  const handleBack = useCallback(() => {
+    router.replace({
+      pathname: "/(root)/(tabs)/checkout",
+      params: { backTo: "bottles-assets" },
+    });
+  }, [router]);
+
   const {
     selectedOrder,
     assignedOrders,
@@ -119,9 +119,8 @@ const OrganizationSignature: React.FC = () => {
     (item) => selectedOrder === item.id,
   ) as Order | undefined;
   const editableRentItems = useMemo(
-    () =>
-      (orderDetail?.rent_items || []).filter((item) => item.in_truck === true),
-    [orderDetail?.rent_items],
+    () => getOrderSelectedDeliveryActions(orderDetail),
+    [orderDetail],
   );
   const [rentItemQuantities, setRentItemQuantities] = useState<
     Record<string, number>
@@ -171,6 +170,31 @@ const OrganizationSignature: React.FC = () => {
       itemCount: count,
     };
   }, [cartItems]);
+  const creditCollections = useMemo(
+    () =>
+      (orderDetail?.draft_credit_collections ?? []).flatMap((entry) => {
+        if (
+          !entry ||
+          typeof entry.amount !== "number" ||
+          !Number.isFinite(entry.amount) ||
+          entry.amount <= 0
+        ) {
+          return [];
+        }
+
+        const remark =
+          typeof entry.remark === "string" ? entry.remark.trim() : "";
+
+        return [
+          {
+            amount: toMoney(entry.amount),
+            ...(remark ? { remark } : {}),
+          },
+        ];
+      }),
+    [orderDetail?.draft_credit_collections],
+  );
+  const hasDraftCreditCollections = creditCollections.length > 0;
 
   const organizationName = orderDetail?.customer_name || "Organization";
   // Ensure walletBalance is always a number (handle string values from API like "0.00")
@@ -282,10 +306,14 @@ const OrganizationSignature: React.FC = () => {
       return quantity > 0;
     });
 
-    if (cartItems.length === 0 && !hasRentItemsSelected) {
+    if (
+      cartItems.length === 0 &&
+      !hasRentItemsSelected &&
+      !hasDraftCreditCollections
+    ) {
       showWarningAlert(
         "No Items",
-        "Please add items or set quantity for other actions.",
+        "Please add items, set bottle or asset movement, or record a credit collection.",
       );
       return;
     }
@@ -322,8 +350,7 @@ const OrganizationSignature: React.FC = () => {
       const vatAmount = sub * 0.05;
       const total = sub + vatAmount;
 
-      const rentItems = (orderDetail?.rent_items || [])
-        .filter((item) => item.in_truck === true)
+      const rentItems = editableRentItems
         .map((item) => ({
           ...item,
           quantity: Math.max(
@@ -343,9 +370,9 @@ const OrganizationSignature: React.FC = () => {
         }));
 
       const depositsReturns = rentItems.map((item) => ({
-        type: getDepositReturnType(item.other_action_type),
-        depositKind: getDepositKind(item.other_action_item_type, item.category),
-        itemId: item.id,
+        type: getRentItemDepositAction(item),
+        depositKind: getRentItemDepositKind(item),
+        itemId: item.item_id || item.id,
         quantity: item.quantity,
         unitPrice: toMoney(item.price),
       }));
@@ -354,6 +381,8 @@ const OrganizationSignature: React.FC = () => {
         status: "success" as const,
         displayId:
           orderDetail.display_id || orderDetail.order_number || orderDetail.id,
+        earlierAttemptsTodayCount:
+          getDeliveryEarlierAttemptsTodayCount(orderDetail),
         tasks: buildDeliveryTaskOutcomes(orderDetail.tasks || [], "success"),
         ...(saleItems.length > 0
           ? {
@@ -372,6 +401,7 @@ const OrganizationSignature: React.FC = () => {
             }
           : {}),
         ...(depositsReturns.length > 0 ? { depositsReturns } : {}),
+        ...(creditCollections.length > 0 ? { creditCollections } : {}),
         receiver: {
           name: receiverName.trim(),
           ...(receiverPosition.trim()
@@ -385,9 +415,11 @@ const OrganizationSignature: React.FC = () => {
       console.log("[delivery-confirm-signature] request payload", {
         deliveryId: orderDetail.id,
         displayId: requestData.displayId,
+        earlierAttemptsTodayCount: requestData.earlierAttemptsTodayCount,
         tasks: requestData.tasks,
         saleItems: saleItems.length,
         depositsReturns: depositsReturns.length,
+        creditCollections: creditCollections.length,
       });
 
       const response = await authenticatedFetch(
@@ -412,7 +444,8 @@ const OrganizationSignature: React.FC = () => {
         return;
       }
       const result = normalizeDeliveryConfirmationResponse(parseResult.data);
-      if (!result) {
+      const legacyDeliveryNoteId = readDeliveryNoteId(parseResult.data);
+      if (!result && !legacyDeliveryNoteId) {
         setApiError("Invalid response from server.");
         return;
       }
@@ -420,39 +453,27 @@ const OrganizationSignature: React.FC = () => {
       // Mark order as delivered and store confirm payment response for receipt
       if (orderDetail) {
         // Persist adjusted rent item quantities before moving order to completed orders
-        if (orderDetail.rent_items && orderDetail.rent_items.length > 0) {
-          const quantityMap = new Map(
-            rentItems.map((item) => [item.id, item.quantity] as const),
-          );
+        if (editableRentItems.length > 0) {
           const store = useOrderStore.getState();
           const updatedAssignedOrders = store.assignedOrders.map((order) => {
             if (order.id !== orderDetail.id) return order;
             return {
               ...order,
               display_id:
-                result.displayId ||
+                result?.displayId ||
                 order.display_id ||
                 order.order_number ||
                 order.id,
-              order_number: result.displayId || order.order_number || order.id,
+              order_number: result?.displayId || order.order_number || order.id,
               invoice_number:
-                getDriverHistoryInvoiceDisplayId(result) ||
+                getDriverHistoryInvoiceDisplayId(result || undefined) ||
                 order.invoice_number,
-              total_amount: result.sale?.totals.total ?? order.total_amount,
+              total_amount: result?.sale?.totals.total ?? order.total_amount,
               payment_method:
-                result.sale?.payment?.method ||
+                result?.sale?.payment?.method ||
                 selectedPaymentMethod ||
                 order.payment_method,
-              rent_items: (order.rent_items || []).map((item) => {
-                const updatedQuantity = quantityMap.has(item.id)
-                  ? quantityMap.get(item.id)!
-                  : 0;
-                return {
-                  ...item,
-                  quantity: updatedQuantity,
-                  in_truck: updatedQuantity > 0,
-                };
-              }),
+              draft_delivery_actions: rentItems,
             };
           });
           useOrderStore.setState({ assignedOrders: updatedAssignedOrders });
@@ -460,14 +481,20 @@ const OrganizationSignature: React.FC = () => {
 
         setLastConfirmPaymentResponse({
           orderId: orderDetail.id,
-          sale_id: getDriverHistorySaleId(result),
-          invoice_number: getDriverHistoryInvoiceDisplayId(result),
-          order_number: getDriverHistoryPrimaryId(result),
+          sale_id: getDriverHistorySaleId(result || undefined),
+          invoice_number: getDriverHistoryInvoiceDisplayId(result || undefined),
+          detail: result || null,
+          order_number: result
+            ? getDriverHistoryPrimaryId(result)
+            : legacyDeliveryNoteId!,
         });
         updateOrderStatus(orderDetail.id, "delivered");
       }
 
-      router.replace("/(root)/(tabs)/payment-receipt");
+      router.replace({
+        pathname: "/(root)/(tabs)/payment-receipt",
+        params: { view: "delivery-note" },
+      });
     } catch (error) {
       setApiError(
         error instanceof Error ? error.message : "Failed to process delivery.",
@@ -486,6 +513,8 @@ const OrganizationSignature: React.FC = () => {
     receiverPosition,
     notes,
     selectedPaymentMethod,
+    hasDraftCreditCollections,
+    creditCollections,
     setLastConfirmPaymentResponse,
     updateOrderStatus,
     router,
@@ -543,7 +572,7 @@ const OrganizationSignature: React.FC = () => {
       <View style={styles.header}>
         <TouchableOpacity
           style={styles.backButton}
-          onPress={() => router.back()}
+          onPress={handleBack}
           activeOpacity={0.7}
         >
           <Ionicons name="chevron-back" size={20} color="#0F172A" />
@@ -634,11 +663,11 @@ const OrganizationSignature: React.FC = () => {
               ))}
           </View>
 
-          {/* Other Actions */}
+          {/* Bottle and Asset Movement */}
           {editableRentItems.length > 0 && (
             <View style={styles.card}>
               <View style={styles.cardHeader}>
-                <Text style={styles.cardTitle}>Other Actions</Text>
+                <Text style={styles.cardTitle}>Bottles & Assets</Text>
                 <View style={styles.itemBadge}>
                   <Text style={styles.itemBadgeText}>
                     {editableRentItems.length}
@@ -650,6 +679,8 @@ const OrganizationSignature: React.FC = () => {
                   0,
                   rentItemQuantities[item.id] ?? item.quantity ?? 0,
                 );
+                const isReturnAction =
+                  getRentItemDepositAction(item) === "deposit_return";
                 return (
                   <View key={item.id}>
                     <View style={styles.otherActionRow}>
@@ -657,28 +688,31 @@ const OrganizationSignature: React.FC = () => {
                         <View
                           style={[
                             styles.otherActionIcon,
-                            item.category === "borrow"
+                            isReturnAction
                               ? styles.otherActionIconBorrow
                               : styles.otherActionIconDeposit,
                           ]}
                         >
                           <Ionicons
                             name={
-                              item.category === "borrow"
-                                ? "arrow-down-circle"
-                                : "arrow-up-circle"
+                              isReturnAction
+                                ? "arrow-undo-circle"
+                                : "arrow-redo-circle"
                             }
                             size={16}
-                            color={
-                              item.category === "borrow" ? "#10B981" : "#3B82F6"
-                            }
+                            color={isReturnAction ? "#10B981" : "#3B82F6"}
                           />
                         </View>
                         <View style={styles.otherActionInfo}>
                           <Text style={styles.itemName}>{item.name}</Text>
                           <Text style={styles.otherActionMeta}>
-                            {item.category === "borrow" ? "Borrow" : "Deposit"}
+                            {getRentItemDisplayLabel(item)}
                           </Text>
+                          {item.serial ? (
+                            <Text style={styles.otherActionMeta}>
+                              Serial: {item.serial}
+                            </Text>
+                          ) : null}
                         </View>
                       </View>
                       <View style={styles.otherActionRight}>

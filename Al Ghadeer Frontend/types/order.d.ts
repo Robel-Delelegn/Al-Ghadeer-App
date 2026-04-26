@@ -4,13 +4,13 @@ export interface ConfirmPaymentRequest {
   customer_id: string;
   customer_name: string;
   customer_phone: string;
-  products: Array<{
+  products: {
     id?: string;
     name: string;
     quantity: number;
     price: number;
     category?: "bulk_item" | "asset" | "refill";
-  }>;
+  }[];
   subtotal: number;
   vat: number;
   total_amount: number;
@@ -20,11 +20,11 @@ export interface ConfirmPaymentRequest {
   receiver_name?: string;
   receiver_position?: string;
   remark?: string;
-  reasons: Array<{
+  reasons: {
     type: "customer_request" | "external_request" | "subscription";
     id: string;
-  }>;
-  other_actions?: Array<{
+  }[];
+  other_actions?: {
     id: string;
     name: string;
     type:
@@ -37,7 +37,7 @@ export interface ConfirmPaymentRequest {
     price: number;
     quantity?: number;
     item_type?: "asset" | "bottle";
-  }>;
+  }[];
 }
 
 export interface ConfirmPaymentResponse {
@@ -64,6 +64,36 @@ export interface OrdersResponse {
   data: ApiOrderItem[];
 }
 
+export interface OrderRentItem {
+  id: string;
+  item_id?: string;
+  name: string;
+  category: "borrow" | "deposit";
+  price: number;
+  quantity: number;
+  image_url: string;
+  unit?: string | null;
+  description?: string | null;
+  serial?: string | null;
+  asset_category?: string | null;
+  in_truck?: boolean;
+  max_quantity?: number;
+  deposit_action?: "deposit" | "deposit_return";
+  deposit_kind?: "asset" | "bottle";
+  action_source?: "product_asset" | "held_item" | "task" | "legacy";
+  other_action_type?: NonNullable<
+    ConfirmPaymentRequest["other_actions"]
+  >[0]["type"];
+  other_action_item_type?: NonNullable<
+    ConfirmPaymentRequest["other_actions"]
+  >[0]["item_type"];
+}
+
+export interface OrderDraftCreditCollection {
+  amount: number;
+  remark?: string | null;
+}
+
 export interface ApiOrderItem {
   order_number: string;
   status: string;
@@ -77,15 +107,15 @@ export interface ApiOrderItem {
   delivery_zone: string | null;
   payment_method: string;
   order_type?: "site" | "external";
-  products: Array<{
+  products: {
     id: string;
     name: string;
     quantity: number;
     category: "retail-item" | "refill" | "assets";
     price: number;
     in_truck: boolean;
-  }>;
-  other_actions?: Array<{
+  }[];
+  other_actions?: {
     id: string;
     item: {
       id: string;
@@ -105,11 +135,11 @@ export interface ApiOrderItem {
     request_id?: string;
     customer_location_id?: string;
     direction?: "from_inventory" | "to_inventory";
-  }>;
-  reasons: Array<{
+  }[];
+  reasons: {
     type: "customer_request" | "external_request" | "subscription";
     id: string;
-  }>;
+  }[];
   customer: {
     id: string;
     name: string;
@@ -151,6 +181,7 @@ export interface Order {
   latitude?: number;
   longitude?: number;
   delivery_instructions?: string;
+  distance_km?: number;
   route_id?: string;
   route_name?: string;
   driver_id?: string;
@@ -158,12 +189,20 @@ export interface Order {
   has_new_items?: boolean;
   has_exact_location?: boolean;
   tasks?: unknown[];
+  delivery?: {
+    distance_km?: number;
+    delivery_zone?: string;
+    failure_reason?: string;
+    failure_note?: string;
+    delivered_at?: string;
+    started_at?: string;
+  };
 
   // Product Details - supports both array format (new) and Record format (legacy)
   // New format: Array of product objects with id, name, quantity, type, category
   // Legacy format: Record<string, number> where key is product name and value is quantity
   products?:
-    | Array<{
+    | {
         id: string;
         item_id?: string;
         name: string;
@@ -173,7 +212,7 @@ export interface Order {
         image_url?: string | null;
         type?: string;
         category?: string;
-      }>
+      }[]
     | Record<string, number>;
   total_amount?: number;
   wallet_balance?: number;
@@ -196,26 +235,14 @@ export interface Order {
   requires_signature?: boolean;
   requires_immediate_invoice?: boolean;
   // Rent items - items that are borrowed or deposited
-  rent_items?: Array<{
-    id: string;
-    name: string;
-    category: "borrow" | "deposit";
-    price: number;
-    quantity: number;
-    image_url: string;
-    in_truck?: boolean; // Whether the item is currently in the truck
-    other_action_type?: NonNullable<
-      ConfirmPaymentRequest["other_actions"]
-    >[0]["type"];
-    other_action_item_type?: NonNullable<
-      ConfirmPaymentRequest["other_actions"]
-    >[0]["item_type"];
-  }>;
+  rent_items?: OrderRentItem[];
+  draft_delivery_actions?: OrderRentItem[];
+  draft_credit_collections?: OrderDraftCreditCollection[];
   // Reasons for the order - same structure as API (do not parse)
-  reasons?: Array<{
+  reasons?: {
     type: "customer_request" | "external_request" | "subscription";
     id: string;
-  }>;
+  }[];
 }
 
 // Driver Structure
@@ -233,10 +260,11 @@ export interface Driver {
   vehicle: {
     type: string;
     plate_number: string;
+    capacity?: number;
   };
 
   // Status & Location
-  status: "online" | "offline";
+  status: "online" | "offline" | "busy";
   current_location: {
     latitude: number;
     longitude: number;
@@ -244,6 +272,12 @@ export interface Driver {
     updated_at: string;
   };
   zones?: string[]; // Array of zone names
+  metrics?: {
+    average_rating?: number;
+  } | null;
+  earnings?: {
+    daily_earnings?: number | string;
+  } | null;
 }
 
 // Product Structure

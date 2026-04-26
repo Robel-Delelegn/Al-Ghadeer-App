@@ -1,15 +1,18 @@
 import ApiErrorText from "@/components/ApiErrorText";
 import { useLocationStore, useOrderStore } from "@/store/index";
-import { authenticatedFetch } from "@/store/auth";
+import { authenticatedFetch, useAuthStore } from "@/store/auth";
 import { parseApiResponseWithSoftError } from "@/utils/api";
 import { parseDeliveryTasks } from "@/utils/deliveries";
+import { getDriverRequestId } from "@/utils/driverIdentity";
 import { getTotalItemsCount, normalizeOrderProducts } from "@/utils/orderUtils";
+import { resolveResourceUrl } from "@/utils/resources";
 import { Ionicons } from "@expo/vector-icons";
 import { useRouter } from "expo-router";
 import * as Location from "expo-location";
 import React, { useCallback, useState, useEffect } from "react";
 import {
   ActivityIndicator,
+  Image,
   Linking,
   ScrollView,
   Text,
@@ -49,10 +52,109 @@ const formatTaskLineKindLabel = (kind: string) => {
     .replace(/\b\w/g, (char) => char.toUpperCase());
 };
 
+const getTaskReferenceLabel = (
+  task: ReturnType<typeof parseDeliveryTasks>[number],
+) => {
+  if (!task.referenceId) return null;
+  if (task.type === "subscription") {
+    return `Item ${task.referenceId}`;
+  }
+  if (task.type === "staff_order") {
+    return `Staff Order ${task.referenceId}`;
+  }
+  return `Order ${task.referenceId}`;
+};
+
+interface CustomerSite {
+  id: string;
+  siteName: string | null;
+  latitude: number | null;
+  longitude: number | null;
+  streetName: string | null;
+  city: string | null;
+  areaName: string | null;
+  buildingNo: string | null;
+  flatNo: string | null;
+  deliveryInstructions: string | null;
+  routeId: string | null;
+}
+
+interface HeldBottle {
+  itemId: string;
+  label: string;
+  description: string | null;
+  image_url: string | null;
+  quantity: number;
+  unit: string | null;
+}
+
+interface HeldAsset {
+  itemId: string;
+  label: string;
+  description: string | null;
+  image_url: string | null;
+  serial: string;
+  assetCategory: string | null;
+}
+
+interface CustomerHeldItems {
+  bottles: HeldBottle[];
+  assets: HeldAsset[];
+}
+
+const formatSiteAddress = (
+  site: Partial<CustomerSite> | null | undefined,
+  fallback?: string,
+) => {
+  if (!site) {
+    return fallback || "—";
+  }
+
+  const parts = [
+    site.streetName,
+    site.buildingNo,
+    site.flatNo,
+    site.areaName,
+    site.city,
+  ]
+    .map((part) => (part || "").trim())
+    .filter((part) => part.length > 0);
+
+  if (parts.length > 0) {
+    return parts.join(", ");
+  }
+
+  const siteName = (site.siteName || "").trim();
+  if (siteName) {
+    return siteName;
+  }
+
+  return fallback || "—";
+};
+
+const getHeldItemIconName = (
+  kind: "bottle" | "asset",
+  category?: string | null,
+) => {
+  if (kind === "bottle") return "water-outline" as const;
+
+  const normalizedCategory = (category || "").trim().toLowerCase();
+  if (
+    normalizedCategory.includes("cooler") ||
+    normalizedCategory.includes("dispenser")
+  ) {
+    return "snow-outline" as const;
+  }
+
+  return "cube-outline" as const;
+};
+
 const OrderDetails = () => {
   const insets = useSafeAreaInsets();
   const router = useRouter();
-  const { assignedOrders, selectedOrder } = useOrderStore();
+  const { assignedOrders, selectedOrder, currentDriver, setAssignedOrders } =
+    useOrderStore();
+  const { user } = useAuthStore();
   const { userLatitude, userLongitude } = useLocationStore();
   const [isLoading, setIsLoading] = useState(false);
   const [distanceInfo, setDistanceInfo] = useState<{
@@ -62,8 +164,12 @@ const OrderDetails = () => {
   const [isCalculatingDistance, setIsCalculatingDistance] = useState(false);
   const [isUpdatingLocation, setIsUpdatingLocation] = useState(false);
   const [apiError, setApiError] = useState<string | null>(null);
+  const [heldItems, setHeldItems] = useState<CustomerHeldItems | null>(null);
+  const [isLoadingHeldItems, setIsLoadingHeldItems] = useState(false);
+  const [heldItemsError, setHeldItemsError] = useState<string | null>(null);
 
   const order = assignedOrders.find((o) => o.id === selectedOrder);
+  const driverId = getDriverRequestId({ user, currentDriver });
 
   const calculateDistanceAndTime = useCallback(async () => {
     if (!order || !userLatitude || !userLongitude) return;
@@ -122,6 +228,51 @@ const OrderDetails = () => {
     calculateDistanceAndTime();
   }, [calculateDistanceAndTime]);
 
+  const fetchHeldItems = useCallback(async () => {
+    if (!order?.customer_id) {
+      setHeldItems(null);
+      setHeldItemsError(null);
+      return;
+    }
+
+    setIsLoadingHeldItems(true);
+    setHeldItemsError(null);
+
+    try {
+      const response = await authenticatedFetch(
+        `${IP_ADDRESS}/customers/${encodeURIComponent(order.customer_id)}/held-items`,
+        {
+          method: "GET",
+        },
+      );
+
+      const result =
+        await parseApiResponseWithSoftError<CustomerHeldItems>(response);
+      if (!result.ok) {
+        setHeldItems(null);
+        setHeldItemsError(result.error);
+        return;
+      }
+
+      setHeldItems({
+        bottles: Array.isArray(result.data?.bottles) ? result.data.bottles : [],
+        assets: Array.isArray(result.data?.assets) ? result.data.assets : [],
+      });
+    } catch (error) {
+      console.error("Error fetching customer held items:", error);
+      setHeldItems(null);
+      setHeldItemsError(
+        error instanceof Error ? error.message : "Failed to load held items.",
+      );
+    } finally {
+      setIsLoadingHeldItems(false);
+    }
+  }, [order?.customer_id]);
+
+  useEffect(() => {
+    fetchHeldItems();
+  }, [fetchHeldItems]);
+
   const handleViewInMap = useCallback(async () => {
     if (!order || !userLatitude || !userLongitude) return;
 
@@ -146,20 +297,40 @@ const OrderDetails = () => {
 
   const handleProceed = () => {
     if (!order) return;
-    router.push("/(root)/(tabs)/add-products");
+    router.push({
+      pathname: "/(root)/(tabs)/add-products",
+      params: { backTo: "order-details" },
+    });
   };
 
   const handleMarkAsUnsuccessful = () => {
     if (!order) return;
-    router.push("/(root)/(tabs)/failed-deliveries" as any);
+    router.push({
+      pathname: "/(root)/(tabs)/failed-deliveries",
+      params: { backTo: "order-details" },
+    } as any);
   };
 
   const parseAddressComponents = (geocodeResult: any) => {
     const addressComponents = geocodeResult.address_components || [];
+    let siteName = "";
     let streetName = "";
     let buildingNo = "";
     let flatNo = "";
+    let city = "";
+    let areaName = "";
     let fullAddress = geocodeResult.formatted_address || "";
+
+    const premise = addressComponents.find(
+      (comp: any) =>
+        comp.types &&
+        (comp.types.includes("premise") ||
+          comp.types.includes("establishment") ||
+          comp.types.includes("point_of_interest")),
+    );
+    if (premise) {
+      siteName = premise.long_name || premise.short_name || "";
+    }
 
     // Find route (street name)
     const route = addressComponents.find(
@@ -185,7 +356,37 @@ const OrderDetails = () => {
       flatNo = subpremise.long_name || subpremise.short_name || "";
     }
 
-    return { streetName, buildingNo, flatNo, fullAddress };
+    const locality = addressComponents.find(
+      (comp: any) =>
+        comp.types &&
+        (comp.types.includes("locality") ||
+          comp.types.includes("postal_town") ||
+          comp.types.includes("administrative_area_level_2")),
+    );
+    if (locality) {
+      city = locality.long_name || locality.short_name || "";
+    }
+
+    const sublocality = addressComponents.find(
+      (comp: any) =>
+        comp.types &&
+        (comp.types.includes("sublocality") ||
+          comp.types.includes("sublocality_level_1") ||
+          comp.types.includes("neighborhood")),
+    );
+    if (sublocality) {
+      areaName = sublocality.long_name || sublocality.short_name || "";
+    }
+
+    return {
+      siteName,
+      streetName,
+      buildingNo,
+      flatNo,
+      city,
+      areaName,
+      fullAddress,
+    };
   };
 
   const handleUpdateCustomerLocation = useCallback(async () => {
@@ -194,7 +395,7 @@ const OrderDetails = () => {
       return;
     }
 
-    if (!order.customer_site_id || !order.customer_id) {
+    if (!order.customer_id) {
       showErrorAlert("Error", "Customer information is incomplete.");
       return;
     }
@@ -240,40 +441,81 @@ const OrderDetails = () => {
       }
 
       const result = geocodeData.results[0];
-      const { streetName, buildingNo, flatNo, fullAddress } =
-        parseAddressComponents(result);
+      const {
+        siteName,
+        streetName,
+        buildingNo,
+        flatNo,
+        city,
+        areaName,
+        fullAddress,
+      } = parseAddressComponents(result);
 
-      // Prepare the request data
-      const locationUpdateData = {
-        customer_site_id: order.customer_site_id,
-        customer_id: order.customer_id,
-        address: fullAddress,
-        street_name: streetName,
-        building_no: buildingNo,
-        flat_no: flatNo,
-        longitude: longitude,
-        latitude: latitude,
-        delivery_instructions: order.delivery_instructions || "",
-      };
+      const isUpdatingExistingSite =
+        typeof order.customer_site_id === "string" &&
+        order.customer_site_id.trim().length > 0;
 
-      // Make the API call
-      const url = `${IP_ADDRESS}/driver/customer-location/update`;
+      const payload: Record<string, string | number> = {};
+      if (siteName.trim()) payload.siteName = siteName.trim();
+      if (streetName.trim()) payload.streetName = streetName.trim();
+      if (city.trim()) payload.city = city.trim();
+      if (areaName.trim()) payload.areaName = areaName.trim();
+      if (buildingNo.trim()) payload.buildingNo = buildingNo.trim();
+      if (flatNo.trim()) payload.flatNo = flatNo.trim();
+      payload.longitude = longitude;
+      payload.latitude = latitude;
+      if (
+        !isUpdatingExistingSite &&
+        (order.delivery_instructions || "").trim()
+      ) {
+        payload.deliveryInstructions = (
+          order.delivery_instructions || ""
+        ).trim();
+      }
+
+      const basePath = `${IP_ADDRESS}/customers/${encodeURIComponent(order.customer_id)}/sites`;
+      const url = isUpdatingExistingSite
+        ? `${basePath}/${encodeURIComponent(order.customer_site_id!)}`
+        : basePath;
       const response = await authenticatedFetch(url, {
-        method: "POST",
+        method: isUpdatingExistingSite ? "PATCH" : "POST",
         headers: {
           "Content-Type": "application/json",
+          ...(driverId ? { "X-Driver-Id": driverId } : {}),
         },
-        body: JSON.stringify(locationUpdateData),
+        body: JSON.stringify(payload),
       });
 
-      const apiResult = await parseApiResponseWithSoftError<unknown>(response);
+      const apiResult =
+        await parseApiResponseWithSoftError<CustomerSite>(response);
       if (!apiResult.ok) {
         setApiError(apiResult.error);
         return;
       }
+
+      const savedSite = apiResult.data;
+      const updatedAddress = formatSiteAddress(savedSite, fullAddress);
+      const updatedAssignedOrders = assignedOrders.map((assignedOrder) =>
+        assignedOrder.id === order.id
+          ? {
+              ...assignedOrder,
+              customer_site_id: savedSite.id,
+              customer_address: updatedAddress,
+              latitude: savedSite.latitude ?? latitude,
+              longitude: savedSite.longitude ?? longitude,
+              delivery_instructions:
+                savedSite.deliveryInstructions ??
+                assignedOrder.delivery_instructions,
+            }
+          : assignedOrder,
+      );
+      setAssignedOrders(updatedAssignedOrders);
+
       showSuccessAlert(
         "Location Updated",
-        "Customer location has been updated successfully.",
+        isUpdatingExistingSite
+          ? "Customer site location has been updated successfully."
+          : "A new customer site has been created with the current location.",
         [{ text: "OK" }],
       );
     } catch (error) {
@@ -286,7 +528,7 @@ const OrderDetails = () => {
     } finally {
       setIsUpdatingLocation(false);
     }
-  }, [order]);
+  }, [assignedOrders, driverId, order, setAssignedOrders]);
 
   if (!order) {
     return (
@@ -302,7 +544,7 @@ const OrderDetails = () => {
         </View>
         <Text style={styles.emptyTitle}>Order not found</Text>
         <Text style={styles.emptySubtitle}>
-          This order may have been removed
+          This stop is no longer available
         </Text>
         <TouchableOpacity
           style={styles.emptyButton}
@@ -341,6 +583,13 @@ const OrderDetails = () => {
   const currentStatus = statusConfig[order.status] || statusConfig.pending;
 
   const productCount = order ? getTotalItemsCount(order) : 0;
+  const heldBottles = heldItems?.bottles || [];
+  const heldAssets = heldItems?.assets || [];
+  const totalHeldBottleQuantity = heldBottles.reduce(
+    (sum, bottle) => sum + Math.max(0, bottle.quantity || 0),
+    0,
+  );
+  const hasHeldItems = heldBottles.length > 0 || heldAssets.length > 0;
 
   return (
     <View style={[styles.container, { paddingTop: insets.top }]}>
@@ -394,7 +643,7 @@ const OrderDetails = () => {
             </View>
             <View style={styles.customerInfo}>
               <Text style={styles.customerName}>{customerName}</Text>
-              <Text style={styles.customerLabel}>Customer</Text>
+              <Text style={styles.customerLabel}>Stop</Text>
             </View>
             <TouchableOpacity
               style={styles.callButton}
@@ -423,19 +672,168 @@ const OrderDetails = () => {
         </View>
 
         <View style={styles.card}>
-          <Text style={styles.sectionLabel}>STOP DETAILS</Text>
+          <Text style={styles.sectionLabel}>HELD</Text>
+
+          {isLoadingHeldItems ? (
+            <View style={styles.heldItemsState}>
+              <ActivityIndicator size="small" color="#1E40AF" />
+              <Text style={styles.heldItemsStateText}>Loading...</Text>
+            </View>
+          ) : heldItemsError ? (
+            <View style={styles.heldItemsErrorBox}>
+              <Ionicons name="alert-circle-outline" size={16} color="#DC2626" />
+              <Text style={styles.heldItemsErrorText}>{heldItemsError}</Text>
+            </View>
+          ) : !hasHeldItems ? (
+            <View style={styles.heldItemsEmptyBox}>
+              <View style={styles.heldItemsEmptyIcon}>
+                <Ionicons name="cube-outline" size={18} color="#94A3B8" />
+              </View>
+              <View style={styles.heldItemsEmptyContent}>
+                <Text style={styles.heldItemsEmptyTitle}>None</Text>
+                <Text style={styles.heldItemsEmptyText}>
+                  No bottles or assets.
+                </Text>
+              </View>
+            </View>
+          ) : (
+            <>
+              <View style={styles.heldItemsSummaryRow}>
+                <View style={styles.heldItemsSummaryBadge}>
+                  <Ionicons name="water-outline" size={12} color="#0369A1" />
+                  <Text style={styles.heldItemsSummaryText}>
+                    {totalHeldBottleQuantity} bottle
+                    {totalHeldBottleQuantity === 1 ? "" : "s"}
+                  </Text>
+                </View>
+                <View style={styles.heldItemsSummaryBadge}>
+                  <Ionicons name="cube-outline" size={12} color="#7C3AED" />
+                  <Text style={styles.heldItemsSummaryText}>
+                    {heldAssets.length} asset
+                    {heldAssets.length === 1 ? "" : "s"}
+                  </Text>
+                </View>
+              </View>
+
+              {heldBottles.length > 0 ? (
+                <View style={styles.heldItemsSection}>
+                  <Text style={styles.heldItemsSectionTitle}>Bottles</Text>
+                  {heldBottles.map((bottle, index) => (
+                    <View key={`${bottle.itemId}-${index}`}>
+                      <View style={styles.heldItemRow}>
+                        <View style={styles.heldItemMedia}>
+                          {resolveResourceUrl(bottle.image_url) ? (
+                            <Image
+                              source={{
+                                uri: resolveResourceUrl(bottle.image_url) || "",
+                              }}
+                              style={styles.heldItemImage}
+                              resizeMode="cover"
+                            />
+                          ) : (
+                            <Ionicons
+                              name={getHeldItemIconName("bottle")}
+                              size={16}
+                              color="#0EA5E9"
+                            />
+                          )}
+                        </View>
+                        <View style={styles.heldItemInfo}>
+                          <Text style={styles.heldItemLabel}>
+                            {bottle.label}
+                          </Text>
+                          <Text style={styles.heldItemMeta}>
+                            {bottle.unit ? `${bottle.unit} • ` : ""}
+                            Held quantity
+                          </Text>
+                          {bottle.description ? (
+                            <Text style={styles.heldItemDescription}>
+                              {bottle.description}
+                            </Text>
+                          ) : null}
+                        </View>
+                        <View style={styles.heldItemQuantityBadge}>
+                          <Text style={styles.heldItemQuantityText}>
+                            ×{bottle.quantity}
+                          </Text>
+                        </View>
+                      </View>
+                      {index < heldBottles.length - 1 && (
+                        <View style={styles.productDivider} />
+                      )}
+                    </View>
+                  ))}
+                </View>
+              ) : null}
+
+              {heldAssets.length > 0 ? (
+                <View style={styles.heldItemsSection}>
+                  <Text style={styles.heldItemsSectionTitle}>Assets</Text>
+                  {heldAssets.map((asset, index) => (
+                    <View key={`${asset.itemId}-${asset.serial}-${index}`}>
+                      <View style={styles.heldItemRow}>
+                        <View style={styles.heldItemMedia}>
+                          {resolveResourceUrl(asset.image_url) ? (
+                            <Image
+                              source={{
+                                uri: resolveResourceUrl(asset.image_url) || "",
+                              }}
+                              style={styles.heldItemImage}
+                              resizeMode="cover"
+                            />
+                          ) : (
+                            <Ionicons
+                              name={getHeldItemIconName(
+                                "asset",
+                                asset.assetCategory,
+                              )}
+                              size={16}
+                              color="#7C3AED"
+                            />
+                          )}
+                        </View>
+                        <View style={styles.heldItemInfo}>
+                          <Text style={styles.heldItemLabel}>
+                            {asset.label}
+                          </Text>
+                          <Text style={styles.heldItemMeta}>
+                            {asset.assetCategory || "Asset"}
+                          </Text>
+                          <Text style={styles.heldItemSerial}>
+                            Serial: {asset.serial}
+                          </Text>
+                          {asset.description ? (
+                            <Text style={styles.heldItemDescription}>
+                              {asset.description}
+                            </Text>
+                          ) : null}
+                        </View>
+                      </View>
+                      {index < heldAssets.length - 1 && (
+                        <View style={styles.productDivider} />
+                      )}
+                    </View>
+                  ))}
+                </View>
+              ) : null}
+            </>
+          )}
+        </View>
+
+        <View style={styles.card}>
+          <Text style={styles.sectionLabel}>STOP</Text>
           <View style={styles.detailRow}>
             <Text style={styles.detailLabel}>Route</Text>
             <Text style={styles.detailValue}>{routeName}</Text>
           </View>
           <View style={styles.detailRowDivider} />
           <View style={styles.detailRow}>
-            <Text style={styles.detailLabel}>Earlier Visits Today</Text>
+            <Text style={styles.detailLabel}>Visits</Text>
             <Text style={styles.detailValue}>{earlierVisitsCount}</Text>
           </View>
           <View style={styles.detailRowDivider} />
           <View style={styles.detailRow}>
-            <Text style={styles.detailLabel}>Has New Items</Text>
+            <Text style={styles.detailLabel}>New</Text>
             <Text
               style={[
                 styles.detailValue,
@@ -447,7 +845,7 @@ const OrderDetails = () => {
           </View>
           <View style={styles.detailRowDivider} />
           <View style={styles.detailRow}>
-            <Text style={styles.detailLabel}>Signature Required</Text>
+            <Text style={styles.detailLabel}>Sign</Text>
             <Text
               style={[
                 styles.detailValue,
@@ -459,7 +857,7 @@ const OrderDetails = () => {
           </View>
           <View style={styles.detailRowDivider} />
           <View style={styles.detailRow}>
-            <Text style={styles.detailLabel}>Immediate Invoice</Text>
+            <Text style={styles.detailLabel}>Invoice</Text>
             <Text
               style={[
                 styles.detailValue,
@@ -476,11 +874,11 @@ const OrderDetails = () => {
         {/* Route Card */}
         {(isCalculatingDistance || distanceInfo) && (
           <View style={styles.card}>
-            <Text style={styles.sectionLabel}>ROUTE</Text>
+            <Text style={styles.sectionLabel}>ETA</Text>
             {isCalculatingDistance ? (
               <View style={styles.routeLoading}>
                 <ActivityIndicator size="small" color="#1E40AF" />
-                <Text style={styles.routeLoadingText}>Calculating...</Text>
+                <Text style={styles.routeLoadingText}>Loading...</Text>
               </View>
             ) : (
               distanceInfo && (
@@ -518,7 +916,7 @@ const OrderDetails = () => {
                     ) : (
                       <>
                         <Ionicons name="map" size={16} color="#FFFFFF" />
-                        <Text style={styles.mapButtonText}>Navigate</Text>
+                        <Text style={styles.mapButtonText}>Map</Text>
                       </>
                     )}
                   </TouchableOpacity>
@@ -530,7 +928,7 @@ const OrderDetails = () => {
 
         {/* Order Info Card */}
         <View style={styles.card}>
-          <Text style={styles.sectionLabel}>ORDER DETAILS</Text>
+          <Text style={styles.sectionLabel}>ORDER</Text>
           <View style={styles.detailRow}>
             <Text style={styles.detailLabel}>Payment</Text>
             <Text style={styles.detailValue}>
@@ -612,6 +1010,16 @@ const OrderDetails = () => {
                       <Text style={styles.taskMeta}>
                         {formatTaskBucketLabel(task.bucket)}
                       </Text>
+                      {getTaskReferenceLabel(task) ? (
+                        <Text style={styles.taskMetaSecondary}>
+                          {getTaskReferenceLabel(task)}
+                          {task.invoiceId ? ` • Invoice ${task.invoiceId}` : ""}
+                        </Text>
+                      ) : task.invoiceId ? (
+                        <Text style={styles.taskMetaSecondary}>
+                          Invoice {task.invoiceId}
+                        </Text>
+                      ) : null}
                     </View>
                     <View style={styles.taskTypeBadge}>
                       <Text style={styles.taskTypeBadgeText}>
@@ -634,6 +1042,19 @@ const OrderDetails = () => {
                         <Text style={styles.taskPillWarningText}>
                           {task.earlierAttemptsTodayCount} earlier attempt
                           {task.earlierAttemptsTodayCount === 1 ? "" : "s"}
+                        </Text>
+                      </View>
+                    ) : null}
+                    {task.creditCollections.length > 0 ? (
+                      <View style={styles.taskPill}>
+                        <Ionicons
+                          name="card-outline"
+                          size={12}
+                          color="#7C3AED"
+                        />
+                        <Text style={styles.taskPillText}>
+                          {task.creditCollections.length} credit collection
+                          {task.creditCollections.length === 1 ? "" : "s"}
                         </Text>
                       </View>
                     ) : null}
@@ -677,10 +1098,31 @@ const OrderDetails = () => {
                       ))}
                     </View>
                   ) : (
-                    <Text style={styles.taskEmptyText}>
-                      No line items were returned for this task.
-                    </Text>
+                    <Text style={styles.taskEmptyText}>No lines.</Text>
                   )}
+
+                  {task.creditCollections.length > 0 ? (
+                    <View style={styles.taskCollectionsList}>
+                      {task.creditCollections.map((collection) => (
+                        <View
+                          key={collection.id}
+                          style={styles.taskCollectionRow}
+                        >
+                          <View style={styles.taskCollectionMain}>
+                            <Text style={styles.taskCollectionTitle}>
+                              Credit Collection
+                            </Text>
+                            <Text style={styles.taskCollectionMeta}>
+                              {collection.remark || "No remark"}
+                            </Text>
+                          </View>
+                          <Text style={styles.taskCollectionAmount}>
+                            AED {collection.amount.toFixed(2)}
+                          </Text>
+                        </View>
+                      ))}
+                    </View>
+                  ) : null}
                 </View>
                 {index < parsedTasks.length - 1 && (
                   <View style={styles.productDivider} />
@@ -759,7 +1201,7 @@ const OrderDetails = () => {
           <View style={[styles.card, styles.instructionsCard]}>
             <View style={styles.instructionsHeader}>
               <Ionicons name="information-circle" size={18} color="#D97706" />
-              <Text style={styles.instructionsTitle}>Instructions</Text>
+              <Text style={styles.instructionsTitle}>Note</Text>
             </View>
             <Text style={styles.instructionsText}>{deliveryInstructions}</Text>
           </View>
@@ -793,18 +1235,14 @@ const OrderDetails = () => {
           {isUpdatingLocation ? (
             <>
               <ActivityIndicator size="small" color="#3B82F6" />
-              <Text style={styles.updateLocationButtonText}>
-                Updating Location...
-              </Text>
+              <Text style={styles.updateLocationButtonText}>Syncing...</Text>
             </>
           ) : (
             <>
               <View style={styles.updateLocationIconBox}>
                 <Ionicons name="location" size={18} color="#3B82F6" />
               </View>
-              <Text style={styles.updateLocationButtonText}>
-                Update Customer Location
-              </Text>
+              <Text style={styles.updateLocationButtonText}>Pin</Text>
               <View style={styles.updateLocationArrow}>
                 <Ionicons name="arrow-forward" size={16} color="#3B82F6" />
               </View>
@@ -820,7 +1258,7 @@ const OrderDetails = () => {
             activeOpacity={0.8}
           >
             <Ionicons name="close" size={20} color="#DC2626" />
-            <Text style={styles.failButtonText}>Unsuccessful</Text>
+            <Text style={styles.failButtonText}>Fail</Text>
           </TouchableOpacity>
 
           <TouchableOpacity
@@ -828,7 +1266,8 @@ const OrderDetails = () => {
             onPress={handleProceed}
             activeOpacity={0.8}
           >
-            <Text style={styles.proceedButtonText}>Start Delivery</Text>
+            <Ionicons name="play" size={16} color="#FFFFFF" />
+            <Text style={styles.proceedButtonText}>Start</Text>
             <View style={styles.proceedArrow}>
               <Ionicons name="arrow-forward" size={16} color="#1E40AF" />
             </View>
@@ -995,6 +1434,170 @@ const styles = StyleSheet.create({
     letterSpacing: 0.8,
     marginBottom: 14,
   },
+  heldItemsSubtitle: {
+    marginTop: -6,
+    marginBottom: 14,
+    fontSize: 13,
+    lineHeight: 19,
+    color: "#64748B",
+  },
+  heldItemsState: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 10,
+    borderRadius: 14,
+    backgroundColor: "#F8FAFC",
+    paddingVertical: 18,
+    paddingHorizontal: 16,
+  },
+  heldItemsStateText: {
+    fontSize: 13,
+    fontWeight: "500",
+    color: "#475569",
+  },
+  heldItemsErrorBox: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 10,
+    borderRadius: 14,
+    backgroundColor: "#FEF2F2",
+    borderWidth: 1,
+    borderColor: "#FECACA",
+    paddingHorizontal: 14,
+    paddingVertical: 12,
+  },
+  heldItemsErrorText: {
+    flex: 1,
+    fontSize: 13,
+    lineHeight: 19,
+    color: "#B91C1C",
+  },
+  heldItemsEmptyBox: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 12,
+    borderRadius: 14,
+    backgroundColor: "#F8FAFC",
+    borderWidth: 1,
+    borderColor: "#E2E8F0",
+    paddingHorizontal: 14,
+    paddingVertical: 14,
+  },
+  heldItemsEmptyIcon: {
+    width: 36,
+    height: 36,
+    borderRadius: 12,
+    backgroundColor: "#FFFFFF",
+    justifyContent: "center",
+    alignItems: "center",
+  },
+  heldItemsEmptyContent: {
+    flex: 1,
+  },
+  heldItemsEmptyTitle: {
+    fontSize: 14,
+    fontWeight: "600",
+    color: "#0F172A",
+  },
+  heldItemsEmptyText: {
+    marginTop: 3,
+    fontSize: 12,
+    lineHeight: 18,
+    color: "#64748B",
+  },
+  heldItemsSummaryRow: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    gap: 8,
+    marginBottom: 14,
+  },
+  heldItemsSummaryBadge: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
+    borderRadius: 999,
+    backgroundColor: "#F8FAFC",
+    borderWidth: 1,
+    borderColor: "#E2E8F0",
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+  },
+  heldItemsSummaryText: {
+    fontSize: 12,
+    fontWeight: "600",
+    color: "#334155",
+  },
+  heldItemsSection: {
+    marginTop: 2,
+  },
+  heldItemsSectionTitle: {
+    fontSize: 13,
+    fontWeight: "700",
+    color: "#1E40AF",
+    marginBottom: 10,
+    letterSpacing: 0.2,
+  },
+  heldItemRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    paddingVertical: 10,
+    gap: 12,
+  },
+  heldItemMedia: {
+    width: 42,
+    height: 42,
+    borderRadius: 12,
+    backgroundColor: "#F8FAFC",
+    borderWidth: 1,
+    borderColor: "#E2E8F0",
+    justifyContent: "center",
+    alignItems: "center",
+    overflow: "hidden",
+  },
+  heldItemImage: {
+    width: "100%",
+    height: "100%",
+  },
+  heldItemInfo: {
+    flex: 1,
+  },
+  heldItemLabel: {
+    fontSize: 14,
+    fontWeight: "600",
+    color: "#0F172A",
+  },
+  heldItemMeta: {
+    marginTop: 3,
+    fontSize: 12,
+    color: "#64748B",
+  },
+  heldItemDescription: {
+    marginTop: 5,
+    fontSize: 12,
+    lineHeight: 18,
+    color: "#475569",
+  },
+  heldItemQuantityBadge: {
+    minWidth: 46,
+    borderRadius: 10,
+    backgroundColor: "#EFF6FF",
+    paddingHorizontal: 10,
+    paddingVertical: 8,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  heldItemQuantityText: {
+    fontSize: 14,
+    fontWeight: "700",
+    color: "#1D4ED8",
+  },
+  heldItemSerial: {
+    marginTop: 4,
+    fontSize: 12,
+    fontWeight: "600",
+    color: "#7C3AED",
+  },
   routeLoading: {
     flexDirection: "row",
     alignItems: "center",
@@ -1146,6 +1749,11 @@ const styles = StyleSheet.create({
     fontSize: 12,
     color: "#64748B",
   },
+  taskMetaSecondary: {
+    marginTop: 4,
+    fontSize: 12,
+    color: "#475569",
+  },
   taskPillsRow: {
     flexDirection: "row",
     flexWrap: "wrap",
@@ -1237,6 +1845,38 @@ const styles = StyleSheet.create({
     fontSize: 13,
     color: "#64748B",
     marginTop: 10,
+  },
+  taskCollectionsList: {
+    marginTop: 12,
+    gap: 8,
+  },
+  taskCollectionRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    gap: 12,
+    borderRadius: 12,
+    backgroundColor: "#FAF5FF",
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+  },
+  taskCollectionMain: {
+    flex: 1,
+  },
+  taskCollectionTitle: {
+    fontSize: 13,
+    fontWeight: "600",
+    color: "#581C87",
+  },
+  taskCollectionMeta: {
+    marginTop: 4,
+    fontSize: 12,
+    color: "#6B7280",
+  },
+  taskCollectionAmount: {
+    fontSize: 13,
+    fontWeight: "700",
+    color: "#7C3AED",
   },
   productRow: {
     flexDirection: "row",

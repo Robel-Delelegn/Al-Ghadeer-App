@@ -58,6 +58,12 @@ export interface DriverHistorySale {
   invoice: DriverHistoryInvoice | null;
 }
 
+export interface DriverHistoryCreditCollection {
+  id: string;
+  amount: number;
+  remark: string | null;
+}
+
 export interface DriverHistoryDetail {
   kind: DriverHistoryKind;
   id: string;
@@ -71,6 +77,7 @@ export interface DriverHistoryDetail {
   createdAt: string;
   tasks: unknown[];
   depositReturns: DriverHistoryDepositReturn[];
+  creditCollections: DriverHistoryCreditCollection[];
   sale: DriverHistorySale | null;
 }
 
@@ -308,6 +315,24 @@ const normalizeSale = (value: unknown): DriverHistorySale | null => {
   };
 };
 
+const normalizeCreditCollection = (
+  value: unknown,
+  index: number,
+): DriverHistoryCreditCollection | null => {
+  const record = isRecord(value) ? value : null;
+  const amount = toNumber(record?.amount);
+
+  if (!record || amount === null) {
+    return null;
+  }
+
+  return {
+    id: toText(record.id) || `credit-collection-${index}`,
+    amount,
+    remark: toNullableText(record.remark),
+  };
+};
+
 export const normalizeDriverHistoryDetail = (
   value: unknown,
 ): DriverHistoryDetail | null => {
@@ -316,6 +341,12 @@ export const normalizeDriverHistoryDetail = (
   const id = toText(record?.id);
 
   if (!record || !kind || !id) return null;
+
+  const creditCollectionSource =
+    record.creditCollections ??
+    record.credit_collections ??
+    record.cashCollections ??
+    record.cash_collections;
 
   return {
     kind,
@@ -334,6 +365,13 @@ export const normalizeDriverHistoryDetail = (
       ? record.depositReturns
           .map((item) => normalizeDepositReturn(item))
           .filter((item): item is DriverHistoryDepositReturn => item !== null)
+      : [],
+    creditCollections: Array.isArray(creditCollectionSource)
+      ? creditCollectionSource
+          .map((item, index) => normalizeCreditCollection(item, index))
+          .filter(
+            (item): item is DriverHistoryCreditCollection => item !== null,
+          )
       : [],
     sale: normalizeSale(record.sale),
   };

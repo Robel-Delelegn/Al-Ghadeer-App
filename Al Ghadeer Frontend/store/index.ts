@@ -1,5 +1,8 @@
 import { Driver, Order, Product } from "@/types/order";
 import { useAuthStore } from "@/store/auth";
+import type { CustomerHeldItems } from "@/utils/customerHeldItems";
+import type { DriverHistoryDetail } from "@/utils/driverHistory";
+import type { TruckAsset, TruckBulkItem } from "@/utils/truckLoad";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { create } from "zustand";
 import { createJSONStorage, persist } from "zustand/middleware";
@@ -89,7 +92,7 @@ interface CartItem {
   item_id?: string;
   item_type?: "asset" | "retail" | "refill";
   name: string;
-  image: any;
+  image?: { uri: string } | null;
   price: number;
   quantity: number;
   currency: string;
@@ -99,11 +102,89 @@ interface CartItem {
 
 type SelectedPaymentMethod = "cash" | "wallet" | "credit" | "check";
 
+export type DirectSaleDraftPaymentMethod = SelectedPaymentMethod;
+
+export interface DirectSaleDraftProduct {
+  id: string;
+  type: "retail" | "refill" | "assets" | "other";
+  itemId: string;
+  label: string;
+  pricePerUnit: number;
+  unit: string | null;
+  image_url: string | null;
+  category?: string | null;
+  assetCategory?: string | null;
+  originalPrice?: number;
+  badge?: string;
+  loaded_quantity?: number | string;
+  available_stock?: number | string;
+}
+
+export interface DirectSaleDraftCustomerSite {
+  id: string;
+  siteName: string | null;
+  latitude: number | null;
+  longitude: number | null;
+  streetName: string | null;
+  city: string | null;
+  areaName: string | null;
+  buildingNo: string | null;
+  flatNo: string | null;
+  deliveryInstructions: string | null;
+  routeId: string | null;
+}
+
+export interface DirectSaleDraftCustomer {
+  id: string;
+  name: string;
+  phone: string;
+  sites: DirectSaleDraftCustomerSite[];
+}
+
+export interface DirectSaleDraftCheckDetails {
+  checkNumber: string;
+  checkDate: string;
+  bankName: string;
+  accountNumber: string;
+}
+
+export interface DirectSaleDraftLocation {
+  latitude: number;
+  longitude: number;
+  address: string;
+}
+
+export interface DirectSaleDraftAssetDraft {
+  selected: boolean;
+  price: string;
+}
+
+export interface DirectSaleDraft {
+  products: DirectSaleDraftProduct[];
+  quantities: Record<string, number>;
+  customerData: DirectSaleDraftCustomer | null;
+  selectedSite: DirectSaleDraftCustomerSite | null;
+  paymentMethod: DirectSaleDraftPaymentMethod;
+  checkDetails: DirectSaleDraftCheckDetails;
+  remark: string;
+  location: DirectSaleDraftLocation | null;
+  truckBulkItems: TruckBulkItem[];
+  truckAssets: TruckAsset[];
+  heldItems: CustomerHeldItems;
+  assetDrafts: Record<string, DirectSaleDraftAssetDraft>;
+  bottleDepositPrices: Record<string, string>;
+  bottleDepositQuantities: Record<string, number>;
+  bottleReturnQuantities: Record<string, number>;
+  creditCollectionAmount: string;
+  creditCollectionRemark: string;
+}
+
 type LastConfirmPaymentResponse = {
   orderId: string;
   sale_id?: string;
   invoice_number?: string;
   order_number: string;
+  detail?: DriverHistoryDetail | null;
 };
 
 // Enhanced Order Store with new Order structure
@@ -123,6 +204,7 @@ interface OrderStore {
   // Payment management
   selectedPaymentMethod: SelectedPaymentMethod;
   lastConfirmPaymentResponse: LastConfirmPaymentResponse | null;
+  directSaleDraft: DirectSaleDraft | null;
 
   // Order actions
   selectOrder: (id: string) => void;
@@ -161,6 +243,8 @@ interface OrderStore {
   setLastConfirmPaymentResponse: (
     data: LastConfirmPaymentResponse | null,
   ) => void;
+  setDirectSaleDraft: (draft: DirectSaleDraft | null) => void;
+  clearDirectSaleDraft: () => void;
 
   // Utility actions
   getOrderHistory: () => Order[];
@@ -185,6 +269,7 @@ export const useOrderStore = create<OrderStore>()(
       // Payment management state
       selectedPaymentMethod: "cash" as SelectedPaymentMethod,
       lastConfirmPaymentResponse: null,
+      directSaleDraft: null,
 
       // Order management actions
       setAssignedOrders: (orders) => set(() => ({ assignedOrders: orders })),
@@ -350,9 +435,7 @@ export const useOrderStore = create<OrderStore>()(
                 item_id: product.item_id,
                 item_type: product.item_type,
                 name: product.name,
-                image: {
-                  uri: product.image_url || "https://via.placeholder.com/150",
-                },
+                image: product.image_url ? { uri: product.image_url } : null,
                 price:
                   typeof product.pricing === "number" ? product.pricing : 0,
                 quantity: actualQuantity,
@@ -431,6 +514,12 @@ export const useOrderStore = create<OrderStore>()(
       setLastConfirmPaymentResponse: (data) => {
         set({ lastConfirmPaymentResponse: data });
       },
+      setDirectSaleDraft: (draft) => {
+        set({ directSaleDraft: draft });
+      },
+      clearDirectSaleDraft: () => {
+        set({ directSaleDraft: null });
+      },
 
       // Utility actions
       getOrderHistory: () => {
@@ -451,6 +540,7 @@ export const useOrderStore = create<OrderStore>()(
         products: state.products,
         completedOrders: state.completedOrders,
         selectedOrder: state.selectedOrder,
+        directSaleDraft: state.directSaleDraft,
       }),
     },
   ),

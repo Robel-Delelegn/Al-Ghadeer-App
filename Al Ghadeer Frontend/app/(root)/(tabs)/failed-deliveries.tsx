@@ -2,7 +2,10 @@ import ApiErrorText from "@/components/ApiErrorText";
 import { useOrderStore } from "@/store/index";
 import { authenticatedFetch } from "@/store/auth";
 import { parseApiResponseOrRawWithSoftError } from "@/utils/api";
-import { buildDeliveryTaskOutcomes } from "@/utils/deliveries";
+import {
+  buildDeliveryTaskOutcomes,
+  getDeliveryEarlierAttemptsTodayCount,
+} from "@/utils/deliveries";
 import type { DriverHistoryDetail } from "@/utils/driverHistory";
 import { Ionicons } from "@expo/vector-icons";
 import { useRouter } from "expo-router";
@@ -54,6 +57,10 @@ const FailedDeliveries = () => {
 
   const order = assignedOrders.find((item) => selectedOrder === item.id);
 
+  const handleBack = useCallback(() => {
+    router.replace("/(root)/(tabs)/order-details");
+  }, [router]);
+
   const handleSubmitFailedDelivery = useCallback(async () => {
     if (!order) {
       showErrorAlert("Error", "Order information not found.");
@@ -73,6 +80,7 @@ const FailedDeliveries = () => {
       const payload = {
         status: "failure" as const,
         displayId: order.display_id || order.order_number || order.id,
+        earlierAttemptsTodayCount: getDeliveryEarlierAttemptsTodayCount(order),
         tasks: buildDeliveryTaskOutcomes(order.tasks || [], "failure"),
         remark,
       };
@@ -80,6 +88,7 @@ const FailedDeliveries = () => {
       console.log("[delivery-failure] request payload", {
         deliveryId: order.id,
         displayId: payload.displayId,
+        earlierAttemptsTodayCount: payload.earlierAttemptsTodayCount,
         tasks: payload.tasks,
       });
 
@@ -119,7 +128,7 @@ const FailedDeliveries = () => {
       "Are you sure you want to cancel this failed delivery report?",
       [
         { text: "No", style: "cancel" },
-        { text: "Yes", onPress: () => router.back() },
+        { text: "Yes", onPress: handleBack },
       ],
     );
   };
@@ -178,10 +187,10 @@ const FailedDeliveries = () => {
               backgroundColor: "#1976D2",
               borderRadius: 8,
             }}
-            onPress={() => router.push("/(root)/(tabs)/home")}
+            onPress={handleBack}
           >
             <Text style={{ color: "white", fontSize: 16, fontWeight: "600" }}>
-              Back to Home
+              Go Back
             </Text>
           </TouchableOpacity>
         </View>
@@ -214,10 +223,7 @@ const FailedDeliveries = () => {
             justifyContent: "space-between",
           }}
         >
-          <TouchableOpacity
-            onPress={() => router.back()}
-            style={{ padding: 8 }}
-          >
+          <TouchableOpacity onPress={handleBack} style={{ padding: 8 }}>
             <Ionicons name="arrow-back" size={24} color="#495057" />
           </TouchableOpacity>
           <Text style={{ color: "#212529", fontSize: 18, fontWeight: "600" }}>

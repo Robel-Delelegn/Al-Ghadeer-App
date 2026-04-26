@@ -1,7 +1,7 @@
 import ApiErrorText from "@/components/ApiErrorText";
 import { authenticatedFetch } from "@/store/auth";
 import { parseApiResponseWithSoftError } from "@/utils/api";
-import { formatDeliveryAddress } from "@/utils/deliveries";
+import { formatDeliveryAddress, parseDeliveryTasks } from "@/utils/deliveries";
 import {
   DriverHistoryDetail,
   DriverHistoryListPayload,
@@ -14,8 +14,8 @@ import {
 } from "@/utils/driverHistory";
 import { resolveResourceUrl } from "@/utils/resources";
 import { Ionicons } from "@expo/vector-icons";
-import { useRouter } from "expo-router";
-import React, { useCallback, useEffect, useMemo, useState } from "react";
+import { useFocusEffect } from "expo-router";
+import React, { useCallback, useMemo, useState } from "react";
 import {
   ActivityIndicator,
   FlatList,
@@ -214,6 +214,36 @@ const humanizeTaskKey = (value: string): string => {
 const normalizeHistoryTasks = (tasks: unknown[]): NormalizedHistoryTask[] => {
   if (!Array.isArray(tasks)) return [];
 
+  const parsedTasks = parseDeliveryTasks(tasks);
+  if (parsedTasks.length > 0) {
+    return parsedTasks.map((task) => {
+      const meta = [
+        `Type: ${humanizeTaskKey(task.type)}`,
+        task.referenceId
+          ? task.type === "subscription"
+            ? `Item: ${task.referenceId}`
+            : task.type === "staff_order"
+              ? `Staff Order: ${task.referenceId}`
+              : `Order: ${task.referenceId}`
+          : null,
+        task.invoiceId ? `Invoice: ${task.invoiceId}` : null,
+        task.earlierAttemptsTodayCount > 0
+          ? `Earlier Attempts: ${task.earlierAttemptsTodayCount}`
+          : null,
+        task.lines.length > 0 ? `${task.lines.length} line(s)` : null,
+        task.creditCollections.length > 0
+          ? `${task.creditCollections.length} credit collection(s)`
+          : null,
+      ].filter((entry): entry is string => Boolean(entry));
+
+      return {
+        id: task.key,
+        title: task.label,
+        meta,
+      };
+    });
+  }
+
   return tasks
     .map((task, index) => {
       if (typeof task === "string") {
@@ -321,7 +351,6 @@ const getListStatusConfig = (item: DriverHistoryDetail) => {
 
 const HistoryScreen = () => {
   const insets = useSafeAreaInsets();
-  const router = useRouter();
 
   const [search, setSearch] = useState("");
   const [kindFilter, setKindFilter] = useState<HistoryKindFilter>("all");
@@ -441,9 +470,11 @@ const HistoryScreen = () => {
     [appliedFrom, appliedTo, kindFilter],
   );
 
-  useEffect(() => {
-    void fetchHistory({ pageToLoad: 1, append: false, isRefresh: false });
-  }, [fetchHistory]);
+  useFocusEffect(
+    useCallback(() => {
+      void fetchHistory({ pageToLoad: 1, append: false, isRefresh: false });
+    }, [fetchHistory]),
+  );
 
   const onRefresh = useCallback(() => {
     void fetchHistory({ pageToLoad: 1, append: false, isRefresh: true });
@@ -693,8 +724,7 @@ const HistoryScreen = () => {
           <View style={styles.cardBottomRow}>
             <Text style={styles.amountText}>AED {formatAmount(amount)}</Text>
             <View style={styles.detailLinkRow}>
-              <Text style={styles.detailLinkText}>View Detail</Text>
-              <Ionicons name="chevron-forward" size={14} color="#1E40AF" />
+              <Ionicons name="chevron-forward" size={16} color="#1E40AF" />
             </View>
           </View>
         </TouchableOpacity>
@@ -716,34 +746,27 @@ const HistoryScreen = () => {
   return (
     <View style={[styles.container, { paddingTop: insets.top }]}>
       <View style={styles.header}>
-        <TouchableOpacity
-          style={styles.backButton}
-          onPress={() => router.back()}
-        >
-          <Ionicons name="chevron-back" size={20} color="#1E40AF" />
-        </TouchableOpacity>
         <Text style={styles.headerTitle}>History</Text>
-        <View style={styles.backButtonPlaceholder} />
+        <View style={styles.headerCountBadge}>
+          <Ionicons name="time-outline" size={14} color="#1E40AF" />
+          <Text style={styles.headerCountText}>{filteredItems.length}</Text>
+        </View>
       </View>
 
       <ApiErrorText error={apiError} />
 
       <View style={styles.statsWrap}>
         <View style={styles.statCard}>
-          <Text style={styles.statLabel}>Total</Text>
+          <Text style={styles.statLabel}>All</Text>
           <Text style={styles.statValue}>{stats.total}</Text>
         </View>
         <View style={styles.statCard}>
-          <Text style={styles.statLabel}>Deliveries</Text>
+          <Text style={styles.statLabel}>Drop</Text>
           <Text style={styles.statValue}>{stats.deliveries}</Text>
-          <Text style={styles.statSub}>
-            {stats.successfulDeliveries} successful
-          </Text>
         </View>
         <View style={styles.statCard}>
-          <Text style={styles.statLabel}>Direct Sales</Text>
+          <Text style={styles.statLabel}>Sale</Text>
           <Text style={styles.statValue}>{stats.directSales}</Text>
-          <Text style={styles.statSub}>{stats.loaded} loaded</Text>
         </View>
       </View>
 
@@ -754,7 +777,7 @@ const HistoryScreen = () => {
             style={styles.searchInput}
             value={search}
             onChangeText={setSearch}
-            placeholder="Search customer, phone, address"
+            placeholder="Search"
             placeholderTextColor="#94A3B8"
           />
         </View>
@@ -825,7 +848,7 @@ const HistoryScreen = () => {
               kindFilter === "delivery" && styles.filterChipTextActive,
             ]}
           >
-            Delivery
+            Drop
           </Text>
         </TouchableOpacity>
         <TouchableOpacity
@@ -841,7 +864,7 @@ const HistoryScreen = () => {
               kindFilter === "direct_sale" && styles.filterChipTextActive,
             ]}
           >
-            Direct Sale
+            Sale
           </Text>
         </TouchableOpacity>
       </View>
@@ -899,7 +922,7 @@ const HistoryScreen = () => {
         <View style={styles.calendarModalOverlay}>
           <View style={styles.calendarModalCard}>
             <View style={styles.calendarModalHeader}>
-              <Text style={styles.calendarModalTitle}>Select Date Range</Text>
+              <Text style={styles.calendarModalTitle}>Date</Text>
               <TouchableOpacity
                 style={styles.calendarCloseButton}
                 onPress={closeCalendar}
@@ -1030,7 +1053,7 @@ const HistoryScreen = () => {
         >
           <View style={styles.modalHeader}>
             <View>
-              <Text style={styles.modalTitle}>History Detail</Text>
+              <Text style={styles.modalTitle}>Detail</Text>
               <Text style={styles.modalSubtitle}>
                 {detailData
                   ? formatDate(detailData.createdAt, true)
@@ -1355,6 +1378,20 @@ const styles = StyleSheet.create({
     fontWeight: "700",
     color: "#0F172A",
     letterSpacing: -0.3,
+  },
+  headerCountBadge: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
+    paddingHorizontal: 10,
+    paddingVertical: 8,
+    borderRadius: 999,
+    backgroundColor: "#EFF6FF",
+  },
+  headerCountText: {
+    fontSize: 12,
+    fontWeight: "700",
+    color: "#1E40AF",
   },
   statsWrap: {
     flexDirection: "row",
