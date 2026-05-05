@@ -612,13 +612,22 @@ const DirectSaleConfirmation = () => {
             ]
           : [];
 
+      const saleSubtotal = [...retails, ...refills].reduce((sum, item) => {
+        if ("filledQuantity" in item) {
+          return sum + item.price * item.filledQuantity;
+        }
+        return sum + item.price * item.quantity;
+      }, 0);
+      const saleVat = saleSubtotal * 0.05;
+      const saleTotalForPayload = saleSubtotal + saleVat;
+
       const saleData: SaleRequestBody = {
         customerId: directSaleDraft.customerData.id,
         paymentMethod: directSaleDraft.paymentMethod,
         totals: {
-          subtotal: Number(subtotal.toFixed(2)),
-          vat: Number(vat.toFixed(2)),
-          total: Number(totalAmount.toFixed(2)),
+          subtotal: Number(saleSubtotal.toFixed(2)),
+          vat: Number(saleVat.toFixed(2)),
+          total: Number(saleTotalForPayload.toFixed(2)),
         },
       };
 
@@ -866,9 +875,7 @@ const DirectSaleConfirmation = () => {
     selectedProducts,
     setLastConfirmPaymentResponse,
     setPaymentMethod,
-    subtotal,
     totalAmount,
-    vat,
   ]);
 
   if (!directSaleDraft) {
@@ -1178,7 +1185,7 @@ const DirectSaleConfirmation = () => {
 
         <View style={styles.actionSection}>
           <View style={styles.actionSummary}>
-            <Text style={styles.actionLabel}>Total</Text>
+            <Text style={styles.actionLabel}>Sale Total</Text>
             <Text style={styles.actionTotal}>AED {totalAmount.toFixed(2)}</Text>
           </View>
           <TouchableOpacity

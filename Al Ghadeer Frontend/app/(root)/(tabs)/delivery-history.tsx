@@ -39,8 +39,14 @@ const API_BASE_URL = (
   .replace(/\/+$/, "");
 
 const PAGE_LIMIT = 20;
+const SUMMARY_PAGE_LIMIT = 100;
+const SUMMARY_MAX_PAGES = 20;
 
 type HistoryKindFilter = "all" | "delivery" | "direct_sale";
+type HistoryViewTab = "records" | "summary";
+
+type SummaryTone = "neutral" | "success" | "danger" | "money" | "asset";
+type IconName = React.ComponentProps<typeof Ionicons>["name"];
 
 interface NormalizedHistoryTask {
   id: string;
@@ -181,6 +187,10 @@ const formatAmount = (value?: number | string | null): string => {
   const parsed = Number(value);
   if (!Number.isFinite(parsed)) return "0.00";
   return parsed.toFixed(2);
+};
+
+const formatSummaryCount = (value: number): string => {
+  return Number.isInteger(value) ? String(value) : value.toFixed(2);
 };
 
 const formatAddress = (
@@ -349,9 +359,102 @@ const getListStatusConfig = (item: DriverHistoryDetail) => {
   };
 };
 
+const getSummaryToneIconColor = (tone: SummaryTone): string => {
+  if (tone === "success") return "#047857";
+  if (tone === "danger") return "#B91C1C";
+  if (tone === "money") return "#0369A1";
+  if (tone === "asset") return "#7C3AED";
+  return "#475569";
+};
+
+const getSummaryToneIconBackground = (tone: SummaryTone): string => {
+  if (tone === "success") return "#D1FAE5";
+  if (tone === "danger") return "#FEE2E2";
+  if (tone === "money") return "#E0F2FE";
+  if (tone === "asset") return "#F3E8FF";
+  return "#F1F5F9";
+};
+
+const SummaryMetricCard: React.FC<{
+  icon: IconName;
+  label: string;
+  value: string | number;
+  helper?: string;
+  tone?: SummaryTone;
+}> = ({ icon, label, value, helper, tone = "neutral" }) => {
+  return (
+    <View style={styles.summaryMetricCard}>
+      <View
+        style={[
+          styles.summaryMetricIcon,
+          { backgroundColor: getSummaryToneIconBackground(tone) },
+        ]}
+      >
+        <Ionicons name={icon} size={17} color={getSummaryToneIconColor(tone)} />
+      </View>
+      <Text style={styles.summaryMetricLabel}>{label}</Text>
+      <Text style={styles.summaryMetricValue}>{value}</Text>
+      {helper ? <Text style={styles.summaryMetricHelper}>{helper}</Text> : null}
+    </View>
+  );
+};
+
+const SummarySection: React.FC<{
+  title: string;
+  children: React.ReactNode;
+}> = ({ title, children }) => {
+  return (
+    <View style={styles.summarySection}>
+      <Text style={styles.summarySectionTitle}>{title}</Text>
+      {children}
+    </View>
+  );
+};
+
+const SummaryAmountRow: React.FC<{
+  label: string;
+  amount: number;
+  icon: IconName;
+}> = ({ label, amount, icon }) => {
+  return (
+    <View style={styles.summaryAmountRow}>
+      <View style={styles.summaryAmountLabelWrap}>
+        <View style={styles.summaryAmountIcon}>
+          <Ionicons name={icon} size={14} color="#0369A1" />
+        </View>
+        <Text style={styles.summaryAmountLabel}>{label}</Text>
+      </View>
+      <Text style={styles.summaryAmountValue}>AED {formatAmount(amount)}</Text>
+    </View>
+  );
+};
+
+const SummaryMovementRow: React.FC<{
+  label: string;
+  count: number;
+  amount?: number;
+}> = ({ label, count, amount }) => {
+  return (
+    <View style={styles.summaryMovementRow}>
+      <Text style={styles.summaryMovementLabel}>{label}</Text>
+      <View style={styles.summaryMovementValueWrap}>
+        <Text style={styles.summaryMovementValue}>
+          {formatSummaryCount(count)}
+        </Text>
+        {amount && amount > 0 ? (
+          <Text style={styles.summaryMovementAmount}>
+            AED {formatAmount(amount)}
+          </Text>
+        ) : null}
+      </View>
+    </View>
+  );
+};
+
 const HistoryScreen = () => {
   const insets = useSafeAreaInsets();
 
+  const [activeTab, setActiveTab] = useState<HistoryViewTab>("records");
   const [search, setSearch] = useState("");
   const [kindFilter, setKindFilter] = useState<HistoryKindFilter>("all");
   const [appliedFrom, setAppliedFrom] = useState("");
@@ -375,6 +478,10 @@ const HistoryScreen = () => {
   const [refreshing, setRefreshing] = useState(false);
   const [loadingMore, setLoadingMore] = useState(false);
   const [apiError, setApiError] = useState<string | null>(null);
+  const [summaryItems, setSummaryItems] = useState<DriverHistoryDetail[]>([]);
+  const [summaryLoading, setSummaryLoading] = useState(true);
+  const [summaryRefreshing, setSummaryRefreshing] = useState(false);
+  const [summaryError, setSummaryError] = useState<string | null>(null);
 
   const [showDetail, setShowDetail] = useState(false);
   const [detailLoading, setDetailLoading] = useState(false);
@@ -470,15 +577,90 @@ const HistoryScreen = () => {
     [appliedFrom, appliedTo, kindFilter],
   );
 
+  const fetchTodaySummary = useCallback(
+    async ({ isRefresh = false }: { isRefresh?: boolean } = {}) => {
+      try {
+        if (isRefresh) {
+          setSummaryRefreshing(true);
+        } else {
+          setSummaryLoading(true);
+        }
+        setSummaryError(null);
+
+        const today = new Date();
+        const from = toDayStartIso(today);
+        const to = toDayEndIso(today);
+        const loadedItems: DriverHistoryDetail[] = [];
+        const loadedIds = new Set<string>();
+        let pageToLoad = 1;
+        let shouldContinue = true;
+
+        while (shouldContinue && pageToLoad <= SUMMARY_MAX_PAGES) {
+          const params = new URLSearchParams();
+          params.set("page", String(pageToLoad));
+          params.set("limit", String(SUMMARY_PAGE_LIMIT));
+          params.set("from", from);
+          params.set("to", to);
+
+          const response = await authenticatedFetch(
+            `${API_BASE_URL}/history?${params.toString()}`,
+            { method: "GET" },
+          );
+
+          const result =
+            await parseApiResponseWithSoftError<DriverHistoryListPayload>(
+              response,
+            );
+
+          if (!result.ok) {
+            setSummaryItems([]);
+            setSummaryError(result.error);
+            return;
+          }
+
+          const payload = normalizeDriverHistoryListPayload(result.data);
+          payload.items.forEach((item) => {
+            if (!loadedIds.has(item.id)) {
+              loadedIds.add(item.id);
+              loadedItems.push(item);
+            }
+          });
+
+          shouldContinue = payload.hasMore;
+          pageToLoad += 1;
+        }
+
+        setSummaryItems(loadedItems);
+      } catch (error) {
+        setSummaryItems([]);
+        setSummaryError(
+          error instanceof Error
+            ? error.message
+            : "Could not load today's summary.",
+        );
+      } finally {
+        setSummaryLoading(false);
+        setSummaryRefreshing(false);
+      }
+    },
+    [],
+  );
+
   useFocusEffect(
     useCallback(() => {
       void fetchHistory({ pageToLoad: 1, append: false, isRefresh: false });
-    }, [fetchHistory]),
+      void fetchTodaySummary({ isRefresh: false });
+    }, [fetchHistory, fetchTodaySummary]),
   );
 
   const onRefresh = useCallback(() => {
+    if (activeTab === "summary") {
+      void fetchTodaySummary({ isRefresh: true });
+      return;
+    }
+
     void fetchHistory({ pageToLoad: 1, append: false, isRefresh: true });
-  }, [fetchHistory]);
+  }, [activeTab, fetchHistory, fetchTodaySummary]);
 
   const onLoadMore = useCallback(() => {
     if (loading || loadingMore || refreshing || !hasMore) return;
@@ -622,6 +804,112 @@ const HistoryScreen = () => {
     };
   }, [filteredItems.length, kindFilter, kindScopedItems, total]);
 
+  const todayLabel = useMemo(() => formatCalendarDateLabel(new Date()), []);
+
+  const todaySummary = useMemo(() => {
+    const today = new Date();
+    const todayItems = summaryItems.filter((item) =>
+      sameCalendarDay(parseServerDate(item.createdAt), today),
+    );
+    const scheduledDeliveries = todayItems.filter((item) =>
+      isScheduledDeliveryHistory(item),
+    );
+    const directSales = todayItems.filter((item) =>
+      isAdhocDeliveryHistory(item),
+    );
+    const successfulDeliveries = scheduledDeliveries.filter(
+      (item) => item.isSuccessful === true,
+    );
+    const failedDeliveries = scheduledDeliveries.filter(
+      (item) => item.isSuccessful === false,
+    );
+    const failureReasonCounts = new Map<string, number>();
+
+    const summary = {
+      records: todayItems.length,
+      successfulDeliveries: successfulDeliveries.length,
+      failedDeliveries: failedDeliveries.length,
+      directSales: directSales.length,
+      totalVisits: todayItems.length,
+      cashSales: 0,
+      checkSales: 0,
+      walletSales: 0,
+      creditSales: 0,
+      balanceCollections: 0,
+      bottlesLeft: 0,
+      bottlesLeftValue: 0,
+      bottlesCollected: 0,
+      assetsLeft: 0,
+      assetsLeftValue: 0,
+      assetsCollected: 0,
+      notesCount: 0,
+      topFailureReason: "None",
+    };
+
+    todayItems.forEach((item) => {
+      if (item.remark?.trim()) {
+        summary.notesCount += 1;
+      }
+
+      if (item.isSuccessful === false) {
+        const reason = item.failureReason?.trim() || "No reason recorded";
+        failureReasonCounts.set(
+          reason,
+          (failureReasonCounts.get(reason) || 0) + 1,
+        );
+      }
+
+      if (item.sale) {
+        const payment = item.sale.payment;
+        if (payment?.method === "cash") {
+          summary.cashSales += payment.amount;
+        } else if (payment?.method === "check") {
+          summary.checkSales += payment.amount;
+        } else if (payment?.method === "wallet") {
+          summary.walletSales += payment.amount;
+        } else {
+          summary.creditSales += item.sale.totals.total;
+        }
+      }
+
+      item.creditCollections.forEach((entry) => {
+        summary.balanceCollections += entry.amount;
+      });
+
+      item.depositReturns.forEach((entry) => {
+        const quantity = entry.quantity || 0;
+        const value = quantity * (entry.unitPrice || 0);
+
+        if (entry.depositKind === "bottle") {
+          if (entry.type === "deposit") {
+            summary.bottlesLeft += quantity;
+            summary.bottlesLeftValue += value;
+          } else {
+            summary.bottlesCollected += quantity;
+          }
+          return;
+        }
+
+        if (entry.type === "deposit") {
+          summary.assetsLeft += quantity;
+          summary.assetsLeftValue += value;
+        } else {
+          summary.assetsCollected += quantity;
+        }
+      });
+    });
+
+    const topFailure = Array.from(failureReasonCounts.entries()).sort(
+      (first, second) => second[1] - first[1],
+    )[0];
+
+    if (topFailure) {
+      summary.topFailureReason = `${topFailure[0]} (${topFailure[1]})`;
+    }
+
+    return summary;
+  }, [summaryItems]);
+
   const fetchHistoryDetail = useCallback(async (id: string) => {
     setShowDetail(true);
     setDetailLoading(true);
@@ -749,168 +1037,374 @@ const HistoryScreen = () => {
         <Text style={styles.headerTitle}>History</Text>
         <View style={styles.headerCountBadge}>
           <Ionicons name="time-outline" size={14} color="#1E40AF" />
-          <Text style={styles.headerCountText}>{filteredItems.length}</Text>
+          <Text style={styles.headerCountText}>
+            {activeTab === "summary"
+              ? todaySummary.records
+              : filteredItems.length}
+          </Text>
         </View>
       </View>
 
-      <ApiErrorText error={apiError} />
-
-      <View style={styles.statsWrap}>
-        <View style={styles.statCard}>
-          <Text style={styles.statLabel}>All</Text>
-          <Text style={styles.statValue}>{stats.total}</Text>
-        </View>
-        <View style={styles.statCard}>
-          <Text style={styles.statLabel}>Drop</Text>
-          <Text style={styles.statValue}>{stats.deliveries}</Text>
-        </View>
-        <View style={styles.statCard}>
-          <Text style={styles.statLabel}>Sale</Text>
-          <Text style={styles.statValue}>{stats.directSales}</Text>
-        </View>
-      </View>
-
-      <View style={styles.searchRow}>
-        <View style={styles.searchWrap}>
-          <Ionicons name="search" size={16} color="#94A3B8" />
-          <TextInput
-            style={styles.searchInput}
-            value={search}
-            onChangeText={setSearch}
-            placeholder="Search"
-            placeholderTextColor="#94A3B8"
-          />
-        </View>
+      <View style={styles.historyTabRow}>
         <TouchableOpacity
           style={[
-            styles.calendarTrigger,
-            hasDateFilter && styles.calendarTriggerActive,
+            styles.historyTabButton,
+            activeTab === "records" && styles.historyTabButtonActive,
           ]}
-          onPress={openCalendar}
+          onPress={() => setActiveTab("records")}
           activeOpacity={0.85}
         >
-          <Ionicons
-            name="calendar-outline"
-            size={18}
-            color={hasDateFilter ? "#FFFFFF" : "#1E40AF"}
-          />
-        </TouchableOpacity>
-      </View>
-
-      <View style={styles.dateSummaryRow}>
-        <Text
-          style={[
-            styles.dateSummaryText,
-            !hasDateFilter && styles.dateSummaryTextMuted,
-          ]}
-        >
-          {appliedDateLabel}
-        </Text>
-        {hasDateFilter ? (
-          <TouchableOpacity
-            style={styles.dateClearPill}
-            onPress={clearDateFilter}
-            activeOpacity={0.85}
-          >
-            <Ionicons name="close" size={12} color="#1E3A8A" />
-            <Text style={styles.dateClearPillText}>Clear</Text>
-          </TouchableOpacity>
-        ) : null}
-      </View>
-
-      <View style={styles.filterRow}>
-        <TouchableOpacity
-          style={[
-            styles.filterChip,
-            kindFilter === "all" && styles.filterChipActive,
-          ]}
-          onPress={() => setKindFilter("all")}
-        >
           <Text
             style={[
-              styles.filterChipText,
-              kindFilter === "all" && styles.filterChipTextActive,
+              styles.historyTabText,
+              activeTab === "records" && styles.historyTabTextActive,
             ]}
           >
-            All
+            Records
           </Text>
         </TouchableOpacity>
         <TouchableOpacity
           style={[
-            styles.filterChip,
-            kindFilter === "delivery" && styles.filterChipActive,
+            styles.historyTabButton,
+            activeTab === "summary" && styles.historyTabButtonActive,
           ]}
-          onPress={() => setKindFilter("delivery")}
+          onPress={() => setActiveTab("summary")}
+          activeOpacity={0.85}
         >
           <Text
             style={[
-              styles.filterChipText,
-              kindFilter === "delivery" && styles.filterChipTextActive,
+              styles.historyTabText,
+              activeTab === "summary" && styles.historyTabTextActive,
             ]}
           >
-            Drop
-          </Text>
-        </TouchableOpacity>
-        <TouchableOpacity
-          style={[
-            styles.filterChip,
-            kindFilter === "direct_sale" && styles.filterChipActive,
-          ]}
-          onPress={() => setKindFilter("direct_sale")}
-        >
-          <Text
-            style={[
-              styles.filterChipText,
-              kindFilter === "direct_sale" && styles.filterChipTextActive,
-            ]}
-          >
-            Sale
+            Summary
           </Text>
         </TouchableOpacity>
       </View>
 
-      {loading ? (
-        <View style={styles.loadingWrap}>
-          <ActivityIndicator size="large" color="#1E40AF" />
-          <Text style={styles.loadingText}>Loading history...</Text>
-        </View>
+      {activeTab === "records" ? (
+        <>
+          <ApiErrorText error={apiError} />
+
+          <View style={styles.statsWrap}>
+            <View style={styles.statCard}>
+              <Text style={styles.statLabel}>All</Text>
+              <Text style={styles.statValue}>{stats.total}</Text>
+            </View>
+            <View style={styles.statCard}>
+              <Text style={styles.statLabel}>Drop</Text>
+              <Text style={styles.statValue}>{stats.deliveries}</Text>
+            </View>
+            <View style={styles.statCard}>
+              <Text style={styles.statLabel}>Sale</Text>
+              <Text style={styles.statValue}>{stats.directSales}</Text>
+            </View>
+          </View>
+
+          <View style={styles.searchRow}>
+            <View style={styles.searchWrap}>
+              <Ionicons name="search" size={16} color="#94A3B8" />
+              <TextInput
+                style={styles.searchInput}
+                value={search}
+                onChangeText={setSearch}
+                placeholder="Search"
+                placeholderTextColor="#94A3B8"
+              />
+            </View>
+            <TouchableOpacity
+              style={[
+                styles.calendarTrigger,
+                hasDateFilter && styles.calendarTriggerActive,
+              ]}
+              onPress={openCalendar}
+              activeOpacity={0.85}
+            >
+              <Ionicons
+                name="calendar-outline"
+                size={18}
+                color={hasDateFilter ? "#FFFFFF" : "#1E40AF"}
+              />
+            </TouchableOpacity>
+          </View>
+
+          <View style={styles.dateSummaryRow}>
+            <Text
+              style={[
+                styles.dateSummaryText,
+                !hasDateFilter && styles.dateSummaryTextMuted,
+              ]}
+            >
+              {appliedDateLabel}
+            </Text>
+            {hasDateFilter ? (
+              <TouchableOpacity
+                style={styles.dateClearPill}
+                onPress={clearDateFilter}
+                activeOpacity={0.85}
+              >
+                <Ionicons name="close" size={12} color="#1E3A8A" />
+                <Text style={styles.dateClearPillText}>Clear</Text>
+              </TouchableOpacity>
+            ) : null}
+          </View>
+
+          <View style={styles.filterRow}>
+            <TouchableOpacity
+              style={[
+                styles.filterChip,
+                kindFilter === "all" && styles.filterChipActive,
+              ]}
+              onPress={() => setKindFilter("all")}
+            >
+              <Text
+                style={[
+                  styles.filterChipText,
+                  kindFilter === "all" && styles.filterChipTextActive,
+                ]}
+              >
+                All
+              </Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={[
+                styles.filterChip,
+                kindFilter === "delivery" && styles.filterChipActive,
+              ]}
+              onPress={() => setKindFilter("delivery")}
+            >
+              <Text
+                style={[
+                  styles.filterChipText,
+                  kindFilter === "delivery" && styles.filterChipTextActive,
+                ]}
+              >
+                Drop
+              </Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={[
+                styles.filterChip,
+                kindFilter === "direct_sale" && styles.filterChipActive,
+              ]}
+              onPress={() => setKindFilter("direct_sale")}
+            >
+              <Text
+                style={[
+                  styles.filterChipText,
+                  kindFilter === "direct_sale" && styles.filterChipTextActive,
+                ]}
+              >
+                Sale
+              </Text>
+            </TouchableOpacity>
+          </View>
+
+          {loading ? (
+            <View style={styles.loadingWrap}>
+              <ActivityIndicator size="large" color="#1E40AF" />
+              <Text style={styles.loadingText}>Loading history...</Text>
+            </View>
+          ) : (
+            <FlatList
+              data={filteredItems}
+              keyExtractor={(item) => item.id}
+              renderItem={renderCard}
+              onEndReached={onLoadMore}
+              onEndReachedThreshold={0.3}
+              refreshControl={
+                <RefreshControl
+                  refreshing={refreshing}
+                  onRefresh={onRefresh}
+                  colors={["#1E40AF"]}
+                  tintColor="#1E40AF"
+                />
+              }
+              contentContainerStyle={styles.listContent}
+              ListEmptyComponent={
+                <View style={styles.emptyWrap}>
+                  <Ionicons name="time-outline" size={40} color="#CBD5E1" />
+                  <Text style={styles.emptyTitle}>No history found</Text>
+                  <Text style={styles.emptySubtitle}>
+                    Try clearing filters or changing your search.
+                  </Text>
+                </View>
+              }
+              ListFooterComponent={
+                loadingMore ? (
+                  <View style={styles.footerLoader}>
+                    <ActivityIndicator size="small" color="#1E40AF" />
+                  </View>
+                ) : hasMore ? null : filteredItems.length > 0 ? (
+                  <View style={styles.footerEndWrap}>
+                    <Text style={styles.footerEndText}>
+                      You reached the end
+                    </Text>
+                  </View>
+                ) : null
+              }
+            />
+          )}
+        </>
       ) : (
-        <FlatList
-          data={filteredItems}
-          keyExtractor={(item) => item.id}
-          renderItem={renderCard}
-          onEndReached={onLoadMore}
-          onEndReachedThreshold={0.3}
+        <ScrollView
+          showsVerticalScrollIndicator={false}
           refreshControl={
             <RefreshControl
-              refreshing={refreshing}
+              refreshing={summaryRefreshing}
               onRefresh={onRefresh}
               colors={["#1E40AF"]}
               tintColor="#1E40AF"
             />
           }
-          contentContainerStyle={styles.listContent}
-          ListEmptyComponent={
-            <View style={styles.emptyWrap}>
-              <Ionicons name="time-outline" size={40} color="#CBD5E1" />
-              <Text style={styles.emptyTitle}>No history found</Text>
-              <Text style={styles.emptySubtitle}>
-                Try clearing filters or changing your search.
-              </Text>
+          contentContainerStyle={[
+            styles.summaryContent,
+            { paddingBottom: Math.max(insets.bottom, 16) + 24 },
+          ]}
+        >
+          <ApiErrorText error={summaryError} />
+
+          {summaryLoading ? (
+            <View style={styles.loadingWrap}>
+              <ActivityIndicator size="large" color="#1E40AF" />
+              <Text style={styles.loadingText}>Loading today summary...</Text>
             </View>
-          }
-          ListFooterComponent={
-            loadingMore ? (
-              <View style={styles.footerLoader}>
-                <ActivityIndicator size="small" color="#1E40AF" />
+          ) : (
+            <>
+              <View style={styles.summaryHeaderCard}>
+                <View>
+                  <Text style={styles.summaryEyebrow}>Today</Text>
+                  <Text style={styles.summaryTitle}>Driver Summary</Text>
+                  <Text style={styles.summaryDate}>{todayLabel}</Text>
+                </View>
+                <View style={styles.summaryRecordBadge}>
+                  <Text style={styles.summaryRecordValue}>
+                    {todaySummary.records}
+                  </Text>
+                  <Text style={styles.summaryRecordLabel}>records</Text>
+                </View>
               </View>
-            ) : hasMore ? null : filteredItems.length > 0 ? (
-              <View style={styles.footerEndWrap}>
-                <Text style={styles.footerEndText}>You reached the end</Text>
-              </View>
-            ) : null
-          }
-        />
+
+              <SummarySection title="Work Summary">
+                <View style={styles.summaryMetricGrid}>
+                  <SummaryMetricCard
+                    icon="checkmark-circle-outline"
+                    label="Completed"
+                    value={todaySummary.successfulDeliveries}
+                    tone="success"
+                  />
+                  <SummaryMetricCard
+                    icon="close-circle-outline"
+                    label="Failed"
+                    value={todaySummary.failedDeliveries}
+                    tone="danger"
+                  />
+                  <SummaryMetricCard
+                    icon="cash-outline"
+                    label="Direct Sales"
+                    value={todaySummary.directSales}
+                    tone="money"
+                  />
+                  <SummaryMetricCard
+                    icon="map-outline"
+                    label="Total Visits"
+                    value={todaySummary.totalVisits}
+                  />
+                </View>
+              </SummarySection>
+
+              <SummarySection title="Money Summary">
+                <View style={styles.summaryPanel}>
+                  <SummaryAmountRow
+                    icon="cash-outline"
+                    label="Cash sales"
+                    amount={todaySummary.cashSales}
+                  />
+                  <SummaryAmountRow
+                    icon="receipt-outline"
+                    label="Check sales"
+                    amount={todaySummary.checkSales}
+                  />
+                  <SummaryAmountRow
+                    icon="wallet-outline"
+                    label="Wallet sales"
+                    amount={todaySummary.walletSales}
+                  />
+                  <SummaryAmountRow
+                    icon="document-text-outline"
+                    label="Credit sales"
+                    amount={todaySummary.creditSales}
+                  />
+                  <SummaryAmountRow
+                    icon="archive-outline"
+                    label="Balance collected"
+                    amount={todaySummary.balanceCollections}
+                  />
+                </View>
+              </SummarySection>
+
+              <SummarySection title="Bottles & Assets">
+                <View style={styles.summaryPanel}>
+                  <SummaryMovementRow
+                    label="Bottles left with customers"
+                    count={todaySummary.bottlesLeft}
+                    amount={todaySummary.bottlesLeftValue}
+                  />
+                  <SummaryMovementRow
+                    label="Bottles collected"
+                    count={todaySummary.bottlesCollected}
+                  />
+                  <SummaryMovementRow
+                    label="Assets left with customers"
+                    count={todaySummary.assetsLeft}
+                    amount={todaySummary.assetsLeftValue}
+                  />
+                  <SummaryMovementRow
+                    label="Assets collected"
+                    count={todaySummary.assetsCollected}
+                  />
+                </View>
+              </SummarySection>
+
+              <SummarySection title="Issues">
+                <View style={styles.summaryPanel}>
+                  <View style={styles.summaryIssueRow}>
+                    <View style={styles.summaryIssueIcon}>
+                      <Ionicons
+                        name="alert-circle-outline"
+                        size={16}
+                        color="#B91C1C"
+                      />
+                    </View>
+                    <View style={styles.summaryIssueCopy}>
+                      <Text style={styles.summaryIssueLabel}>
+                        Most common failure
+                      </Text>
+                      <Text style={styles.summaryIssueValue}>
+                        {todaySummary.topFailureReason}
+                      </Text>
+                    </View>
+                  </View>
+                  <View style={styles.summaryIssueRow}>
+                    <View style={styles.summaryIssueIconMuted}>
+                      <Ionicons
+                        name="chatbox-ellipses-outline"
+                        size={16}
+                        color="#475569"
+                      />
+                    </View>
+                    <View style={styles.summaryIssueCopy}>
+                      <Text style={styles.summaryIssueLabel}>Driver notes</Text>
+                      <Text style={styles.summaryIssueValue}>
+                        {todaySummary.notesCount}
+                      </Text>
+                    </View>
+                  </View>
+                </View>
+              </SummarySection>
+            </>
+          )}
+        </ScrollView>
       )}
 
       <Modal
@@ -1393,6 +1887,34 @@ const styles = StyleSheet.create({
     fontWeight: "700",
     color: "#1E40AF",
   },
+  historyTabRow: {
+    flexDirection: "row",
+    marginHorizontal: 16,
+    marginTop: 12,
+    padding: 4,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: "#E2E8F0",
+    backgroundColor: "#FFFFFF",
+  },
+  historyTabButton: {
+    flex: 1,
+    minHeight: 38,
+    borderRadius: 9,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  historyTabButtonActive: {
+    backgroundColor: "#1E40AF",
+  },
+  historyTabText: {
+    color: "#64748B",
+    fontSize: 13,
+    fontWeight: "700",
+  },
+  historyTabTextActive: {
+    color: "#FFFFFF",
+  },
   statsWrap: {
     flexDirection: "row",
     gap: 8,
@@ -1427,6 +1949,224 @@ const styles = StyleSheet.create({
     marginTop: 2,
     fontSize: 11,
     color: "#64748B",
+  },
+  summaryContent: {
+    paddingHorizontal: 16,
+    paddingTop: 12,
+    gap: 12,
+  },
+  summaryHeaderCard: {
+    backgroundColor: "#FFFFFF",
+    borderWidth: 1,
+    borderColor: "#DCE7F3",
+    borderRadius: 16,
+    padding: 16,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    gap: 16,
+  },
+  summaryEyebrow: {
+    color: "#1E40AF",
+    fontSize: 11,
+    fontWeight: "800",
+    textTransform: "uppercase",
+    letterSpacing: 0.4,
+  },
+  summaryTitle: {
+    marginTop: 4,
+    color: "#0F172A",
+    fontSize: 20,
+    fontWeight: "800",
+  },
+  summaryDate: {
+    marginTop: 4,
+    color: "#64748B",
+    fontSize: 13,
+    fontWeight: "600",
+  },
+  summaryRecordBadge: {
+    minWidth: 72,
+    borderRadius: 14,
+    paddingVertical: 10,
+    paddingHorizontal: 12,
+    backgroundColor: "#EFF6FF",
+    alignItems: "center",
+  },
+  summaryRecordValue: {
+    color: "#1E40AF",
+    fontSize: 22,
+    fontWeight: "800",
+  },
+  summaryRecordLabel: {
+    color: "#475569",
+    fontSize: 11,
+    fontWeight: "700",
+    textTransform: "uppercase",
+    letterSpacing: 0.3,
+  },
+  summarySection: {
+    gap: 8,
+  },
+  summarySectionTitle: {
+    color: "#0F172A",
+    fontSize: 13,
+    fontWeight: "800",
+    textTransform: "uppercase",
+    letterSpacing: 0.4,
+  },
+  summaryMetricGrid: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    gap: 8,
+  },
+  summaryMetricCard: {
+    width: "48%",
+    minHeight: 118,
+    backgroundColor: "#FFFFFF",
+    borderWidth: 1,
+    borderColor: "#E2E8F0",
+    borderRadius: 14,
+    padding: 12,
+  },
+  summaryMetricIcon: {
+    width: 34,
+    height: 34,
+    borderRadius: 12,
+    alignItems: "center",
+    justifyContent: "center",
+    marginBottom: 10,
+  },
+  summaryMetricLabel: {
+    color: "#64748B",
+    fontSize: 12,
+    fontWeight: "700",
+  },
+  summaryMetricValue: {
+    marginTop: 4,
+    color: "#0F172A",
+    fontSize: 24,
+    fontWeight: "800",
+  },
+  summaryMetricHelper: {
+    marginTop: 2,
+    color: "#64748B",
+    fontSize: 11,
+    fontWeight: "600",
+  },
+  summaryPanel: {
+    backgroundColor: "#FFFFFF",
+    borderWidth: 1,
+    borderColor: "#E2E8F0",
+    borderRadius: 14,
+    overflow: "hidden",
+  },
+  summaryAmountRow: {
+    minHeight: 48,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    borderBottomWidth: 1,
+    borderBottomColor: "#F1F5F9",
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    gap: 12,
+  },
+  summaryAmountLabelWrap: {
+    flex: 1,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+  },
+  summaryAmountIcon: {
+    width: 28,
+    height: 28,
+    borderRadius: 10,
+    backgroundColor: "#E0F2FE",
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  summaryAmountLabel: {
+    flex: 1,
+    color: "#334155",
+    fontSize: 13,
+    fontWeight: "700",
+  },
+  summaryAmountValue: {
+    color: "#0F172A",
+    fontSize: 13,
+    fontWeight: "800",
+    textAlign: "right",
+  },
+  summaryMovementRow: {
+    minHeight: 50,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    borderBottomWidth: 1,
+    borderBottomColor: "#F1F5F9",
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    gap: 12,
+  },
+  summaryMovementLabel: {
+    flex: 1,
+    color: "#334155",
+    fontSize: 13,
+    fontWeight: "700",
+  },
+  summaryMovementValueWrap: {
+    alignItems: "flex-end",
+  },
+  summaryMovementValue: {
+    color: "#0F172A",
+    fontSize: 15,
+    fontWeight: "800",
+  },
+  summaryMovementAmount: {
+    marginTop: 2,
+    color: "#64748B",
+    fontSize: 11,
+    fontWeight: "700",
+  },
+  summaryIssueRow: {
+    paddingHorizontal: 12,
+    paddingVertical: 12,
+    borderBottomWidth: 1,
+    borderBottomColor: "#F1F5F9",
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 10,
+  },
+  summaryIssueIcon: {
+    width: 32,
+    height: 32,
+    borderRadius: 11,
+    backgroundColor: "#FEE2E2",
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  summaryIssueIconMuted: {
+    width: 32,
+    height: 32,
+    borderRadius: 11,
+    backgroundColor: "#F1F5F9",
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  summaryIssueCopy: {
+    flex: 1,
+  },
+  summaryIssueLabel: {
+    color: "#64748B",
+    fontSize: 12,
+    fontWeight: "700",
+  },
+  summaryIssueValue: {
+    marginTop: 2,
+    color: "#0F172A",
+    fontSize: 13,
+    fontWeight: "800",
   },
   searchRow: {
     marginHorizontal: 16,

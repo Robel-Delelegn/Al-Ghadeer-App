@@ -220,8 +220,9 @@ const Checkout: React.FC = () => {
       (item) => item.in_truck === true,
     );
 
-    // Total = products (with VAT) + bottle/asset movement (no VAT).
-    const total = sub + vatAmount + rentTotal;
+    // Sale total excludes bottle/asset deposits and returns. Those movements are
+    // recorded separately and must not affect sale totals or payment amount.
+    const total = sub + vatAmount;
     const count = cartItems.reduce(
       (sum, item) => sum + (item?.quantity || 0),
       0,
@@ -750,7 +751,7 @@ const Checkout: React.FC = () => {
           )}
           <View style={styles.summaryDivider} />
           <View style={styles.summaryRow}>
-            <Text style={styles.totalLabel}>Total</Text>
+            <Text style={styles.totalLabel}>Sale Total</Text>
             <Text style={styles.totalValue}>AED {totalWithVat}</Text>
           </View>
         </View>
@@ -758,7 +759,7 @@ const Checkout: React.FC = () => {
         {/* Action Section */}
         <View style={styles.actionSection}>
           <View style={styles.actionSummary}>
-            <Text style={styles.actionLabel}>Total</Text>
+            <Text style={styles.actionLabel}>Sale Total</Text>
             <Text style={styles.actionTotal}>AED {totalWithVat}</Text>
           </View>
 

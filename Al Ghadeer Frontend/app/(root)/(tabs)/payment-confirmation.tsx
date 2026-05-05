@@ -145,8 +145,9 @@ const PaymentConfirmation: React.FC = () => {
       return quantity > 0;
     });
 
-    // Total = products (with VAT) + bottle/asset movement (no VAT).
-    const total = sub + vatAmount + rentTotal;
+    // Sale total excludes bottle/asset deposits and returns. Those movements are
+    // recorded separately and must not affect sale totals or payment amount.
+    const total = sub + vatAmount;
     const count = cartItems.reduce(
       (sum, item) => sum + (item?.quantity || 0),
       0,
@@ -249,6 +250,12 @@ const PaymentConfirmation: React.FC = () => {
           quantity: item.quantity,
           unitPrice: toMoney(item.price),
         }));
+      const saleSubtotal = saleItems.reduce(
+        (sum, item) => sum + item.unitPrice * item.quantity,
+        0,
+      );
+      const saleVat = saleSubtotal * 0.05;
+      const saleTotal = saleSubtotal + saleVat;
 
       const depositsReturns = rentItems.map((item) => ({
         type: getRentItemDepositAction(item),
@@ -281,13 +288,13 @@ const PaymentConfirmation: React.FC = () => {
               sale: {
                 items: saleItems,
                 totals: {
-                  subtotal: toMoney(subtotal),
-                  vat: toMoney(vat),
-                  total: toMoney(totalWithVat),
+                  subtotal: toMoney(saleSubtotal),
+                  vat: toMoney(saleVat),
+                  total: toMoney(saleTotal),
                 },
                 payment: {
                   method: selectedPaymentMethod,
-                  amount: toMoney(totalWithVat),
+                  amount: toMoney(saleTotal),
                 },
               },
             }
@@ -386,9 +393,6 @@ const PaymentConfirmation: React.FC = () => {
   }, [
     orderDetail,
     cartItems,
-    subtotal,
-    vat,
-    totalWithVat,
     selectedPaymentMethod,
     router,
     updateOrderStatus,
@@ -751,7 +755,9 @@ const PaymentConfirmation: React.FC = () => {
             </View>
           )}
           <View style={styles.totalRow}>
-            <Text style={styles.grandTotalLabel}>Total (Including VAT)</Text>
+            <Text style={styles.grandTotalLabel}>
+              Sale Total (Including VAT)
+            </Text>
             <Text style={styles.grandTotalValue}>AED {totalWithVat}</Text>
           </View>
         </View>
@@ -790,7 +796,7 @@ const PaymentConfirmation: React.FC = () => {
             ) : (
               <>
                 <Text style={styles.confirmButtonText}>
-                  Pay AED {totalWithVat}
+                  {cartItems.length > 0 ? `Pay AED ${totalWithVat}` : "Confirm"}
                 </Text>
                 <View style={styles.confirmArrow}>
                   <Ionicons name="checkmark" size={16} color="#059669" />
