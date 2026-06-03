@@ -3,6 +3,24 @@ apply plugin: "org.jetbrains.kotlin.android"
 apply plugin: "com.facebook.react"
 
 def projectRoot = rootDir.getAbsoluteFile().getParentFile().getAbsolutePath()
+def readEnvValue = { key ->
+    def value = System.getenv(key)
+    if (value != null && !value.isEmpty()) {
+        return value
+    }
+
+    def envFile = file("${projectRoot}/.env")
+    if (envFile.exists()) {
+        def props = new Properties()
+        envFile.withInputStream { props.load(it) }
+        value = props.getProperty(key)
+        if (value != null) {
+            return value
+        }
+    }
+
+    return ""
+}
 
 /**
  * This is the configuration block to customize your React Native Android app.
@@ -94,6 +112,9 @@ android {
         targetSdkVersion rootProject.ext.targetSdkVersion
         versionCode 1
         versionName "1.0.0"
+        manifestPlaceholders = [
+            googleMapsApiKey: readEnvValue("EXPO_PUBLIC_GOOGLE_API_KEY")
+        ]
     }
     signingConfigs {
         debug {
