@@ -483,11 +483,16 @@ export const authenticatedFetch = async (
   console.log(`🌐 API Request: ${options.method || "GET"} ${url}`);
 
   const token = await getAuthToken();
+  const method = (options.method || "GET").toUpperCase();
 
   // Merge headers properly - user headers take precedence
   const userHeaders = (options.headers as Record<string, string>) || {};
   const headers: Record<string, string> = {
     "Content-Type": "application/json",
+    ...(method === "GET" && {
+      "Cache-Control": "no-cache",
+      Pragma: "no-cache",
+    }),
     ...(token && { Authorization: `Bearer ${token}` }),
     ...userHeaders,
   };

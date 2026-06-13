@@ -54,6 +54,8 @@ const EXPENSE_TEMPLATES = [
 ];
 
 type HistoryTab = "pending" | "paid" | "all";
+type ApiObject = Record<string, unknown>;
+type ExpenseDateValue = string | number | null;
 
 interface ExpenseActor {
   id: string;
@@ -74,28 +76,451 @@ interface ExpenseItem {
   title: string | null;
   description: string | null;
   amount: number;
-  date: string;
+  date: ExpenseDateValue;
   status: string;
   paid: boolean;
-  createdAt: string;
+  createdAt: ExpenseDateValue;
   approvedBy: ExpenseActor | null;
-  approvedAt: string | null;
+  approvedAt: ExpenseDateValue;
   paidBy: ExpenseActor | null;
-  paidAt: string | null;
+  paidAt: ExpenseDateValue;
   attachments: ExpenseAttachment[];
 }
 
-const normalizeExpenseItem = (item: ExpenseItem): ExpenseItem => {
-  const attachments = Array.isArray(item.attachments)
-    ? item.attachments.map((attachment) => ({
-        ...attachment,
-        url: resolveResourceUrl(attachment.url),
-      }))
-    : [];
+const isApiObject = (value: unknown): value is ApiObject =>
+  value !== null && typeof value === "object" && !Array.isArray(value);
+
+const readFirst = (source: unknown, keys: string[]): unknown => {
+  if (!isApiObject(source)) return undefined;
+
+  for (let i = 0; i < keys.length; i += 1) {
+    const key = keys[i];
+    if (!Object.prototype.hasOwnProperty.call(source, key)) continue;
+
+    const value = source[key];
+    if (value === null || value === undefined) continue;
+    if (typeof value === "string" && !value.trim()) continue;
+    return value;
+  }
+
+  return undefined;
+};
+
+const readFirstObject = (
+  source: unknown,
+  keys: string[],
+): ApiObject | undefined => {
+  const value = readFirst(source, keys);
+  return isApiObject(value) ? value : undefined;
+};
+
+const coerceString = (value: unknown): string | null => {
+  if (typeof value === "string") {
+    const trimmed = value.trim();
+    return trimmed || null;
+  }
+  if (typeof value === "number" && Number.isFinite(value)) {
+    return String(value);
+  }
+  return null;
+};
+
+const unwrapDateLikeValue = (value: unknown): unknown => {
+  if (!isApiObject(value)) return value;
+
+  const seconds = readFirst(value, ["seconds", "_seconds"]);
+  if (typeof seconds === "number" && Number.isFinite(seconds)) {
+    return seconds;
+  }
+
+  return (
+    readFirst(value, [
+      "date",
+      "dateTime",
+      "datetime",
+      "iso",
+      "timestamp",
+      "value",
+      "$date",
+      "$numberLong",
+    ]) ?? value
+  );
+};
+
+const coerceDateValue = (value: unknown): ExpenseDateValue => {
+  let dateLike = value;
+  for (let i = 0; i < 3; i += 1) {
+    const unwrapped = unwrapDateLikeValue(dateLike);
+    if (unwrapped === dateLike) break;
+    dateLike = unwrapped;
+  }
+
+  if (dateLike instanceof Date) {
+    return Number.isNaN(dateLike.getTime()) ? null : dateLike.toISOString();
+  }
+  if (typeof dateLike === "string") {
+    const trimmed = dateLike.trim();
+    return trimmed || null;
+  }
+  if (typeof dateLike === "number" && Number.isFinite(dateLike)) {
+    return dateLike;
+  }
+  return null;
+};
+
+const coerceNumber = (value: unknown, fallback = 0): number => {
+  if (isApiObject(value)) {
+    const nested = readFirst(value, [
+      "amount",
+      "value",
+      "total",
+      "totalAmount",
+      "total_amount",
+    ]);
+    if (nested !== undefined) {
+      return coerceNumber(nested, fallback);
+    }
+  }
+
+  if (typeof value === "number" && Number.isFinite(value)) {
+    return value;
+  }
+
+  if (typeof value === "string") {
+    const direct = Number(value.replace(/,/g, "").trim());
+    if (Number.isFinite(direct)) return direct;
+
+    const numericText = value.replace(/[^\d.-]/g, "");
+    const parsed = Number(numericText);
+    if (Number.isFinite(parsed)) return parsed;
+  }
+
+  return fallback;
+};
+
+const coerceBoolean = (value: unknown, fallback = false): boolean => {
+  if (typeof value === "boolean") return value;
+  if (typeof value === "number" && Number.isFinite(value)) return value !== 0;
+  if (typeof value === "string") {
+    const normalized = value.trim().toLowerCase();
+    if (["true", "yes", "y", "1", "paid"].includes(normalized)) return true;
+    if (["false", "no", "n", "0", "unpaid"].includes(normalized)) {
+      return false;
+    }
+  }
+  return fallback;
+};
+
+const normalizeActor = (rawActor: unknown): ExpenseActor | null => {
+  const actorName = coerceString(rawActor);
+  if (actorName) {
+    return {
+      id: actorName,
+      name: actorName,
+      email: null,
+    };
+  }
+
+  if (!isApiObject(rawActor)) return null;
+
+  const nestedActor = readFirst(rawActor, [
+    "user",
+    "account",
+    "admin",
+    "staff",
+    "employee",
+    "approver",
+    "payer",
+  ]);
+  if (nestedActor && nestedActor !== rawActor) {
+    const normalizedNested = normalizeActor(nestedActor);
+    if (normalizedNested) return normalizedNested;
+  }
+
+  const firstName = coerceString(
+    readFirst(rawActor, ["firstName", "first_name"]),
+  );
+  const lastName = coerceString(readFirst(rawActor, ["lastName", "last_name"]));
+  const combinedName = [firstName, lastName].filter(Boolean).join(" ").trim();
+  const email = coerceString(
+    readFirst(rawActor, ["email", "emailAddress", "email_address"]),
+  );
+  const id =
+    coerceString(readFirst(rawActor, ["id", "_id", "userId", "user_id"])) ||
+    email ||
+    combinedName;
+  const name =
+    coerceString(
+      readFirst(rawActor, [
+        "name",
+        "fullName",
+        "full_name",
+        "displayName",
+        "display_name",
+        "username",
+      ]),
+    ) ||
+    combinedName ||
+    email ||
+    id;
+
+  if (!name && !email && !id) return null;
 
   return {
-    ...item,
-    attachments,
+    id: id || name || email || "unknown",
+    name: name || email || id || "Unknown",
+    email,
+  };
+};
+
+const normalizeExpenseAttachment = (
+  rawAttachment: unknown,
+  index: number,
+): ExpenseAttachment | null => {
+  const fallbackId = `attachment-${index + 1}`;
+  if (typeof rawAttachment === "string") {
+    return {
+      id: fallbackId,
+      resourceId: fallbackId,
+      name: `Attachment ${index + 1}`,
+      type: "file",
+      url: resolveResourceUrl(rawAttachment),
+    };
+  }
+
+  if (!isApiObject(rawAttachment)) return null;
+
+  const id =
+    coerceString(
+      readFirst(rawAttachment, [
+        "id",
+        "_id",
+        "attachmentId",
+        "attachment_id",
+        "resourceId",
+        "resource_id",
+      ]),
+    ) || fallbackId;
+  const resourceId =
+    coerceString(readFirst(rawAttachment, ["resourceId", "resource_id"])) || id;
+  const name =
+    coerceString(
+      readFirst(rawAttachment, [
+        "name",
+        "fileName",
+        "file_name",
+        "filename",
+        "originalName",
+        "original_name",
+      ]),
+    ) || `Attachment ${index + 1}`;
+  const type =
+    coerceString(
+      readFirst(rawAttachment, [
+        "type",
+        "mimeType",
+        "mime_type",
+        "contentType",
+        "content_type",
+      ]),
+    ) || "file";
+  const url = coerceString(
+    readFirst(rawAttachment, [
+      "url",
+      "href",
+      "downloadUrl",
+      "download_url",
+      "publicUrl",
+      "public_url",
+      "resourceUrl",
+      "resource_url",
+    ]),
+  );
+
+  return {
+    id,
+    resourceId,
+    name,
+    type,
+    url: resolveResourceUrl(url),
+  };
+};
+
+const normalizeAttachmentList = (
+  rawAttachments: unknown,
+): ExpenseAttachment[] => {
+  const attachments = Array.isArray(rawAttachments)
+    ? rawAttachments
+    : Array.isArray(readFirst(rawAttachments, ["data", "items", "results"]))
+      ? (readFirst(rawAttachments, ["data", "items", "results"]) as unknown[])
+      : [];
+
+  return attachments
+    .map((attachment, index) => normalizeExpenseAttachment(attachment, index))
+    .filter((attachment): attachment is ExpenseAttachment => !!attachment);
+};
+
+const normalizeExpenseItem = (rawItem: unknown, index = 0): ExpenseItem => {
+  const item = isApiObject(rawItem) ? rawItem : {};
+  const approval = readFirstObject(item, [
+    "approval",
+    "approvalDetails",
+    "approval_details",
+    "approved",
+  ]);
+  const payment = readFirstObject(item, [
+    "payment",
+    "paymentDetails",
+    "payment_details",
+  ]);
+  const approvedBy = normalizeActor(
+    readFirst(item, [
+      "approvedBy",
+      "approved_by",
+      "approvedByUser",
+      "approved_by_user",
+      "approver",
+      "approverUser",
+      "approver_user",
+    ]) ??
+      readFirst(approval, [
+        "approvedBy",
+        "approved_by",
+        "by",
+        "user",
+        "approver",
+        "approvedByUser",
+        "approved_by_user",
+      ]),
+  );
+  const approvedAt = coerceDateValue(
+    readFirst(item, [
+      "approvedAt",
+      "approved_at",
+      "approvalDate",
+      "approval_date",
+      "approvedDate",
+      "approved_date",
+    ]) ??
+      readFirst(approval, [
+        "approvedAt",
+        "approved_at",
+        "at",
+        "date",
+        "createdAt",
+        "created_at",
+      ]),
+  );
+  const paidBy = normalizeActor(
+    readFirst(item, [
+      "paidBy",
+      "paid_by",
+      "paidByUser",
+      "paid_by_user",
+      "payer",
+      "payerUser",
+      "payer_user",
+    ]) ??
+      readFirst(payment, [
+        "paidBy",
+        "paid_by",
+        "by",
+        "user",
+        "payer",
+        "paidByUser",
+        "paid_by_user",
+      ]),
+  );
+  const paidAt = coerceDateValue(
+    readFirst(item, [
+      "paidAt",
+      "paid_at",
+      "paymentDate",
+      "payment_date",
+      "paidDate",
+      "paid_date",
+    ]) ??
+      readFirst(payment, [
+        "paidAt",
+        "paid_at",
+        "at",
+        "date",
+        "createdAt",
+        "created_at",
+      ]),
+  );
+  const rawStatus = coerceString(
+    readFirst(item, ["status", "state", "approvalStatus", "approval_status"]),
+  );
+  const paid = coerceBoolean(
+    readFirst(item, ["paid", "isPaid", "is_paid"]),
+    Boolean(paidAt || paidBy || normalizeStatus(rawStatus).includes("paid")),
+  );
+  const status = normalizeStatus(
+    rawStatus ||
+      (paid ? "paid" : approvedAt || approvedBy ? "approved" : "pending"),
+  );
+  const createdAt = coerceDateValue(
+    readFirst(item, [
+      "createdAt",
+      "created_at",
+      "created",
+      "requestedAt",
+      "requested_at",
+      "submittedAt",
+      "submitted_at",
+    ]),
+  );
+  const requestId =
+    coerceString(
+      readFirst(item, [
+        "requestId",
+        "request_id",
+        "id",
+        "_id",
+        "expenseId",
+        "expense_id",
+      ]),
+    ) || `expense-${index + 1}-${coerceString(createdAt) || "unknown"}`;
+  const rawAttachments = readFirst(item, [
+    "attachments",
+    "files",
+    "documents",
+    "resources",
+    "expenseAttachments",
+    "expense_attachments",
+  ]);
+
+  return {
+    requestId,
+    title:
+      coerceString(
+        readFirst(item, ["title", "name", "expenseTitle", "expense_title"]),
+      ) || null,
+    description:
+      coerceString(
+        readFirst(item, ["description", "note", "notes", "remarks"]),
+      ) || null,
+    amount: coerceNumber(readFirst(item, ["amount", "value", "total"]), 0),
+    date: coerceDateValue(
+      readFirst(item, [
+        "date",
+        "expenseDate",
+        "expense_date",
+        "requestDate",
+        "request_date",
+        "spentAt",
+        "spent_at",
+      ]),
+    ),
+    status,
+    paid,
+    createdAt,
+    approvedBy,
+    approvedAt,
+    paidBy,
+    paidAt,
+    attachments: normalizeAttachmentList(rawAttachments),
   };
 };
 
@@ -132,11 +557,41 @@ const getTodayDateInput = (): string => {
   return `${year}-${month}-${day}`;
 };
 
-const parseApiDate = (rawValue: string): Date | null => {
-  const value = rawValue.trim();
+const parseApiDate = (rawValue: unknown): Date | null => {
+  let dateLike = rawValue;
+  for (let i = 0; i < 3; i += 1) {
+    const unwrapped = unwrapDateLikeValue(dateLike);
+    if (unwrapped === dateLike) break;
+    dateLike = unwrapped;
+  }
+
+  if (dateLike instanceof Date) {
+    return Number.isNaN(dateLike.getTime()) ? null : dateLike;
+  }
+
+  if (typeof dateLike === "number" && Number.isFinite(dateLike)) {
+    const timestamp =
+      Math.abs(dateLike) < 1_000_000_000_000 ? dateLike * 1000 : dateLike;
+    const parsed = new Date(timestamp);
+    return Number.isNaN(parsed.getTime()) ? null : parsed;
+  }
+
+  const value = coerceString(dateLike);
   if (!value) return null;
 
   const candidates: string[] = [];
+  if (/^\d{4}-\d{2}-\d{2}$/.test(value)) {
+    candidates.push(`${value}T00:00:00`);
+  }
+
+  if (/^\d{10}$|^\d{13}$/.test(value)) {
+    const timestamp = Number(value);
+    const parsed = new Date(value.length === 10 ? timestamp * 1000 : timestamp);
+    if (!Number.isNaN(parsed.getTime())) {
+      return parsed;
+    }
+  }
+
   candidates.push(value);
 
   const withTimeSeparator = value.replace(" ", "T");
@@ -151,10 +606,6 @@ const parseApiDate = (rawValue: string): Date | null => {
     candidates.push(normalized);
   }
 
-  if (/^\d{4}-\d{2}-\d{2}$/.test(value)) {
-    candidates.push(`${value}T00:00:00`);
-  }
-
   for (let i = 0; i < candidates.length; i += 1) {
     const parsed = new Date(candidates[i]);
     if (!Number.isNaN(parsed.getTime())) {
@@ -165,7 +616,7 @@ const parseApiDate = (rawValue: string): Date | null => {
   return null;
 };
 
-const formatDate = (value?: string | null, includeTime = false): string => {
+const formatDate = (value?: unknown, includeTime = false): string => {
   if (!value) return "N/A";
   const date = parseApiDate(value);
   if (!date) return "N/A";
@@ -187,7 +638,22 @@ const formatDate = (value?: string | null, includeTime = false): string => {
   });
 };
 
-const normalizeStatus = (status?: string): string => {
+const formatAmount = (value?: unknown): string =>
+  coerceNumber(value, 0).toFixed(2);
+
+const formatActor = (actor?: ExpenseActor | null): string => {
+  if (!actor) return "N/A";
+
+  const name = actor.name.trim() || actor.email || actor.id;
+  if (!name) return "N/A";
+  if (actor.email && actor.email !== name) {
+    return `${name} (${actor.email})`;
+  }
+
+  return name;
+};
+
+const normalizeStatus = (status?: string | null): string => {
   const normalized = (status || "").trim().toLowerCase();
   if (!normalized) return "pending";
   return normalized;
@@ -343,8 +809,7 @@ const Expenses = () => {
           },
         });
 
-        const result =
-          await parseApiResponseWithSoftError<ExpenseItem[]>(response);
+        const result = await parseApiResponseWithSoftError<unknown[]>(response);
         if (!result.ok) {
           setExpenseHistory([]);
           setApiError(result.error);
@@ -519,7 +984,7 @@ const Expenses = () => {
         body: JSON.stringify(payload),
       });
 
-      const result = await parseApiResponseWithSoftError<ExpenseItem>(response);
+      const result = await parseApiResponseWithSoftError<unknown>(response);
       if (!result.ok) {
         setApiError(result.error);
         return;
@@ -578,8 +1043,7 @@ const Expenses = () => {
           },
         );
 
-        const result =
-          await parseApiResponseWithSoftError<ExpenseItem>(response);
+        const result = await parseApiResponseWithSoftError<unknown>(response);
         if (!result.ok) {
           setDetailError(result.error);
           return;
@@ -997,7 +1461,7 @@ const Expenses = () => {
                     </View>
 
                     <Text style={styles.historyAmount}>
-                      AED {Number(expense.amount || 0).toFixed(2)}
+                      AED {formatAmount(expense.amount)}
                     </Text>
 
                     <View style={styles.historyInfoRow}>
@@ -1036,7 +1500,7 @@ const Expenses = () => {
                             color="#1D4ED8"
                           />
                           <Text style={styles.inlineMetaText}>
-                            Approved by {expense.approvedBy.name}
+                            Approved by {formatActor(expense.approvedBy)}
                           </Text>
                         </View>
                       ) : null}
@@ -1106,7 +1570,7 @@ const Expenses = () => {
             >
               <View style={styles.detailSummaryCard}>
                 <Text style={styles.detailAmount}>
-                  AED {Number(selectedExpense.amount || 0).toFixed(2)}
+                  AED {formatAmount(selectedExpense.amount)}
                 </Text>
                 {detailStatus ? (
                   <View
@@ -1155,9 +1619,7 @@ const Expenses = () => {
                 </Text>
                 <Text style={styles.detailLine}>
                   <Text style={styles.detailLineLabel}>Approved By:</Text>{" "}
-                  {selectedExpense.approvedBy
-                    ? `${selectedExpense.approvedBy.name}${selectedExpense.approvedBy.email ? ` (${selectedExpense.approvedBy.email})` : ""}`
-                    : "N/A"}
+                  {formatActor(selectedExpense.approvedBy)}
                 </Text>
               </View>
 
@@ -1173,9 +1635,7 @@ const Expenses = () => {
                 </Text>
                 <Text style={styles.detailLine}>
                   <Text style={styles.detailLineLabel}>Paid By:</Text>{" "}
-                  {selectedExpense.paidBy
-                    ? `${selectedExpense.paidBy.name}${selectedExpense.paidBy.email ? ` (${selectedExpense.paidBy.email})` : ""}`
-                    : "N/A"}
+                  {formatActor(selectedExpense.paidBy)}
                 </Text>
               </View>
 

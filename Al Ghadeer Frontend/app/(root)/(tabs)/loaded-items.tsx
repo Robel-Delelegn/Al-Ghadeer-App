@@ -39,14 +39,20 @@ interface TruckInfo {
 interface BulkItem {
   id: string;
   label: string;
+  description: string | null;
   quantity: number;
+  unit: string | null;
+  image_url: string | null;
+  isRefillableBottle: boolean;
 }
 
 interface AssetItem {
   id: string;
   label: string;
+  description: string | null;
   serial: string | null;
   category: string | null;
+  image_url: string | null;
 }
 
 interface TruckLoad {
@@ -416,11 +422,22 @@ const LoadedItems = () => {
                             size={16}
                             color="#0369A1"
                           />
-                          <Text style={styles.listRowTitle}>{item.label}</Text>
+                          <View style={styles.listRowText}>
+                            <Text style={styles.listRowTitle}>
+                              {item.label}
+                            </Text>
+                            {item.description ? (
+                              <Text style={styles.listRowDescription}>
+                                {item.description}
+                              </Text>
+                            ) : null}
+                          </View>
                         </View>
                         <View style={styles.quantityBadge}>
                           <Text style={styles.quantityBadgeText}>
-                            {item.quantity}
+                            {item.unit
+                              ? `${item.quantity} ${item.unit}`
+                              : item.quantity}
                           </Text>
                         </View>
                       </View>
@@ -454,6 +471,11 @@ const LoadedItems = () => {
                         <Text style={styles.assetMeta}>
                           Category: {asset.category || "—"}
                         </Text>
+                        {asset.description ? (
+                          <Text style={styles.assetMeta}>
+                            {asset.description}
+                          </Text>
+                        ) : null}
                       </View>
                     ))
                   )}
@@ -705,6 +727,16 @@ const styles = StyleSheet.create({
     color: "#0F172A",
     fontWeight: "600",
     flexShrink: 1,
+  },
+  listRowText: {
+    flex: 1,
+    minWidth: 0,
+  },
+  listRowDescription: {
+    marginTop: 2,
+    fontSize: 12,
+    color: "#64748B",
+    fontWeight: "500",
   },
   quantityBadge: {
     backgroundColor: "#E0F2FE",

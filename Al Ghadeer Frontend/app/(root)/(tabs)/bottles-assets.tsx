@@ -14,7 +14,7 @@ import {
   type CustomerHeldItems,
 } from "@/utils/customerHeldItems";
 import { getDriverRequestId } from "@/utils/driverIdentity";
-import { resolveResourceUrl } from "@/utils/resources";
+import { getApiBaseUrl, resolveResourceUrl } from "@/utils/resources";
 import {
   getOrderSelectedDeliveryActions,
   getRentItemDepositAction,
@@ -22,7 +22,14 @@ import {
   getRentItemDisplayLabel,
   getRentItemQuantityLimit,
 } from "@/utils/rentItems";
-import { extractTruckBulkItems, type TruckBulkItem } from "@/utils/truckLoad";
+import {
+  extractTruckAssets,
+  extractTruckBulkItems,
+  getTruckBulkItemMatchKeys,
+  mergeTruckAssetsIntoRentItems,
+  type TruckAsset,
+  type TruckBulkItem,
+} from "@/utils/truckLoad";
 import { Ionicons } from "@expo/vector-icons";
 import { useFocusEffect, useLocalSearchParams, useRouter } from "expo-router";
 import React, { useCallback, useEffect, useMemo, useState } from "react";
@@ -39,7 +46,7 @@ import {
 } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
-const IP_ADDRESS = process.env.EXPO_PUBLIC_IP_ADDRESS;
+const IP_ADDRESS = getApiBaseUrl();
 
 interface ServerProduct {
   id: string;
@@ -72,18 +79,11 @@ const normalizeCategory = (value?: string | null) =>
     .toLowerCase()
     .replace(/[\s_-]+/g, "");
 
-const EMPTY_BOTTLE_PRODUCT_PREFIX = "sale-empty-bottle:";
-const EMPTY_BOTTLE_CATEGORY = "empty_bottle";
-
-const isEmptyBottleSaleCartItem = (item: { id: string; category?: string }) =>
-  item.id.startsWith(EMPTY_BOTTLE_PRODUCT_PREFIX) ||
-  normalizeCategory(item.category) === normalizeCategory(EMPTY_BOTTLE_CATEGORY);
-
 const normalizeProductType = (value: unknown): ServerProduct["type"] => {
-  const raw = typeof value === "string" ? value.trim().toLowerCase() : "";
-  if (raw === "refill") return "refill";
-  if (raw === "retail") return "retail";
-  if (raw === "assets" || raw === "asset") return "assets";
+  const raw = normalizeCategory(typeof value === "string" ? value : "");
+  if (raw.includes("refill")) return "refill";
+  if (raw.includes("retail") || raw.includes("bulk")) return "retail";
+  if (raw.includes("asset")) return "assets";
   return "other";
 };
 
@@ -124,6 +124,54 @@ const toDepositPriceValue = (value?: string) => {
   if (!trimmed) return 0;
   const parsed = Number(trimmed);
   return Number.isFinite(parsed) && parsed >= 0 ? Number(parsed.toFixed(2)) : 0;
+};
+
+const isGenericAssetCategory = (value?: string | null) => {
+  const normalized = normalizeCategory(value);
+  return (
+    !normalized ||
+    normalized === "asset" ||
+    normalized === "assets" ||
+    normalized === "assetitem" ||
+    normalized === "assetproduct"
+  );
+};
+
+const getSpecificAssetCategory = (...values: (string | null | undefined)[]) => {
+  for (const value of values) {
+    const label = (value || "").trim();
+    if (label && !isGenericAssetCategory(label)) return label;
+  }
+  return "";
+};
+
+const appendUniqueDisplayPart = (parts: string[], value?: string | null) => {
+  const label = (value || "").trim();
+  if (!label) return;
+  const normalized = label.toLowerCase();
+  if (parts.some((part) => part.toLowerCase() === normalized)) return;
+  parts.push(label);
+};
+
+const getAssetMovementTitle = (item: RentItem) =>
+  getSpecificAssetCategory(item.asset_category) ||
+  item.name ||
+  getRentItemDisplayLabel(item);
+
+const getAssetMovementDetail = (item: RentItem) => {
+  const title = getAssetMovementTitle(item);
+  const parts: string[] = [];
+
+  if (item.name.trim().toLowerCase() !== title.trim().toLowerCase()) {
+    appendUniqueDisplayPart(parts, item.name);
+  }
+  if (item.serial) {
+    appendUniqueDisplayPart(parts, `S/N ${item.serial}`);
+  } else if ((item.item_id || item.id) !== item.name) {
+    appendUniqueDisplayPart(parts, `ID: ${item.item_id || item.id}`);
+  }
+
+  return parts.join(" · ");
 };
 
 const normalizeProductRecord = (
@@ -315,6 +363,11 @@ const MovementItem = ({
   const isReturn = getRentItemDepositAction(item) === "deposit_return";
   const accentColor = isReturn ? "#047857" : "#1D4ED8";
   const accentBackground = isReturn ? "#ECFDF5" : "#EFF6FF";
+  const isAsset = depositKind === "asset";
+  const movementTitle = isAsset
+    ? getAssetMovementTitle(item)
+    : item.name || getRentItemDisplayLabel(item);
+  const movementDetail = isAsset ? getAssetMovementDetail(item) : "";
 
   return (
     <View
@@ -355,7 +408,7 @@ const MovementItem = ({
         <View style={styles.movementContent}>
           <View style={styles.movementTitleRow}>
             <Text style={styles.movementTitle} numberOfLines={2}>
-              {item.name || getRentItemDisplayLabel(item)}
+              {movementTitle}
             </Text>
             {quantity > 0 ? (
               <View
@@ -375,6 +428,11 @@ const MovementItem = ({
               </View>
             ) : null}
           </View>
+          {movementDetail ? (
+            <Text style={styles.movementDetail} numberOfLines={1}>
+              {movementDetail}
+            </Text>
+          ) : null}
 
           <View style={styles.metaRow}>
             <View style={styles.metaPill}>
@@ -388,13 +446,6 @@ const MovementItem = ({
             {item.unit ? (
               <View style={styles.metaPill}>
                 <Text style={styles.metaPillText}>{item.unit}</Text>
-              </View>
-            ) : null}
-            {item.serial ? (
-              <View style={styles.metaPill}>
-                <Text style={styles.metaPillText} numberOfLines={1}>
-                  S/N {item.serial}
-                </Text>
               </View>
             ) : null}
           </View>
@@ -417,9 +468,11 @@ const MovementItem = ({
       {showPriceInput ? (
         <View style={styles.depositPriceRow}>
           <View style={styles.depositPriceCopy}>
-            <Text style={styles.depositPriceLabel}>Deposit Price</Text>
+            <Text style={styles.depositPriceLabel}>
+              {isReturn ? "Return Value" : "Deposit Price"}
+            </Text>
             <Text style={styles.depositPriceHelper}>
-              Added to payment total
+              {isReturn ? "Price per item returned" : "Price per item left"}
             </Text>
           </View>
           <View style={styles.depositPriceInputRow}>
@@ -559,17 +612,13 @@ const BottlesAssets = () => {
   const insets = useSafeAreaInsets();
   const router = useRouter();
   const params = useLocalSearchParams<{ backTo?: string }>();
-  const {
-    assignedOrders,
-    selectedOrder,
-    cartItems,
-    currentDriver,
-    setAssignedOrders,
-  } = useOrderStore();
+  const { assignedOrders, selectedOrder, currentDriver, setAssignedOrders } =
+    useOrderStore();
   const { user } = useAuthStore();
 
   const [products, setProducts] = useState<ServerProduct[]>([]);
   const [truckBulkItems, setTruckBulkItems] = useState<TruckBulkItem[]>([]);
+  const [truckAssets, setTruckAssets] = useState<TruckAsset[]>([]);
   const [heldItems, setHeldItems] = useState<CustomerHeldItems>({
     bottles: [],
     assets: [],
@@ -599,6 +648,7 @@ const BottlesAssets = () => {
       setTruckLoadError(null);
       setHeldItems({ bottles: [], assets: [] });
       setTruckBulkItems([]);
+      setTruckAssets([]);
 
       if (!driverId) {
         setProducts([]);
@@ -614,6 +664,7 @@ const BottlesAssets = () => {
       if (order?.customer_site_id) {
         params.set("siteId", order.customer_site_id);
       }
+      params.set("filter", "all");
       const query = params.toString();
       const productsUrl = `${IP_ADDRESS}/products${query ? `?${query}` : ""}`;
 
@@ -654,9 +705,11 @@ const BottlesAssets = () => {
         await parseApiResponseWithSoftError<unknown>(truckResponse);
       if (!truckResult.ok) {
         setTruckBulkItems([]);
+        setTruckAssets([]);
         setTruckLoadError(truckResult.error);
       } else {
         setTruckBulkItems(extractTruckBulkItems(truckResult.data));
+        setTruckAssets(extractTruckAssets(truckResult.data));
       }
 
       if (!heldItemsResponse) {
@@ -675,6 +728,7 @@ const BottlesAssets = () => {
       console.error("Error fetching bottle and asset data:", error);
       setProducts([]);
       setTruckBulkItems([]);
+      setTruckAssets([]);
       setHeldItems({ bottles: [], assets: [] });
       setApiError(
         error instanceof Error
@@ -708,6 +762,8 @@ const BottlesAssets = () => {
             label: product.name,
             assetCategory: product.assetCategory,
             image_url: product.image_url,
+            description: product.description,
+            unit: product.unit,
           }),
         ),
     [products],
@@ -716,13 +772,21 @@ const BottlesAssets = () => {
   const selectableRentItems = useMemo(
     () =>
       mergeHeldItemsIntoRentItems(
-        mergeAssetProductsIntoRentItems(
-          currentOrder?.rent_items,
-          transferableAssetProducts,
+        mergeTruckAssetsIntoRentItems(
+          mergeAssetProductsIntoRentItems(
+            currentOrder?.rent_items,
+            truckAssets.length > 0 ? [] : transferableAssetProducts,
+          ),
+          truckAssets,
         ),
         heldItems,
       ),
-    [currentOrder?.rent_items, heldItems, transferableAssetProducts],
+    [
+      currentOrder?.rent_items,
+      heldItems,
+      transferableAssetProducts,
+      truckAssets,
+    ],
   );
 
   const selectedDeliveryActionMap = useMemo(() => {
@@ -819,22 +883,6 @@ const BottlesAssets = () => {
     [products],
   );
 
-  const selectedRefillQuantities = useMemo(() => {
-    const selected = new Map<string, number>();
-    cartItems.forEach((item) => {
-      const normalizedType = normalizeCategory(item.item_type || item.category);
-      if (
-        !normalizedType.includes("refill") &&
-        !isEmptyBottleSaleCartItem(item)
-      ) {
-        return;
-      }
-      const key = item.item_id || item.id;
-      selected.set(key, (selected.get(key) || 0) + Math.max(0, item.quantity));
-    });
-    return selected;
-  }, [cartItems]);
-
   const bottleDepositOptions = useMemo<BottleDepositOption[]>(() => {
     const refillProductsById = new Map<string, ServerProduct>();
     refillProducts.forEach((product) => {
@@ -843,32 +891,34 @@ const BottlesAssets = () => {
     });
 
     return truckBulkItems.reduce<BottleDepositOption[]>((options, bulkItem) => {
-      const refillProduct = refillProductsById.get(bulkItem.id);
-      if (!refillProduct) return options;
+      const matchKeys = getTruckBulkItemMatchKeys(bulkItem);
+      const refillProduct = matchKeys
+        .map((key) => refillProductsById.get(key))
+        .find((product): product is ServerProduct => Boolean(product));
 
-      const reservedForSales =
-        selectedRefillQuantities.get(refillProduct.itemId) ||
-        selectedRefillQuantities.get(bulkItem.id) ||
-        0;
-      const availableQuantity = Math.max(
-        0,
-        bulkItem.quantity - reservedForSales,
-      );
+      const availableQuantity = Math.max(0, bulkItem.quantity);
 
-      if (availableQuantity <= 0) return options;
+      if (
+        availableQuantity <= 0 ||
+        (!bulkItem.isRefillableBottle && !refillProduct)
+      ) {
+        return options;
+      }
 
       options.push({
         key: `truck:bottle:${bulkItem.id}`,
-        itemId: bulkItem.id,
-        label: toEmptyRefillLabel(refillProduct.name || bulkItem.label),
-        unit: refillProduct.unit,
-        imageUrl: resolveResourceUrl(refillProduct.image_url),
+        itemId: bulkItem.emptyBottleId || bulkItem.itemId || bulkItem.id,
+        label: toEmptyRefillLabel(refillProduct?.name || bulkItem.label),
+        unit: refillProduct?.unit ?? bulkItem.unit,
+        imageUrl:
+          resolveResourceUrl(refillProduct?.image_url) ||
+          resolveResourceUrl(bulkItem.image_url),
         availableQuantity,
       });
 
       return options;
     }, []);
-  }, [refillProducts, selectedRefillQuantities, truckBulkItems]);
+  }, [refillProducts, truckBulkItems]);
 
   const currentBottleDepositMap = useMemo(() => {
     const currentBottleDeposits = new Map<string, RentItem>();
@@ -989,11 +1039,9 @@ const BottlesAssets = () => {
         return [
           {
             ...item,
-            price:
-              getRentItemDepositAction(item) === "deposit" &&
-              getRentItemDepositKind(item) === "asset"
-                ? toDepositPriceValue(rentItemDepositPrices[item.id])
-                : item.price,
+            price: toDepositPriceValue(
+              rentItemDepositPrices[item.id] ?? toMoneyDraft(item.price),
+            ),
             quantity,
             in_truck: true,
           },
@@ -1269,6 +1317,11 @@ const BottlesAssets = () => {
                     item={item}
                     quantity={Math.max(0, rentItemQuantities[item.id] ?? 0)}
                     onChangeQuantity={handleChangeRentItemQuantity}
+                    showPriceInput
+                    priceDraft={
+                      rentItemDepositPrices[item.id] ?? toMoneyDraft(item.price)
+                    }
+                    onChangePrice={handleChangeRentItemDepositPrice}
                   />
                 ))}
               </View>
@@ -1290,6 +1343,11 @@ const BottlesAssets = () => {
                     item={item}
                     quantity={Math.max(0, rentItemQuantities[item.id] ?? 0)}
                     onChangeQuantity={handleChangeRentItemQuantity}
+                    showPriceInput
+                    priceDraft={
+                      rentItemDepositPrices[item.id] ?? toMoneyDraft(item.price)
+                    }
+                    onChangePrice={handleChangeRentItemDepositPrice}
                   />
                 ))}
               </View>
@@ -1356,7 +1414,7 @@ const BottlesAssets = () => {
             ) : (
               <EmptySection
                 icon="water-outline"
-                text="No empty bottle deposits are available after delivered refills."
+                text="No empty bottle deposits available."
               />
             )}
           </View>
@@ -1707,6 +1765,13 @@ const styles = StyleSheet.create({
     lineHeight: 19,
     fontWeight: "700",
     color: "#1E40AF",
+  },
+  movementDetail: {
+    marginTop: 3,
+    fontSize: 11,
+    lineHeight: 15,
+    fontWeight: "600",
+    color: "#64748B",
   },
   selectedBadge: {
     flexDirection: "row",

@@ -2,15 +2,14 @@ import DeliveryCard from "@/components/DeliveryCard";
 import MyMap from "@/components/map";
 import ProfileModal from "@/components/ProfileModal";
 import { icons, images } from "@/constants";
-import { useLocationStore, useOrderStore } from "@/store/index";
+import { useOrderStore } from "@/store/index";
 import { Order } from "@/types/order";
 import ApiErrorText from "@/components/ApiErrorText";
 import { useAuthStore, authenticatedFetch } from "@/store/auth";
 import { parseApiResponseWithSoftError } from "@/utils/api";
 import { DeliveryStop, mapDeliveryToOrder } from "@/utils/deliveries";
 import { getDriverRequestId } from "@/utils/driverIdentity";
-import { resolveResourceUrl } from "@/utils/resources";
-import * as Location from "expo-location";
+import { getApiBaseUrl, resolveResourceUrl } from "@/utils/resources";
 import { useFocusEffect, useRouter } from "expo-router";
 import React, { useEffect, useState, useCallback } from "react";
 import {
@@ -27,14 +26,48 @@ import { ActivityIndicator } from "react-native-paper";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
 
-const IP_ADDRESS = process.env.EXPO_PUBLIC_IP_ADDRESS;
+const IP_ADDRESS = getApiBaseUrl();
+
+const getCurrentMinuteOfDay = () => {
+  const now = new Date();
+  return now.getHours() * 60 + now.getMinutes();
+};
+
+const parseClockTime = (value?: string | null): number | null => {
+  if (!value) return null;
+  const [hourText, minuteText] = value.split(":");
+  const hour = Number(hourText);
+  const minute = Number(minuteText);
+  if (
+    !Number.isInteger(hour) ||
+    !Number.isInteger(minute) ||
+    hour < 0 ||
+    hour > 23 ||
+    minute < 0 ||
+    minute > 59
+  ) {
+    return null;
+  }
+  return hour * 60 + minute;
+};
+
+const isOrderAvailableAt = (order: Order, minuteOfDay: number) => {
+  const startTime = parseClockTime(order.start_time);
+  const endTime = parseClockTime(order.end_time);
+  if (startTime === null || endTime === null) return false;
+
+  if (startTime <= endTime) {
+    return minuteOfDay >= startTime && minuteOfDay <= endTime;
+  }
+
+  return minuteOfDay >= startTime || minuteOfDay <= endTime;
+};
 
 const Home = () => {
   const { user } = useAuthStore();
   const { setAssignedOrders, selectOrder, assignedOrders, currentDriver } =
     useOrderStore();
   const router = useRouter();
-  const { setUserLocation } = useLocationStore();
 
   // Use useMemo to ensure these values update when currentDriver changes
   // Depend on currentDriver object itself, not nested properties, for proper reactivity
@@ -57,6 +90,9 @@ const Home = () => {
   const [refreshing, setRefreshing] = useState(false);
   const [isProfileModalVisible, setIsProfileModalVisible] = useState(false);
   const [apiError, setApiError] = useState<string | null>(null);
+  const [currentMinuteOfDay, setCurrentMinuteOfDay] = useState(
+    getCurrentMinuteOfDay,
+  );
   const driverId = React.useMemo(
     () =>
       getDriverRequestId({
@@ -66,26 +102,6 @@ const Home = () => {
     [user, currentDriver],
   );
 
-  // Helper function to check if order is currently available
-  const isOrderCurrentlyAvailable = (order: Order) => {
-    if (!order.start_time || !order.end_time) return false;
-
-    try {
-      const now = new Date();
-      const currentTime = now.getHours() * 60 + now.getMinutes();
-
-      const [startHour, startMin] = order.start_time.split(":").map(Number);
-      const [endHour, endMin] = order.end_time.split(":").map(Number);
-
-      const startTime = startHour * 60 + startMin;
-      const endTime = endHour * 60 + endMin;
-
-      return currentTime >= startTime && currentTime <= endTime;
-    } catch {
-      return false;
-    }
-  };
-
   // Count currently available orders
   const availableOrdersCount = React.useMemo(() => {
     const hasSchedulingWindow = assignedOrders.some((order) =>
@@ -94,8 +110,10 @@ const Home = () => {
     if (!hasSchedulingWindow) {
       return assignedOrders.length;
     }
-    return assignedOrders.filter(isOrderCurrentlyAvailable).length;
-  }, [assignedOrders]);
+    return assignedOrders.filter((order) =>
+      isOrderAvailableAt(order, currentMinuteOfDay),
+    ).length;
+  }, [assignedOrders, currentMinuteOfDay]);
 
   // Filter deliveries based on search query
   const filteredDeliveries = React.useMemo(() => {
@@ -125,59 +143,14 @@ const Home = () => {
   }, [assignedOrders, searchQuery]);
 
   useEffect(() => {
-    let subscription: Location.LocationSubscription | null = null;
+    const timer = setInterval(() => {
+      setCurrentMinuteOfDay(getCurrentMinuteOfDay());
+    }, 60_000);
 
-    const startLocationTracking = async () => {
-      try {
-        const { status } = await Location.requestForegroundPermissionsAsync();
-        if (status !== "granted") {
-          console.log("Location permission denied");
-          return;
-        }
-
-        // Start watching position with updates
-        subscription = await Location.watchPositionAsync(
-          {
-            accuracy: Location.Accuracy.Balanced,
-            distanceInterval: 10, // Update every 10 meters
-            timeInterval: 5000, // Or every 5 seconds, whichever comes first
-          },
-          async (location) => {
-            try {
-              const address = await Location.reverseGeocodeAsync({
-                latitude: location.coords.latitude,
-                longitude: location.coords.longitude,
-              });
-              setUserLocation({
-                latitude: location.coords.latitude,
-                longitude: location.coords.longitude,
-                address: `${address[0]?.name || ""}, ${address[0]?.region || ""}`,
-              });
-            } catch (error) {
-              console.error("Error reverse geocoding:", error);
-              // Still update location even if reverse geocoding fails
-              setUserLocation({
-                latitude: location.coords.latitude,
-                longitude: location.coords.longitude,
-                address: "",
-              });
-            }
-          },
-        );
-      } catch (error) {
-        console.error("Error starting location tracking:", error);
-      }
-    };
-
-    void startLocationTracking();
-
-    // Cleanup subscription on unmount
     return () => {
-      if (subscription) {
-        subscription.remove();
-      }
+      clearInterval(timer);
     };
-  }, [setUserLocation]);
+  }, []);
 
   const handleViewDetails = (id: string) => {
     selectOrder(id);

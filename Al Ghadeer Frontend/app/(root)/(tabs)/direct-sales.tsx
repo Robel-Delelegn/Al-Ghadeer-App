@@ -1,4 +1,5 @@
 import ApiErrorText from "@/components/ApiErrorText";
+import { VAT_RATE } from "@/constants/tax";
 import { authenticatedFetch, useAuthStore } from "@/store/auth";
 import { DirectSaleDraft, useOrderStore } from "@/store/index";
 import { parseApiResponseWithSoftError } from "@/utils/api";
@@ -13,13 +14,20 @@ import { resolveResourceUrl } from "@/utils/resources";
 import {
   extractTruckBulkItems,
   extractTruckAssets,
+  getTruckBulkItemMatchKeys,
   TruckBulkItem,
   TruckAsset,
 } from "@/utils/truckLoad";
 import { Ionicons } from "@expo/vector-icons";
-import { useRouter } from "expo-router";
+import { useFocusEffect, useRouter } from "expo-router";
 import * as Location from "expo-location";
-import React, { useCallback, useEffect, useMemo, useState } from "react";
+import React, {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import {
   ScrollView,
   Text,
@@ -48,10 +56,14 @@ interface ServerProduct {
   id: string;
   type: "retail" | "refill" | "assets" | "other";
   itemId: string;
+  assetId?: string;
+  assetDisplayId?: string | null;
+  assetDisplayLabel?: string | null;
   label: string;
   pricePerUnit: number;
   unit: string | null;
   image_url: string | null;
+  description: string | null;
   category?: string | null;
   assetCategory?: string | null;
   originalPrice?: number;
@@ -79,7 +91,7 @@ const EMPTY_BOTTLE_PRODUCT_PREFIX = "sale-empty-bottle:";
 const TRUCK_ASSET_PRODUCT_PREFIX = "sale-asset:";
 const EMPTY_BOTTLE_CATEGORY = "empty_bottle";
 
-const normalizeCategory = (category?: string) =>
+const normalizeCategory = (category?: string | null) =>
   (category || "")
     .trim()
     .toLowerCase()
@@ -98,6 +110,63 @@ const isTruckAssetSaleProduct = (product: Pick<ServerProduct, "id">) =>
 const isSyntheticSaleProduct = (
   product: Pick<ServerProduct, "id" | "category">,
 ) => isEmptyBottleSaleProduct(product) || isTruckAssetSaleProduct(product);
+
+const isGenericAssetCategory = (value?: string | null) => {
+  const normalized = normalizeCategory(value);
+  return (
+    !normalized ||
+    normalized === "asset" ||
+    normalized === "assets" ||
+    normalized === "assetitem" ||
+    normalized === "assetproduct"
+  );
+};
+
+const getSpecificAssetCategory = (...values: (string | null | undefined)[]) => {
+  for (const value of values) {
+    const label = (value || "").trim();
+    if (label && !isGenericAssetCategory(label)) return label;
+  }
+  return "";
+};
+
+const appendUniqueDisplayPart = (parts: string[], value?: string | null) => {
+  const label = (value || "").trim();
+  if (!label) return;
+  const normalized = label.toLowerCase();
+  if (parts.some((part) => part.toLowerCase() === normalized)) return;
+  parts.push(label);
+};
+
+const getAssetProductLabel = (
+  metadata: ServerProduct | undefined,
+  asset: TruckAsset,
+) =>
+  metadata?.label ||
+  metadata?.assetCategory ||
+  asset.category ||
+  asset.label ||
+  "Asset";
+
+const getAssetProductTitle = (product: ServerProduct) =>
+  getSpecificAssetCategory(product.assetCategory, product.category) ||
+  product.label ||
+  "Asset";
+
+const getAssetProductDetail = (product: ServerProduct) => {
+  const title = getAssetProductTitle(product);
+  const parts: string[] = [];
+
+  if (product.label.trim().toLowerCase() !== title.trim().toLowerCase()) {
+    appendUniqueDisplayPart(parts, product.label);
+  }
+  appendUniqueDisplayPart(parts, product.assetDisplayLabel);
+  if (product.assetDisplayId) {
+    appendUniqueDisplayPart(parts, `ID: ${product.assetDisplayId}`);
+  }
+
+  return parts.join(" · ");
+};
 
 const getProductStockGroupKey = (
   product: Pick<ServerProduct, "id" | "itemId" | "type" | "category">,
@@ -167,6 +236,29 @@ interface DirectSaleBottleDepositOption {
   availableQuantity: number;
 }
 
+interface SiteSubscription {
+  itemId: string;
+  averageWeeklyQuantity: number;
+  startDate?: string | null;
+  endDate?: string | null;
+}
+
+interface AvailableSubscriptionItem {
+  id: string;
+  type: "refill";
+  itemId: string;
+  label: string;
+  description: string | null;
+  pricePerUnit: number;
+  unit: string | null;
+  image_url: string | null;
+}
+
+interface SubscriptionDraft {
+  selected: boolean;
+  averageWeeklyQuantity: string;
+}
+
 const toEmptyRefillLabel = (label: string) => {
   const trimmedLabel = label.trim();
 
@@ -194,6 +286,167 @@ const parseStockNumber = (value: unknown): number | null => {
   }
   return null;
 };
+
+const toQuantityDraft = (value: unknown): string => {
+  const parsed = toPriceValue(value);
+  if (parsed === null || parsed <= 0) return "";
+  return Number.isInteger(parsed) ? String(parsed) : String(parsed);
+};
+
+const sanitizeQuantityInput = (value: string) => {
+  const normalized = value.replace(/[^0-9.]/g, "");
+  const [whole, ...fractionParts] = normalized.split(".");
+  if (fractionParts.length === 0) return whole;
+  return `${whole}.${fractionParts.join("")}`;
+};
+
+const sanitizeDateInput = (value: string) =>
+  value.replace(/[^0-9-]/g, "").slice(0, 10);
+
+const getTodayDateInputValue = () => {
+  const today = new Date();
+  const year = today.getFullYear();
+  const month = String(today.getMonth() + 1).padStart(2, "0");
+  const day = String(today.getDate()).padStart(2, "0");
+  return `${year}-${month}-${day}`;
+};
+
+const parseDateInput = (value: string): Date | null => {
+  const trimmed = value.trim();
+  const match = trimmed.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (!match) return null;
+
+  const year = Number(match[1]);
+  const month = Number(match[2]);
+  const day = Number(match[3]);
+  const parsed = new Date(year, month - 1, day);
+  if (
+    parsed.getFullYear() !== year ||
+    parsed.getMonth() !== month - 1 ||
+    parsed.getDate() !== day
+  ) {
+    return null;
+  }
+
+  return parsed;
+};
+
+const normalizeSiteSubscriptionRecord = (
+  raw: unknown,
+): SiteSubscription | null => {
+  if (!raw || typeof raw !== "object") return null;
+  const source = raw as Record<string, unknown>;
+  const itemId =
+    toStringValue(source.itemId) ||
+    toStringValue(source.item_id) ||
+    toStringValue(source.id);
+  const averageWeeklyQuantity =
+    toPriceValue(
+      source.averageWeeklyQuantity ?? source.average_weekly_quantity,
+    ) ?? 0;
+
+  if (!itemId || averageWeeklyQuantity <= 0) return null;
+
+  return {
+    itemId,
+    averageWeeklyQuantity,
+    startDate:
+      toNullableStringValue(source.startDate ?? source.start_date) ?? null,
+    endDate: toNullableStringValue(source.endDate ?? source.end_date) ?? null,
+  };
+};
+
+const getSiteSubscriptions = (
+  site?: { subscriptions?: unknown } | null,
+): SiteSubscription[] => {
+  const subscriptions = site?.subscriptions;
+  if (!Array.isArray(subscriptions)) return [];
+
+  return subscriptions
+    .map((entry) => normalizeSiteSubscriptionRecord(entry))
+    .filter((entry): entry is SiteSubscription => entry !== null);
+};
+
+const normalizeAvailableSubscriptionRecord = (
+  raw: unknown,
+): AvailableSubscriptionItem | null => {
+  if (!raw || typeof raw !== "object") return null;
+  const source = raw as Record<string, unknown>;
+  const id = toStringValue(source.id);
+  const itemId =
+    toStringValue(source.itemId) ||
+    toStringValue(source.item_id) ||
+    toStringValue(source.id);
+  const label = toStringValue(source.label) || toStringValue(source.name);
+  const pricePerUnit =
+    toPriceValue(
+      source.pricePerUnit ?? source.price_per_unit ?? source.price,
+    ) ?? 0;
+
+  if (!id || !itemId || !label) return null;
+
+  return {
+    id,
+    itemId,
+    label,
+    type: "refill",
+    pricePerUnit,
+    unit: toNullableStringValue(source.unit),
+    description: toNullableStringValue(source.description),
+    image_url: resolveResourceUrl(toNullableStringValue(source.image_url)),
+  };
+};
+
+const normalizeAvailableSubscriptionsPayload = (
+  payload: unknown,
+): AvailableSubscriptionItem[] => {
+  if (!Array.isArray(payload)) return [];
+
+  return payload
+    .map((entry) => normalizeAvailableSubscriptionRecord(entry))
+    .filter((entry): entry is AvailableSubscriptionItem => entry !== null);
+};
+
+const formatSubscriptionQuantity = (quantity: number) =>
+  Number.isInteger(quantity) ? String(quantity) : quantity.toFixed(1);
+
+const buildSubscriptionDrafts = (
+  siteSubscriptions: SiteSubscription[],
+  options: AvailableSubscriptionItem[],
+): Record<string, SubscriptionDraft> => {
+  const drafts: Record<string, SubscriptionDraft> = {};
+
+  options.forEach((option) => {
+    drafts[option.itemId] = {
+      selected: false,
+      averageWeeklyQuantity: "",
+    };
+  });
+
+  siteSubscriptions.forEach((subscription) => {
+    drafts[subscription.itemId] = {
+      selected: true,
+      averageWeeklyQuantity: toQuantityDraft(
+        subscription.averageWeeklyQuantity,
+      ),
+    };
+  });
+
+  return drafts;
+};
+
+const buildFallbackSubscriptionItem = (
+  subscription: SiteSubscription,
+): AvailableSubscriptionItem => ({
+  id: `subscription:${subscription.itemId}`,
+  itemId: subscription.itemId,
+  type: "refill",
+  label: `Subscription ${subscription.itemId.slice(0, 8)}`,
+  description: null,
+  pricePerUnit: 0,
+  unit: null,
+  image_url: null,
+});
 
 const isCoolerProduct = (
   product: Pick<ServerProduct, "id" | "label" | "itemId">,
@@ -279,11 +532,16 @@ const normalizeProductRecord = (
   return {
     id,
     itemId,
+    assetId:
+      toStringValue(source.assetId) ||
+      toStringValue(source.asset_id) ||
+      undefined,
     label,
     pricePerUnit,
     type,
     unit: toNullableStringValue(source.unit),
     image_url: resolveResourceUrl(toNullableStringValue(source.image_url)),
+    description: toNullableStringValue(source.description),
     category: toNullableStringValue(source.category),
     assetCategory: toNullableStringValue(
       source.assetCategory ?? source.asset_category,
@@ -343,21 +601,22 @@ const buildSellableProducts = (
       assetProductsById.get(asset.itemId) || assetProductsById.get(asset.id);
     truckAssetItemIds.add(asset.itemId);
 
-    const label =
-      asset.serial && !asset.label.includes(asset.serial)
-        ? `${asset.label} (${asset.serial})`
-        : asset.label;
+    const assetDisplayId = asset.serial || asset.id;
 
     return [
       {
         id: `${TRUCK_ASSET_PRODUCT_PREFIX}${asset.id}:${asset.serial || asset.itemId}`,
         type: "assets" as const,
         itemId: asset.itemId,
-        label: label || metadata?.label || "Asset",
+        assetId: asset.id,
+        assetDisplayId,
+        assetDisplayLabel: asset.label || metadata?.label || null,
+        label: getAssetProductLabel(metadata, asset),
         pricePerUnit: metadata?.pricePerUnit ?? 0,
         unit: metadata?.unit ?? null,
         image_url:
           resolveResourceUrl(asset.image_url) || metadata?.image_url || null,
+        description: metadata?.description ?? asset.description ?? null,
         category: asset.category || metadata?.category || "Assets",
         assetCategory: asset.category || metadata?.assetCategory || null,
         originalPrice: metadata?.originalPrice,
@@ -403,14 +662,67 @@ interface CustomerSite {
   flatNo: string | null;
   deliveryInstructions: string | null;
   routeId: string | null;
+  subscriptions?: SiteSubscription[];
 }
 
 interface CustomerData {
   id: string;
   name: string;
   phone: string;
+  walletBalance: number;
   sites: CustomerSite[];
 }
+
+const normalizeCustomerData = (raw: unknown): CustomerData | null => {
+  if (!raw || typeof raw !== "object") return null;
+  const source = raw as Record<string, unknown>;
+  const id = toStringValue(source.id);
+  const name = toStringValue(source.name);
+  const phone = toStringValue(source.phone);
+
+  if (!id || !name) return null;
+
+  const walletBalance =
+    toPriceValue(source.walletBalance ?? source.wallet_balance) ?? 0;
+  const sites = Array.isArray(source.sites)
+    ? (source.sites as CustomerSite[]).map((site) => ({
+        ...site,
+        subscriptions: Array.isArray(site.subscriptions)
+          ? site.subscriptions
+          : [],
+      }))
+    : [];
+
+  return {
+    id,
+    name,
+    phone,
+    walletBalance,
+    sites,
+  };
+};
+
+const normalizeCustomerList = (raw: unknown): CustomerData[] =>
+  Array.isArray(raw)
+    ? raw
+        .map((customer) => normalizeCustomerData(customer))
+        .filter((customer): customer is CustomerData => customer !== null)
+    : [];
+
+const getCustomerWalletBalance = (
+  customer?: Pick<CustomerData, "walletBalance"> | null,
+) =>
+  typeof customer?.walletBalance === "number" &&
+  Number.isFinite(customer.walletBalance)
+    ? customer.walletBalance
+    : 0;
+
+const formatCustomerWalletBalance = (balance: number) => {
+  if (balance < 0) {
+    return `Outstanding balance: AED ${Math.abs(balance).toFixed(2)}`;
+  }
+  return `Wallet balance: AED ${balance.toFixed(2)}`;
+};
 
 interface SiteDraft {
   siteName: string;
@@ -438,6 +750,18 @@ const EMPTY_SITE_DRAFT: SiteDraft = {
   buildingNo: "",
   flatNo: "",
   deliveryInstructions: "",
+};
+
+const EMPTY_CHECK_DETAILS: DirectSaleCheckDraft = {
+  checkNumber: "",
+  checkDate: "",
+  bankName: "",
+  accountNumber: "",
+};
+
+const EMPTY_HELD_ITEMS: CustomerHeldItems = {
+  bottles: [],
+  assets: [],
 };
 
 const firstText = (...values: (string | null | undefined)[]) => {
@@ -653,6 +977,25 @@ const isReturnOnlyAsset = (asset: DirectSaleAssetOption) => {
   return asset.source === "held";
 };
 
+const getAssetOptionTitle = (asset: DirectSaleAssetOption) =>
+  getSpecificAssetCategory(asset.category) || asset.label || "Asset";
+
+const getAssetOptionDetail = (asset: DirectSaleAssetOption) => {
+  const title = getAssetOptionTitle(asset);
+  const parts: string[] = [];
+
+  if (asset.label.trim().toLowerCase() !== title.trim().toLowerCase()) {
+    appendUniqueDisplayPart(parts, asset.label);
+  }
+  if (asset.serial) {
+    appendUniqueDisplayPart(parts, `S/N ${asset.serial}`);
+  } else if (asset.itemId !== asset.label) {
+    appendUniqueDisplayPart(parts, `ID: ${asset.itemId}`);
+  }
+
+  return parts.join(" · ");
+};
+
 interface ActionModalProps {
   visible: boolean;
   title: string;
@@ -705,15 +1048,17 @@ const DirectSales: React.FC = () => {
   const insets = useSafeAreaInsets();
   const router = useRouter();
   const { user } = useAuthStore();
-  const { currentDriver, setDirectSaleDraft, directSaleDraft } =
-    useOrderStore();
+  const {
+    currentDriver,
+    setDirectSaleDraft,
+    directSaleDraft,
+    directSaleResetCounter,
+  } = useOrderStore();
   const [products, setProducts] = useState<ServerProduct[]>([]);
   const [truckBulkItems, setTruckBulkItems] = useState<TruckBulkItem[]>([]);
   const [truckAssets, setTruckAssets] = useState<TruckAsset[]>([]);
-  const [heldItems, setHeldItems] = useState<CustomerHeldItems>({
-    bottles: [],
-    assets: [],
-  });
+  const [heldItems, setHeldItems] =
+    useState<CustomerHeldItems>(EMPTY_HELD_ITEMS);
   const [assetDrafts, setAssetDrafts] = useState<
     Record<string, DirectSaleAssetDraft>
   >({});
@@ -722,6 +1067,9 @@ const DirectSales: React.FC = () => {
   >({});
   const [bottleDepositQuantities, setBottleDepositQuantities] = useState<
     Record<string, number>
+  >({});
+  const [bottleReturnPrices, setBottleReturnPrices] = useState<
+    Record<string, string>
   >({});
   const [bottleReturnQuantities, setBottleReturnQuantities] = useState<
     Record<string, number>
@@ -743,12 +1091,8 @@ const DirectSales: React.FC = () => {
   const [createCustomerPhone, setCreateCustomerPhone] = useState("");
   const [paymentMethod, setPaymentMethod] =
     useState<DirectSalePaymentMethod>("cash");
-  const [checkDetails, setCheckDetails] = useState<DirectSaleCheckDraft>({
-    checkNumber: "",
-    checkDate: "",
-    bankName: "",
-    accountNumber: "",
-  });
+  const [checkDetails, setCheckDetails] =
+    useState<DirectSaleCheckDraft>(EMPTY_CHECK_DETAILS);
   const [creditCollectionAmount, setCreditCollectionAmount] = useState("");
   const [creditCollectionRemark, setCreditCollectionRemark] = useState("");
   const [remark, setRemark] = useState("");
@@ -769,6 +1113,21 @@ const DirectSales: React.FC = () => {
   >([]);
   const [customerData, setCustomerData] = useState<CustomerData | null>(null);
   const [selectedSite, setSelectedSite] = useState<CustomerSite | null>(null);
+  const [availableSubscriptions, setAvailableSubscriptions] = useState<
+    AvailableSubscriptionItem[]
+  >([]);
+  const [subscriptionModalVisible, setSubscriptionModalVisible] =
+    useState(false);
+  const [subscriptionDrafts, setSubscriptionDrafts] = useState<
+    Record<string, SubscriptionDraft>
+  >({});
+  const [subscriptionStartDate, setSubscriptionStartDate] = useState("");
+  const [subscriptionEndDate, setSubscriptionEndDate] = useState("");
+  const [isLoadingSubscriptions, setIsLoadingSubscriptions] = useState(false);
+  const [isSavingSubscriptions, setIsSavingSubscriptions] = useState(false);
+  const [subscriptionError, setSubscriptionError] = useState<string | null>(
+    null,
+  );
   const [todayRoutes, setTodayRoutes] = useState<AssignmentRoute[]>([]);
   const [isLoadingRoutes, setIsLoadingRoutes] = useState(false);
   const [selectedRouteId, setSelectedRouteId] = useState("");
@@ -779,6 +1138,7 @@ const DirectSales: React.FC = () => {
   const [isResolvingSiteLocation, setIsResolvingSiteLocation] = useState(false);
   const [isSavingSite, setIsSavingSite] = useState(false);
   const [isAssigningRoute, setIsAssigningRoute] = useState(false);
+  const heldItemsRequestIdRef = useRef(0);
   const driverId = useMemo(
     () =>
       getDriverRequestId({
@@ -787,6 +1147,47 @@ const DirectSales: React.FC = () => {
       }),
     [user, currentDriver],
   );
+
+  const resetDirectSaleMovementState = useCallback(() => {
+    setHeldItems(EMPTY_HELD_ITEMS);
+    setHeldItemsError(null);
+    setAssetDrafts({});
+    setBottleDepositPrices({});
+    setBottleDepositQuantities({});
+    setBottleReturnPrices({});
+    setBottleReturnQuantities({});
+  }, []);
+
+  const resetDirectSaleWorkflowState = useCallback(() => {
+    setQuantities({});
+    setCustomerData(null);
+    setSelectedSite(null);
+    setSubscriptionModalVisible(false);
+    setSubscriptionDrafts({});
+    setSubscriptionStartDate("");
+    setSubscriptionEndDate("");
+    setSubscriptionError(null);
+    setSelectedRouteId("");
+    setPaymentMethod("cash");
+    setCheckDetails(EMPTY_CHECK_DETAILS);
+    setRemark("");
+    setIsRemarkExpanded(false);
+    setLocation(null);
+    setCreditCollectionAmount("");
+    setCreditCollectionRemark("");
+    setCustomerSearchQuery("");
+    setCustomerSearchResults([]);
+    setHasSearchedCustomers(false);
+    setCustomerCreatedInModal(false);
+    setCustomerModalMode("create");
+    setSiteFormMode(null);
+    setSiteDraft(EMPTY_SITE_DRAFT);
+    resetDirectSaleMovementState();
+  }, [resetDirectSaleMovementState]);
+
+  useEffect(() => {
+    resetDirectSaleWorkflowState();
+  }, [directSaleResetCounter, resetDirectSaleWorkflowState]);
 
   useEffect(() => {
     if (!directSaleDraft) return;
@@ -805,6 +1206,7 @@ const DirectSales: React.FC = () => {
     setAssetDrafts(directSaleDraft.assetDrafts);
     setBottleDepositPrices(directSaleDraft.bottleDepositPrices);
     setBottleDepositQuantities(directSaleDraft.bottleDepositQuantities);
+    setBottleReturnPrices(directSaleDraft.bottleReturnPrices || {});
     setBottleReturnQuantities(directSaleDraft.bottleReturnQuantities);
     setCreditCollectionAmount(directSaleDraft.creditCollectionAmount);
     setCreditCollectionRemark(directSaleDraft.creditCollectionRemark);
@@ -833,6 +1235,7 @@ const DirectSales: React.FC = () => {
         if (selectedSiteId) {
           params.set("siteId", selectedSiteId);
         }
+        params.set("filter", "all");
         const url = `${API_BASE_URL}/products${params.toString() ? `?${params.toString()}` : ""}`;
 
         const response = await authenticatedFetch(url, {
@@ -861,9 +1264,50 @@ const DirectSales: React.FC = () => {
     [driverId, selectedSite?.id, truckAssets],
   );
 
-  useEffect(() => {
-    fetchProducts();
-  }, [fetchProducts]);
+  useFocusEffect(
+    useCallback(() => {
+      void fetchProducts();
+    }, [fetchProducts]),
+  );
+
+  const fetchAvailableSubscriptions = useCallback(async () => {
+    setIsLoadingSubscriptions(true);
+    try {
+      setSubscriptionError(null);
+      const response = await authenticatedFetch(
+        `${API_BASE_URL}/available-subscriptions`,
+        {
+          method: "GET",
+        },
+      );
+      const result = await parseApiResponseWithSoftError<unknown>(response);
+      if (!result.ok) {
+        setAvailableSubscriptions([]);
+        setSubscriptionError(result.error);
+        return;
+      }
+
+      setAvailableSubscriptions(
+        normalizeAvailableSubscriptionsPayload(result.data),
+      );
+    } catch (error) {
+      console.error("Error loading subscription options:", error);
+      setAvailableSubscriptions([]);
+      setSubscriptionError(
+        error instanceof Error
+          ? error.message
+          : "Failed to load subscription options.",
+      );
+    } finally {
+      setIsLoadingSubscriptions(false);
+    }
+  }, []);
+
+  useFocusEffect(
+    useCallback(() => {
+      void fetchAvailableSubscriptions();
+    }, [fetchAvailableSubscriptions]),
+  );
 
   const fetchTruckAssets = useCallback(async () => {
     if (!driverId) {
@@ -901,19 +1345,25 @@ const DirectSales: React.FC = () => {
     }
   }, [driverId]);
 
-  useEffect(() => {
-    void fetchTruckAssets();
-  }, [fetchTruckAssets]);
+  useFocusEffect(
+    useCallback(() => {
+      void fetchTruckAssets();
+    }, [fetchTruckAssets]),
+  );
 
   const fetchHeldItems = useCallback(async (customerId?: string | null) => {
+    const requestId = heldItemsRequestIdRef.current + 1;
+    heldItemsRequestIdRef.current = requestId;
+    const isCurrentRequest = () => heldItemsRequestIdRef.current === requestId;
     const normalizedCustomerId = customerId?.trim();
     if (!normalizedCustomerId) {
-      setHeldItems({ bottles: [], assets: [] });
+      setHeldItems(EMPTY_HELD_ITEMS);
       setHeldItemsError(null);
       return;
     }
 
     try {
+      setHeldItems(EMPTY_HELD_ITEMS);
       setHeldItemsError(null);
       const response = await authenticatedFetch(
         `${API_BASE_URL}/customers/${encodeURIComponent(normalizedCustomerId)}/held-items`,
@@ -922,16 +1372,19 @@ const DirectSales: React.FC = () => {
         },
       );
       const result = await parseApiResponseWithSoftError<unknown>(response);
+      if (!isCurrentRequest()) return;
+
       if (!result.ok) {
-        setHeldItems({ bottles: [], assets: [] });
+        setHeldItems(EMPTY_HELD_ITEMS);
         setHeldItemsError(result.error);
         return;
       }
 
       setHeldItems(normalizeCustomerHeldItems(result.data));
     } catch (error) {
+      if (!isCurrentRequest()) return;
       console.error("Error fetching held items:", error);
-      setHeldItems({ bottles: [], assets: [] });
+      setHeldItems(EMPTY_HELD_ITEMS);
       setHeldItemsError(
         error instanceof Error ? error.message : "Failed to load held items.",
       );
@@ -942,37 +1395,80 @@ const DirectSales: React.FC = () => {
     void fetchHeldItems(customerData?.id);
   }, [customerData?.id, fetchHeldItems]);
 
-  const applySelectedSite = useCallback((site: CustomerSite | null) => {
-    setSelectedSite(site);
-    setSelectedRouteId("");
+  const clearDirectSaleDownstreamDrafts = useCallback(
+    ({
+      clearProducts = true,
+      resetPayment = false,
+    }: { clearProducts?: boolean; resetPayment?: boolean } = {}) => {
+      setDirectSaleDraft(null);
+      if (clearProducts) {
+        setQuantities({});
+      }
+      if (resetPayment) {
+        setPaymentMethod("cash");
+        setCheckDetails(EMPTY_CHECK_DETAILS);
+        setRemark("");
+        setIsRemarkExpanded(false);
+      }
+      setCreditCollectionAmount("");
+      setCreditCollectionRemark("");
+      resetDirectSaleMovementState();
+    },
+    [resetDirectSaleMovementState, setDirectSaleDraft],
+  );
 
-    if (!site) return;
+  const applySelectedSite = useCallback(
+    (site: CustomerSite | null) => {
+      const previousSiteId = selectedSite?.id?.trim() || "";
+      const nextSiteId = site?.id?.trim() || "";
+      if (previousSiteId !== nextSiteId) {
+        clearDirectSaleDownstreamDrafts({ clearProducts: true });
+      }
 
-    const formattedAddress = formatSiteAddress(site);
-    if (site.latitude != null && site.longitude != null) {
-      setLocation({
-        latitude: site.latitude,
-        longitude: site.longitude,
-        address:
-          formattedAddress || site.siteName || "Selected customer location",
-      });
-      return;
-    }
+      setSelectedSite(site);
+      setSelectedRouteId("");
 
-    if (formattedAddress) {
-      setLocation((prev) =>
-        prev
-          ? {
-              ...prev,
-              address: formattedAddress,
-            }
-          : prev,
-      );
-    }
-  }, []);
+      if (!site) {
+        setLocation(null);
+        return;
+      }
+
+      const formattedAddress = formatSiteAddress(site);
+      if (site.latitude != null && site.longitude != null) {
+        setLocation({
+          latitude: site.latitude,
+          longitude: site.longitude,
+          address:
+            formattedAddress || site.siteName || "Selected customer location",
+        });
+        return;
+      }
+
+      if (formattedAddress) {
+        setLocation((prev) =>
+          prev
+            ? {
+                ...prev,
+                address: formattedAddress,
+              }
+            : prev,
+        );
+      }
+    },
+    [clearDirectSaleDownstreamDrafts, selectedSite?.id],
+  );
 
   const applyCustomerSelection = useCallback(
     (customer: CustomerData) => {
+      const previousCustomerId = customerData?.id?.trim() || "";
+      const nextCustomerId = customer.id.trim();
+      if (previousCustomerId !== nextCustomerId) {
+        clearDirectSaleDownstreamDrafts({
+          clearProducts: true,
+          resetPayment: true,
+        });
+      }
+
       const preferredSite =
         customer.sites.find((site) => Boolean(site.routeId)) ||
         customer.sites[0] ||
@@ -987,7 +1483,7 @@ const DirectSales: React.FC = () => {
         setSelectedRouteId(preferredSite.routeId);
       }
     },
-    [applySelectedSite],
+    [applySelectedSite, clearDirectSaleDownstreamDrafts, customerData?.id],
   );
 
   const closeSearchCustomerModal = useCallback(() => {
@@ -1040,6 +1536,55 @@ const DirectSales: React.FC = () => {
     setSiteDraft(EMPTY_SITE_DRAFT);
     setCustomerModalVisible(true);
   }, [customerData]);
+
+  const closeSubscriptionModal = useCallback(() => {
+    setSubscriptionModalVisible(false);
+    setSubscriptionError(null);
+  }, []);
+
+  const openSubscriptionModal = useCallback(() => {
+    if (!customerData) {
+      showWarningAlert(
+        "Customer Required",
+        "Search or create a customer first.",
+      );
+      return;
+    }
+    if (!selectedSite) {
+      showWarningAlert(
+        "Site Required",
+        "Select or add a customer site before creating subscriptions.",
+      );
+      openManageCustomerModal();
+      return;
+    }
+
+    const siteSubscriptions = getSiteSubscriptions(selectedSite);
+    const firstSubscriptionWithDates = siteSubscriptions.find(
+      (subscription) => subscription.startDate || subscription.endDate,
+    );
+
+    setSubscriptionDrafts(
+      buildSubscriptionDrafts(siteSubscriptions, availableSubscriptions),
+    );
+    setSubscriptionStartDate(
+      firstSubscriptionWithDates?.startDate || getTodayDateInputValue(),
+    );
+    setSubscriptionEndDate(firstSubscriptionWithDates?.endDate || "");
+    setSubscriptionError(null);
+    setSubscriptionModalVisible(true);
+
+    if (availableSubscriptions.length === 0 && !isLoadingSubscriptions) {
+      void fetchAvailableSubscriptions();
+    }
+  }, [
+    availableSubscriptions,
+    customerData,
+    fetchAvailableSubscriptions,
+    isLoadingSubscriptions,
+    openManageCustomerModal,
+    selectedSite,
+  ]);
 
   const handleCustomerPicked = useCallback(
     (customer: CustomerData) => {
@@ -1121,12 +1666,14 @@ const DirectSales: React.FC = () => {
         fetchTruckAssets(),
         fetchTodayRoutes(),
         fetchHeldItems(customerData?.id),
+        fetchAvailableSubscriptions(),
       ]);
     } finally {
       setRefreshingProducts(false);
     }
   }, [
     customerData?.id,
+    fetchAvailableSubscriptions,
     fetchHeldItems,
     fetchProducts,
     fetchTodayRoutes,
@@ -1170,7 +1717,7 @@ const DirectSales: React.FC = () => {
         },
       );
       const parseResult =
-        await parseApiResponseWithSoftError<CustomerData[]>(response);
+        await parseApiResponseWithSoftError<unknown>(response);
 
       if (!parseResult.ok) {
         setApiError(parseResult.error);
@@ -1178,7 +1725,7 @@ const DirectSales: React.FC = () => {
         return;
       }
 
-      const customers = Array.isArray(parseResult.data) ? parseResult.data : [];
+      const customers = normalizeCustomerList(parseResult.data);
       setCustomerSearchResults(customers);
       setHasSearchedCustomers(true);
 
@@ -1222,20 +1769,25 @@ const DirectSales: React.FC = () => {
           phone: trimmedPhone,
         }),
       });
-      const result =
-        await parseApiResponseWithSoftError<CustomerData>(response);
+      const result = await parseApiResponseWithSoftError<unknown>(response);
       if (!result.ok) {
         setApiError(result.error);
         return;
       }
 
-      setCustomerSearchResults([result.data]);
-      applyCustomerSelection(result.data);
+      const createdCustomer = normalizeCustomerData(result.data);
+      if (!createdCustomer) {
+        setApiError("Customer was created, but the response was incomplete.");
+        return;
+      }
+
+      setCustomerSearchResults([createdCustomer]);
+      applyCustomerSelection(createdCustomer);
       setCustomerCreatedInModal(true);
       setCustomerModalMode("manage");
       showSuccessAlert(
         "Customer Created",
-        `${result.data.name} is ready. You can add a site or route before closing.`,
+        `${createdCustomer.name} is ready. You can add a site or route before closing.`,
       );
     } catch (error) {
       console.error("Error creating customer:", error);
@@ -1585,7 +2137,7 @@ const DirectSales: React.FC = () => {
       }
     };
     getLocation();
-  }, []);
+  }, [directSaleResetCounter]);
 
   const getSelectableProductStock = useCallback(
     (product: ServerProduct) => {
@@ -1612,19 +2164,21 @@ const DirectSales: React.FC = () => {
 
   const handleChangeQuantity = useCallback(
     (product: ServerProduct, delta: number) => {
-      let blockedByStock = false;
       const stockLimit = getSelectableProductStock(product);
+      const current = quantities[product.id] || 0;
+      const next = Math.max(0, current + delta);
+      const capped = Number.isFinite(stockLimit)
+        ? Math.min(next, stockLimit)
+        : next;
+      const blockedByStock =
+        delta > 0 && Number.isFinite(stockLimit) && next > stockLimit;
 
-      setQuantities((prev) => {
-        const current = prev[product.id] || 0;
-        const next = Math.max(0, current + delta);
-        const capped = Number.isFinite(stockLimit)
-          ? Math.min(next, stockLimit)
-          : next;
-        blockedByStock =
-          delta > 0 && Number.isFinite(stockLimit) && next > stockLimit;
-        return { ...prev, [product.id]: capped };
-      });
+      if (capped !== current) {
+        if (directSaleDraft) {
+          clearDirectSaleDownstreamDrafts({ clearProducts: false });
+        }
+        setQuantities((prev) => ({ ...prev, [product.id]: capped }));
+      }
 
       if (blockedByStock) {
         showWarningAlert(
@@ -1633,7 +2187,12 @@ const DirectSales: React.FC = () => {
         );
       }
     },
-    [getSelectableProductStock],
+    [
+      clearDirectSaleDownstreamDrafts,
+      directSaleDraft,
+      getSelectableProductStock,
+      quantities,
+    ],
   );
 
   const selectedProducts = useMemo(() => {
@@ -1654,6 +2213,8 @@ const DirectSales: React.FC = () => {
             label: product.label,
             assetCategory: product.assetCategory,
             image_url: product.image_url,
+            description: product.description,
+            unit: product.unit,
           }),
         ),
     [products],
@@ -1761,48 +2322,29 @@ const DirectSales: React.FC = () => {
         refillProductsById.set(product.id, product);
       });
 
-    const selectedRefillQuantities = new Map<string, number>();
-    products
-      .filter(
-        (product) =>
-          product.type === "refill" || isEmptyBottleSaleProduct(product),
-      )
-      .forEach((product) => {
-        const selectedQuantity = quantities[product.id] || 0;
-        if (selectedQuantity <= 0) return;
-        selectedRefillQuantities.set(
-          product.itemId,
-          (selectedRefillQuantities.get(product.itemId) || 0) +
-            selectedQuantity,
-        );
-      });
-
     return truckBulkItems.reduce<DirectSaleBottleDepositOption[]>(
       (options, bulkItem) => {
-        const refillProduct = refillProductsById.get(bulkItem.id);
-        if (!refillProduct) {
-          return options;
-        }
+        const matchKeys = getTruckBulkItemMatchKeys(bulkItem);
+        const refillProduct = matchKeys
+          .map((key) => refillProductsById.get(key))
+          .find((product): product is ServerProduct => Boolean(product));
 
-        const reservedForSales =
-          selectedRefillQuantities.get(refillProduct.itemId) ||
-          selectedRefillQuantities.get(bulkItem.id) ||
-          0;
-        const availableQuantity = Math.max(
-          0,
-          bulkItem.quantity - reservedForSales,
-        );
+        const availableQuantity = Math.max(0, bulkItem.quantity);
 
-        if (availableQuantity <= 0) {
+        if (
+          availableQuantity <= 0 ||
+          (!bulkItem.isRefillableBottle && !refillProduct)
+        ) {
           return options;
         }
 
         options.push({
           key: `truck:bottle:${bulkItem.id}`,
-          itemId: bulkItem.id,
-          label: toEmptyRefillLabel(refillProduct.label || bulkItem.label),
-          unit: refillProduct.unit,
-          imageUrl: refillProduct.image_url,
+          itemId: bulkItem.emptyBottleId || bulkItem.itemId || bulkItem.id,
+          label: toEmptyRefillLabel(refillProduct?.label || bulkItem.label),
+          unit: refillProduct?.unit ?? bulkItem.unit,
+          imageUrl:
+            refillProduct?.image_url || resolveResourceUrl(bulkItem.image_url),
           availableQuantity,
         });
 
@@ -1810,7 +2352,7 @@ const DirectSales: React.FC = () => {
       },
       [],
     );
-  }, [products, quantities, truckBulkItems]);
+  }, [products, truckBulkItems]);
   const heldAssetOptions = useMemo(
     () => directSaleAssetOptions.filter((asset) => asset.source === "held"),
     [directSaleAssetOptions],
@@ -1864,24 +2406,43 @@ const DirectSales: React.FC = () => {
     });
   }, [directSaleBottleDepositOptions]);
 
+  useEffect(() => {
+    setBottleReturnPrices((previousPrices) => {
+      const nextPrices: Record<string, string> = {};
+
+      directSaleBottleOptions.forEach((bottle) => {
+        nextPrices[bottle.key] = previousPrices[bottle.key] ?? "0.00";
+      });
+
+      return nextPrices;
+    });
+  }, [directSaleBottleOptions]);
+
   const selectedBottleReturnEntries = useMemo(
     () =>
       directSaleBottleOptions
         .map((bottle) => {
           const quantity = bottleReturnQuantities[bottle.key] ?? 0;
           if (quantity <= 0) return null;
+          const priceDraft = bottleReturnPrices[bottle.key] ?? "0.00";
+          const unitPrice = toPriceValue(priceDraft);
           return {
             ...bottle,
             quantity,
+            priceDraft,
+            unitPrice: unitPrice ?? Number.NaN,
           };
         })
         .filter(
           (
             bottle,
-          ): bottle is DirectSaleBottleReturnOption & { quantity: number } =>
-            bottle !== null,
+          ): bottle is DirectSaleBottleReturnOption & {
+            quantity: number;
+            priceDraft: string;
+            unitPrice: number;
+          } => bottle !== null,
         ),
-    [bottleReturnQuantities, directSaleBottleOptions],
+    [bottleReturnPrices, bottleReturnQuantities, directSaleBottleOptions],
   );
   const selectedBottleDepositEntries = useMemo(
     () =>
@@ -1962,7 +2523,7 @@ const DirectSales: React.FC = () => {
     }, 0);
   }, [selectedProducts, quantities]);
 
-  const vat = useMemo(() => subtotal * 0.05, [subtotal]);
+  const vat = useMemo(() => subtotal * VAT_RATE, [subtotal]);
   const totalAmount = useMemo(() => subtotal + vat, [subtotal, vat]);
   const totalAssetActionValue = useMemo(() => {
     return selectedAssetEntries.reduce((sum, asset) => {
@@ -1977,6 +2538,15 @@ const DirectSales: React.FC = () => {
           : sum;
       }, 0),
     [selectedBottleDepositEntries],
+  );
+  const totalBottleReturnValue = useMemo(
+    () =>
+      selectedBottleReturnEntries.reduce((sum, bottle) => {
+        return Number.isFinite(bottle.unitPrice)
+          ? sum + bottle.unitPrice * bottle.quantity
+          : sum;
+      }, 0),
+    [selectedBottleReturnEntries],
   );
   const totalBottleReturnCount = useMemo(
     () =>
@@ -2043,10 +2613,12 @@ const DirectSales: React.FC = () => {
           : `${parts.slice(0, -1).join(", ")} and ${parts[parts.length - 1]}`;
 
       const recordedActionValue =
-        totalAssetActionValue + totalBottleDepositValue;
+        totalAssetActionValue +
+        totalBottleDepositValue +
+        totalBottleReturnValue;
 
       sentences.push(
-        `${summary} will be recorded outside the VAT total. Recorded deposit value: AED ${recordedActionValue.toFixed(2)}.`,
+        `${summary} will be recorded outside the VAT total. Recorded movement value: AED ${recordedActionValue.toFixed(2)}.`,
       );
     }
     if (hasCreditCollectionDraft && parsedCreditCollectionAmount !== null) {
@@ -2062,6 +2634,7 @@ const DirectSales: React.FC = () => {
     selectedAssetEntries.length,
     totalAssetActionValue,
     totalBottleDepositValue,
+    totalBottleReturnValue,
     totalBottleDepositCount,
     totalBottleReturnCount,
   ]);
@@ -2080,6 +2653,51 @@ const DirectSales: React.FC = () => {
     );
     return getSiteLabel(selectedSite, siteIndex >= 0 ? siteIndex : 0);
   }, [customerData, selectedSite]);
+  const selectedSiteSubscriptions = useMemo(
+    () => getSiteSubscriptions(selectedSite),
+    [selectedSite],
+  );
+  const availableSubscriptionsByItemId = useMemo(() => {
+    const map = new Map<string, AvailableSubscriptionItem>();
+    availableSubscriptions.forEach((subscription) => {
+      map.set(subscription.itemId, subscription);
+    });
+    return map;
+  }, [availableSubscriptions]);
+  const subscriptionModalItems = useMemo(() => {
+    const itemsByItemId = new Map<string, AvailableSubscriptionItem>();
+    availableSubscriptions.forEach((subscription) => {
+      itemsByItemId.set(subscription.itemId, subscription);
+    });
+    selectedSiteSubscriptions.forEach((subscription) => {
+      if (!itemsByItemId.has(subscription.itemId)) {
+        itemsByItemId.set(
+          subscription.itemId,
+          buildFallbackSubscriptionItem(subscription),
+        );
+      }
+    });
+    return Array.from(itemsByItemId.values());
+  }, [availableSubscriptions, selectedSiteSubscriptions]);
+  const selectedSubscriptionSummaries = useMemo(
+    () =>
+      selectedSiteSubscriptions.map((subscription) => {
+        const option = availableSubscriptionsByItemId.get(subscription.itemId);
+        return {
+          ...subscription,
+          label:
+            option?.label || `Subscription ${subscription.itemId.slice(0, 8)}`,
+          unit: option?.unit || null,
+        };
+      }),
+    [availableSubscriptionsByItemId, selectedSiteSubscriptions],
+  );
+  const selectedSubscriptionDraftCount = useMemo(
+    () =>
+      Object.values(subscriptionDrafts).filter((draft) => draft.selected)
+        .length,
+    [subscriptionDrafts],
+  );
 
   const handleToggleAssetSelection = useCallback((assetKey: string) => {
     setAssetDrafts((previousDrafts) => {
@@ -2133,6 +2751,16 @@ const DirectSales: React.FC = () => {
     },
     [directSaleBottleOptions],
   );
+  const handleChangeBottleReturnPrice = useCallback(
+    (bottleKey: string, value: string) => {
+      const sanitizedValue = sanitizeMoneyInput(value);
+      setBottleReturnPrices((previousPrices) => ({
+        ...previousPrices,
+        [bottleKey]: sanitizedValue,
+      }));
+    },
+    [],
+  );
   const handleChangeBottleDepositQuantity = useCallback(
     (bottleKey: string, delta: number) => {
       const bottle = directSaleBottleDepositOptions.find(
@@ -2168,6 +2796,342 @@ const DirectSales: React.FC = () => {
     setCreditCollectionAmount(sanitizeMoneyInput(value));
   }, []);
 
+  const handleToggleSubscriptionDraft = useCallback((itemId: string) => {
+    setSubscriptionDrafts((previousDrafts) => {
+      const currentDraft = previousDrafts[itemId] || {
+        selected: false,
+        averageWeeklyQuantity: "",
+      };
+      const nextSelected = !currentDraft.selected;
+      return {
+        ...previousDrafts,
+        [itemId]: {
+          selected: nextSelected,
+          averageWeeklyQuantity:
+            currentDraft.averageWeeklyQuantity || (nextSelected ? "1" : ""),
+        },
+      };
+    });
+  }, []);
+
+  const handleChangeSubscriptionQuantity = useCallback(
+    (itemId: string, value: string) => {
+      const sanitizedValue = sanitizeQuantityInput(value);
+      setSubscriptionDrafts((previousDrafts) => {
+        const currentDraft = previousDrafts[itemId] || {
+          selected: true,
+          averageWeeklyQuantity: "",
+        };
+        return {
+          ...previousDrafts,
+          [itemId]: {
+            ...currentDraft,
+            selected: true,
+            averageWeeklyQuantity: sanitizedValue,
+          },
+        };
+      });
+    },
+    [],
+  );
+
+  const handleAdjustSubscriptionQuantity = useCallback(
+    (itemId: string, delta: number) => {
+      setSubscriptionDrafts((previousDrafts) => {
+        const currentDraft = previousDrafts[itemId] || {
+          selected: true,
+          averageWeeklyQuantity: "1",
+        };
+        const currentQuantity = toPriceValue(
+          currentDraft.averageWeeklyQuantity,
+        );
+        const nextQuantity = Math.max(1, (currentQuantity || 0) + delta);
+        return {
+          ...previousDrafts,
+          [itemId]: {
+            selected: true,
+            averageWeeklyQuantity: String(nextQuantity),
+          },
+        };
+      });
+    },
+    [],
+  );
+
+  const saveSubscriptions = useCallback(async () => {
+    if (!customerData || !selectedSite) {
+      showWarningAlert(
+        "Site Required",
+        "Select a customer site before saving subscriptions.",
+      );
+      return;
+    }
+
+    const selectedSubscriptions = Object.entries(subscriptionDrafts)
+      .filter(([, draft]) => draft.selected)
+      .map(([itemId, draft]) => {
+        const averageWeeklyQuantity = toPriceValue(draft.averageWeeklyQuantity);
+        return {
+          itemId,
+          averageWeeklyQuantity:
+            averageWeeklyQuantity === null
+              ? Number.NaN
+              : Number(averageWeeklyQuantity.toFixed(2)),
+        };
+      });
+
+    if (selectedSubscriptions.length === 0) {
+      showWarningAlert(
+        "Subscription Required",
+        "Select at least one refill item before saving.",
+      );
+      return;
+    }
+
+    const invalidSubscription = selectedSubscriptions.find(
+      (subscription) =>
+        !Number.isFinite(subscription.averageWeeklyQuantity) ||
+        subscription.averageWeeklyQuantity <= 0,
+    );
+    if (invalidSubscription) {
+      const option = availableSubscriptionsByItemId.get(
+        invalidSubscription.itemId,
+      );
+      showWarningAlert(
+        "Quantity Required",
+        `Enter an average weekly quantity for ${option?.label || "the selected item"}.`,
+      );
+      return;
+    }
+
+    const startDate = subscriptionStartDate.trim();
+    const endDate = subscriptionEndDate.trim();
+    const parsedStartDate = startDate ? parseDateInput(startDate) : null;
+    const parsedEndDate = endDate ? parseDateInput(endDate) : null;
+
+    if (startDate && !parsedStartDate) {
+      showWarningAlert("Invalid Date", "Start date must be YYYY-MM-DD.");
+      return;
+    }
+    if (endDate && !parsedEndDate) {
+      showWarningAlert("Invalid Date", "End date must be YYYY-MM-DD.");
+      return;
+    }
+    if (
+      parsedStartDate &&
+      parsedEndDate &&
+      parsedEndDate.getTime() < parsedStartDate.getTime()
+    ) {
+      showWarningAlert("Invalid Date", "End date cannot be before start date.");
+      return;
+    }
+
+    const endpoint = `${API_BASE_URL}/customers/${encodeURIComponent(customerData.id)}/sites/${encodeURIComponent(selectedSite.id)}`;
+    const hasDateFields = Boolean(startDate || endDate);
+    const buildPayload = (includeDates: boolean) => ({
+      subscriptions: selectedSubscriptions.map((subscription) => ({
+        itemId: subscription.itemId,
+        averageWeeklyQuantity: subscription.averageWeeklyQuantity,
+        ...(includeDates && startDate ? { startDate } : {}),
+        ...(includeDates && endDate ? { endDate } : {}),
+      })),
+    });
+
+    const sendSaveRequest = async (includeDates: boolean) => {
+      const response = await authenticatedFetch(endpoint, {
+        method: "PATCH",
+        body: JSON.stringify(buildPayload(includeDates)),
+      });
+      return parseApiResponseWithSoftError<CustomerSite>(response);
+    };
+
+    setIsSavingSubscriptions(true);
+    try {
+      setSubscriptionError(null);
+      let savedWithDates = hasDateFields;
+      let result = await sendSaveRequest(hasDateFields);
+
+      if (!result.ok && hasDateFields) {
+        savedWithDates = false;
+        result = await sendSaveRequest(false);
+      }
+
+      if (!result.ok) {
+        setSubscriptionError(result.error);
+        return;
+      }
+
+      const responseSubscriptions = getSiteSubscriptions(result.data);
+      const fallbackSubscriptions = buildPayload(savedWithDates).subscriptions;
+      const savedSite: CustomerSite = {
+        ...result.data,
+        subscriptions:
+          responseSubscriptions.length > 0
+            ? responseSubscriptions
+            : fallbackSubscriptions,
+      };
+
+      setCustomerData((prev) => {
+        if (!prev) return prev;
+        const nextSites = prev.sites.map((site) =>
+          site.id === savedSite.id ? savedSite : site,
+        );
+        const nextCustomer = { ...prev, sites: nextSites };
+        setCustomerSearchResults((customers) =>
+          customers.map((customer) =>
+            customer.id === nextCustomer.id ? nextCustomer : customer,
+          ),
+        );
+        return nextCustomer;
+      });
+      setSelectedSite(savedSite);
+      setSubscriptionModalVisible(false);
+      showSuccessAlert(
+        "Subscriptions Saved",
+        savedWithDates || !hasDateFields
+          ? "Customer subscriptions have been updated."
+          : "Subscriptions saved. Date fields are not supported by the current API.",
+      );
+      void fetchProducts({ showLoading: false });
+    } catch (error) {
+      console.error("Error saving subscriptions:", error);
+      setSubscriptionError(
+        error instanceof Error
+          ? error.message
+          : "Failed to save subscriptions.",
+      );
+    } finally {
+      setIsSavingSubscriptions(false);
+    }
+  }, [
+    availableSubscriptionsByItemId,
+    customerData,
+    fetchProducts,
+    selectedSite,
+    subscriptionDrafts,
+    subscriptionEndDate,
+    subscriptionStartDate,
+  ]);
+
+  const renderSubscriptionOptionCard = (
+    subscription: AvailableSubscriptionItem,
+  ) => {
+    const draft = subscriptionDrafts[subscription.itemId] || {
+      selected: false,
+      averageWeeklyQuantity: "",
+    };
+    const isSelected = draft.selected;
+
+    return (
+      <View
+        key={subscription.itemId}
+        style={[
+          styles.subscriptionOptionCard,
+          isSelected && styles.subscriptionOptionCardSelected,
+        ]}
+      >
+        <View style={styles.subscriptionOptionTopRow}>
+          <View
+            style={[
+              styles.subscriptionOptionIcon,
+              isSelected && styles.subscriptionOptionIconSelected,
+            ]}
+          >
+            {subscription.image_url ? (
+              <Image
+                source={{ uri: subscription.image_url }}
+                style={styles.productImage}
+                resizeMode="cover"
+              />
+            ) : (
+              <Ionicons
+                name="water-outline"
+                size={18}
+                color={isSelected ? "#FFFFFF" : "#0F766E"}
+              />
+            )}
+          </View>
+
+          <View style={styles.subscriptionOptionCopy}>
+            <Text style={styles.subscriptionOptionTitle} numberOfLines={2}>
+              {subscription.label}
+            </Text>
+            <Text style={styles.subscriptionOptionMeta} numberOfLines={1}>
+              {subscription.unit || "Refill"} · AED{" "}
+              {subscription.pricePerUnit.toFixed(2)}
+            </Text>
+          </View>
+
+          <TouchableOpacity
+            style={[
+              styles.subscriptionToggleButton,
+              isSelected && styles.subscriptionToggleButtonActive,
+            ]}
+            onPress={() => handleToggleSubscriptionDraft(subscription.itemId)}
+            activeOpacity={0.85}
+          >
+            <Ionicons
+              name={isSelected ? "checkmark" : "add"}
+              size={14}
+              color={isSelected ? "#FFFFFF" : "#1D4ED8"}
+            />
+            <Text
+              style={[
+                styles.subscriptionToggleText,
+                isSelected && styles.subscriptionToggleTextActive,
+              ]}
+            >
+              {isSelected ? "Selected" : "Add"}
+            </Text>
+          </TouchableOpacity>
+        </View>
+
+        {isSelected ? (
+          <View style={styles.subscriptionQuantityRow}>
+            <View style={styles.subscriptionQuantityCopy}>
+              <Text style={styles.subscriptionQuantityLabel}>
+                Average weekly quantity
+              </Text>
+              <Text style={styles.subscriptionQuantityHint}>
+                Per week estimate.
+              </Text>
+            </View>
+            <View style={styles.subscriptionStepper}>
+              <TouchableOpacity
+                style={styles.subscriptionStepperButton}
+                onPress={() =>
+                  handleAdjustSubscriptionQuantity(subscription.itemId, -1)
+                }
+                activeOpacity={0.8}
+              >
+                <Ionicons name="remove" size={16} color="#0F766E" />
+              </TouchableOpacity>
+              <TextInput
+                style={styles.subscriptionQuantityInput}
+                value={draft.averageWeeklyQuantity}
+                onChangeText={(value) =>
+                  handleChangeSubscriptionQuantity(subscription.itemId, value)
+                }
+                placeholder="1"
+                placeholderTextColor="#94A3B8"
+                keyboardType="decimal-pad"
+              />
+              <TouchableOpacity
+                style={styles.subscriptionStepperButton}
+                onPress={() =>
+                  handleAdjustSubscriptionQuantity(subscription.itemId, 1)
+                }
+                activeOpacity={0.8}
+              >
+                <Ionicons name="add" size={16} color="#0F766E" />
+              </TouchableOpacity>
+            </View>
+          </View>
+        ) : null}
+      </View>
+    );
+  };
+
   const buildDirectSaleDraft = useCallback(
     (): DirectSaleDraft => ({
       products: productsForDraft,
@@ -2184,6 +3148,7 @@ const DirectSales: React.FC = () => {
       assetDrafts,
       bottleDepositPrices,
       bottleDepositQuantities,
+      bottleReturnPrices,
       bottleReturnQuantities,
       creditCollectionAmount,
       creditCollectionRemark,
@@ -2192,6 +3157,7 @@ const DirectSales: React.FC = () => {
       assetDrafts,
       bottleDepositPrices,
       bottleDepositQuantities,
+      bottleReturnPrices,
       bottleReturnQuantities,
       checkDetails,
       creditCollectionAmount,
@@ -2222,11 +3188,16 @@ const DirectSales: React.FC = () => {
     });
   }, [buildDirectSaleDraft, customerData?.id, router, setDirectSaleDraft]);
 
+  const selectedCustomerWalletBalance = getCustomerWalletBalance(customerData);
+
   const renderProductCard = (
     product: ServerProduct,
     index: number,
     group: ProductGroup,
   ) => {
+    const assetTitle = group === "assets" ? getAssetProductTitle(product) : "";
+    const assetDetail =
+      group === "assets" ? getAssetProductDetail(product) : "";
     const quantity = quantities[product.id] || 0;
     const isSelected = quantity > 0;
     const stockLimit = getSelectableProductStock(product);
@@ -2287,7 +3258,7 @@ const DirectSales: React.FC = () => {
           <View style={styles.productInfo}>
             <View style={styles.productNameContainer}>
               <Text style={styles.productName} numberOfLines={2}>
-                {product.label}
+                {assetTitle || product.label}
               </Text>
               {product.badge && (
                 <View style={styles.badge}>
@@ -2295,6 +3266,11 @@ const DirectSales: React.FC = () => {
                 </View>
               )}
             </View>
+            {group === "assets" && assetDetail ? (
+              <Text style={styles.productAssetIdText} numberOfLines={1}>
+                {assetDetail}
+              </Text>
+            ) : null}
             <Text style={styles.productMetaText}>
               {group === "refill"
                 ? "Refill item"
@@ -2361,6 +3337,8 @@ const DirectSales: React.FC = () => {
     const isSelected = draft.selected;
     const isHeldAsset = isReturnOnlyAsset(asset);
     const imageUrl = asset.imageUrl;
+    const assetTitle = getAssetOptionTitle(asset);
+    const assetDetail = getAssetOptionDetail(asset);
 
     return (
       <View
@@ -2397,7 +3375,7 @@ const DirectSales: React.FC = () => {
           <View style={styles.assetActionContent}>
             <View style={styles.assetActionHeaderRow}>
               <Text style={styles.assetActionLabel} numberOfLines={2}>
-                {asset.label}
+                {assetTitle}
               </Text>
               <View
                 style={[
@@ -2428,6 +3406,11 @@ const DirectSales: React.FC = () => {
                 </Text>
               </View>
             </View>
+            {assetDetail ? (
+              <Text style={styles.assetActionDetail} numberOfLines={1}>
+                {assetDetail}
+              </Text>
+            ) : null}
 
             <View style={styles.modalActionMetaRow}>
               <View
@@ -2449,21 +3432,6 @@ const DirectSales: React.FC = () => {
                   {getAssetSourceLabel(asset.source)}
                 </Text>
               </View>
-              <View style={styles.modalActionMetaPill}>
-                <Text style={styles.modalActionMetaPillText}>
-                  {asset.category || "Asset"}
-                </Text>
-              </View>
-              {asset.serial ? (
-                <View style={styles.modalActionMetaPill}>
-                  <Text
-                    style={styles.modalActionMetaPillText}
-                    numberOfLines={1}
-                  >
-                    S/N {asset.serial}
-                  </Text>
-                </View>
-              ) : null}
             </View>
           </View>
         </View>
@@ -2659,6 +3627,7 @@ const DirectSales: React.FC = () => {
   };
   const renderBottleReturnCard = (bottle: DirectSaleBottleReturnOption) => {
     const quantity = bottleReturnQuantities[bottle.key] ?? 0;
+    const price = bottleReturnPrices[bottle.key] ?? "0.00";
     const isSelected = quantity > 0;
     const isMaxQuantity = quantity >= bottle.availableQuantity;
 
@@ -2737,49 +3706,73 @@ const DirectSales: React.FC = () => {
           </View>
         </View>
 
-        <View
-          style={[
-            styles.quantityControl,
-            styles.modalActionQuantityControlCompact,
-          ]}
-        >
-          <TouchableOpacity
-            style={[
-              styles.quantityButton,
-              styles.modalActionQuantityButtonCompact,
-              quantity === 0 && styles.quantityButtonDisabled,
-            ]}
-            onPress={() => handleChangeBottleReturnQuantity(bottle.key, -1)}
-            disabled={quantity === 0}
-            activeOpacity={0.8}
-          >
-            <Ionicons
-              name="remove"
-              size={18}
-              color={quantity === 0 ? "#CBD5E1" : "#0F766E"}
-            />
-          </TouchableOpacity>
-          <Text
-            style={[styles.quantityText, styles.modalActionQuantityTextCompact]}
-          >
-            {quantity}
-          </Text>
-          <TouchableOpacity
-            style={[
-              styles.quantityButton,
-              styles.modalActionQuantityButtonCompact,
-              isMaxQuantity && styles.quantityButtonDisabled,
-            ]}
-            onPress={() => handleChangeBottleReturnQuantity(bottle.key, 1)}
-            disabled={isMaxQuantity}
-            activeOpacity={0.8}
-          >
-            <Ionicons
-              name="add"
-              size={18}
-              color={isMaxQuantity ? "#CBD5E1" : "#0F766E"}
-            />
-          </TouchableOpacity>
+        <View style={styles.assetActionControls}>
+          <View style={styles.assetActionFooterRow}>
+            <View style={styles.assetPriceEditor}>
+              <Text style={styles.assetPriceLabel}>Value</Text>
+              <View style={styles.assetPriceInputRow}>
+                <Text style={styles.assetPricePrefix}>AED</Text>
+                <TextInput
+                  style={styles.assetPriceInput}
+                  value={price}
+                  onChangeText={(value) =>
+                    handleChangeBottleReturnPrice(bottle.key, value)
+                  }
+                  placeholder="0.00"
+                  placeholderTextColor="#94A3B8"
+                  keyboardType="decimal-pad"
+                />
+              </View>
+            </View>
+
+            <View
+              style={[
+                styles.quantityControl,
+                styles.modalActionQuantityControlCompact,
+              ]}
+            >
+              <TouchableOpacity
+                style={[
+                  styles.quantityButton,
+                  styles.modalActionQuantityButtonCompact,
+                  quantity === 0 && styles.quantityButtonDisabled,
+                ]}
+                onPress={() => handleChangeBottleReturnQuantity(bottle.key, -1)}
+                disabled={quantity === 0}
+                activeOpacity={0.8}
+              >
+                <Ionicons
+                  name="remove"
+                  size={18}
+                  color={quantity === 0 ? "#CBD5E1" : "#0F766E"}
+                />
+              </TouchableOpacity>
+              <Text
+                style={[
+                  styles.quantityText,
+                  styles.modalActionQuantityTextCompact,
+                ]}
+              >
+                {quantity}
+              </Text>
+              <TouchableOpacity
+                style={[
+                  styles.quantityButton,
+                  styles.modalActionQuantityButtonCompact,
+                  isMaxQuantity && styles.quantityButtonDisabled,
+                ]}
+                onPress={() => handleChangeBottleReturnQuantity(bottle.key, 1)}
+                disabled={isMaxQuantity}
+                activeOpacity={0.8}
+              >
+                <Ionicons
+                  name="add"
+                  size={18}
+                  color={isMaxQuantity ? "#CBD5E1" : "#0F766E"}
+                />
+              </TouchableOpacity>
+            </View>
+          </View>
         </View>
       </View>
     );
@@ -2878,6 +3871,33 @@ const DirectSales: React.FC = () => {
                     <Text style={styles.selectedCustomerMeta}>
                       {customerData.phone}
                     </Text>
+                    <View style={styles.customerBalanceRow}>
+                      <Ionicons
+                        name={
+                          selectedCustomerWalletBalance < 0
+                            ? "alert-circle-outline"
+                            : "wallet-outline"
+                        }
+                        size={13}
+                        color={
+                          selectedCustomerWalletBalance < 0
+                            ? "#DC2626"
+                            : "#0F766E"
+                        }
+                      />
+                      <Text
+                        style={[
+                          styles.customerBalanceText,
+                          selectedCustomerWalletBalance < 0
+                            ? styles.customerBalanceNegative
+                            : styles.customerBalancePositive,
+                        ]}
+                      >
+                        {formatCustomerWalletBalance(
+                          selectedCustomerWalletBalance,
+                        )}
+                      </Text>
+                    </View>
                     <Text style={styles.selectedCustomerMeta}>
                       {customerData.sites.length} site
                       {customerData.sites.length === 1 ? "" : "s"}
@@ -2928,6 +3948,79 @@ const DirectSales: React.FC = () => {
               </View>
             )}
           </View>
+
+          {customerData ? (
+            <View style={styles.section}>
+              <View style={styles.subscriptionLauncherPanel}>
+                <TouchableOpacity
+                  style={[
+                    styles.subscriptionLauncherButton,
+                    !selectedSite && styles.subscriptionLauncherButtonDisabled,
+                  ]}
+                  onPress={openSubscriptionModal}
+                  activeOpacity={0.86}
+                >
+                  <View style={styles.subscriptionLauncherIcon}>
+                    <Ionicons name="repeat-outline" size={18} color="#0F766E" />
+                  </View>
+                  <View style={styles.subscriptionLauncherCopy}>
+                    <Text style={styles.subscriptionLauncherTitle}>
+                      Subscriptions
+                    </Text>
+                    <Text
+                      style={styles.subscriptionLauncherText}
+                      numberOfLines={1}
+                    >
+                      {selectedSite
+                        ? selectedSiteSubscriptions.length > 0
+                          ? `${selectedSiteSubscriptions.length} active on this site`
+                          : "No active subscription on this site"
+                        : "Select a site first"}
+                    </Text>
+                  </View>
+                  <View style={styles.subscriptionLauncherAction}>
+                    <Text style={styles.subscriptionLauncherActionText}>
+                      {selectedSiteSubscriptions.length > 0 ? "Edit" : "Create"}
+                    </Text>
+                    <Ionicons
+                      name="chevron-forward"
+                      size={14}
+                      color="#1D4ED8"
+                    />
+                  </View>
+                </TouchableOpacity>
+
+                {selectedSubscriptionSummaries.length > 0 ? (
+                  <View style={styles.subscriptionSummaryList}>
+                    {selectedSubscriptionSummaries.map((subscription) => (
+                      <View
+                        key={subscription.itemId}
+                        style={styles.subscriptionSummaryChip}
+                      >
+                        <Ionicons
+                          name="water-outline"
+                          size={13}
+                          color="#0F766E"
+                        />
+                        <Text
+                          style={styles.subscriptionSummaryText}
+                          numberOfLines={1}
+                        >
+                          {subscription.label}
+                        </Text>
+                        <Text style={styles.subscriptionSummaryQty}>
+                          {formatSubscriptionQuantity(
+                            subscription.averageWeeklyQuantity,
+                          )}
+                          /wk
+                        </Text>
+                      </View>
+                    ))}
+                  </View>
+                ) : null}
+              </View>
+            </View>
+          ) : null}
 
           <View style={styles.section}>
             <TouchableOpacity
@@ -3788,25 +4881,38 @@ const DirectSales: React.FC = () => {
               contentContainerStyle={styles.modalResultsContent}
               keyboardShouldPersistTaps="handled"
             >
-              {customerSearchResults.map((customer) => (
-                <TouchableOpacity
-                  key={customer.id}
-                  style={styles.customerMatchCard}
-                  onPress={() => handleCustomerPicked(customer)}
-                  activeOpacity={0.8}
-                >
-                  <Text style={styles.customerMatchName} numberOfLines={1}>
-                    {customer.name}
-                  </Text>
-                  <Text style={styles.customerMatchMeta} numberOfLines={1}>
-                    {customer.phone}
-                  </Text>
-                  <Text style={styles.customerMatchMeta}>
-                    {customer.sites.length} site
-                    {customer.sites.length === 1 ? "" : "s"}
-                  </Text>
-                </TouchableOpacity>
-              ))}
+              {customerSearchResults.map((customer) => {
+                const walletBalance = getCustomerWalletBalance(customer);
+                return (
+                  <TouchableOpacity
+                    key={customer.id}
+                    style={styles.customerMatchCard}
+                    onPress={() => handleCustomerPicked(customer)}
+                    activeOpacity={0.8}
+                  >
+                    <Text style={styles.customerMatchName} numberOfLines={1}>
+                      {customer.name}
+                    </Text>
+                    <Text style={styles.customerMatchMeta} numberOfLines={1}>
+                      {customer.phone}
+                    </Text>
+                    <Text
+                      style={[
+                        styles.customerMatchBalance,
+                        walletBalance < 0
+                          ? styles.customerBalanceNegative
+                          : styles.customerBalancePositive,
+                      ]}
+                    >
+                      {formatCustomerWalletBalance(walletBalance)}
+                    </Text>
+                    <Text style={styles.customerMatchMeta}>
+                      {customer.sites.length} site
+                      {customer.sites.length === 1 ? "" : "s"}
+                    </Text>
+                  </TouchableOpacity>
+                );
+              })}
             </ScrollView>
           ) : hasSearchedCustomers ? (
             <View style={styles.modalStateCard}>
@@ -3827,6 +4933,158 @@ const DirectSales: React.FC = () => {
             </Text>
           )}
         </View>
+      </ActionModal>
+
+      <ActionModal
+        visible={subscriptionModalVisible}
+        title="Subscriptions"
+        onClose={closeSubscriptionModal}
+        topInset={insets.top}
+        bottomInset={insets.bottom}
+      >
+        <ScrollView
+          style={styles.modalResultsList}
+          contentContainerStyle={styles.subscriptionModalContent}
+          keyboardShouldPersistTaps="handled"
+          showsVerticalScrollIndicator={false}
+        >
+          <View style={styles.subscriptionContextCard}>
+            <View style={styles.subscriptionContextIcon}>
+              <Ionicons name="location-outline" size={18} color="#1D4ED8" />
+            </View>
+            <View style={styles.subscriptionContextCopy}>
+              <Text style={styles.subscriptionContextTitle} numberOfLines={1}>
+                {selectedSite
+                  ? selectedSiteLabel || getSiteLabel(selectedSite, 0)
+                  : "No site selected"}
+              </Text>
+              <Text style={styles.subscriptionContextText} numberOfLines={2}>
+                {selectedSite
+                  ? formatSiteAddress(selectedSite) || customerData?.name || ""
+                  : "Select a site before saving."}
+              </Text>
+            </View>
+            <View style={styles.subscriptionContextBadge}>
+              <Text style={styles.subscriptionContextBadgeText}>
+                {selectedSubscriptionDraftCount}
+              </Text>
+            </View>
+          </View>
+
+          <View style={styles.subscriptionScheduleCard}>
+            <Text style={styles.subscriptionSectionTitle}>Schedule</Text>
+            <View style={styles.subscriptionDateRow}>
+              <View style={styles.subscriptionDateField}>
+                <Text style={styles.subscriptionDateLabel}>Start Date</Text>
+                <View style={styles.subscriptionDateInputWrapper}>
+                  <Ionicons name="calendar-outline" size={15} color="#64748B" />
+                  <TextInput
+                    style={styles.subscriptionDateInput}
+                    value={subscriptionStartDate}
+                    onChangeText={(value) =>
+                      setSubscriptionStartDate(sanitizeDateInput(value))
+                    }
+                    placeholder="YYYY-MM-DD"
+                    placeholderTextColor="#94A3B8"
+                  />
+                </View>
+              </View>
+              <View style={styles.subscriptionDateField}>
+                <Text style={styles.subscriptionDateLabel}>End Date</Text>
+                <View style={styles.subscriptionDateInputWrapper}>
+                  <Ionicons
+                    name="calendar-clear-outline"
+                    size={15}
+                    color="#64748B"
+                  />
+                  <TextInput
+                    style={styles.subscriptionDateInput}
+                    value={subscriptionEndDate}
+                    onChangeText={(value) =>
+                      setSubscriptionEndDate(sanitizeDateInput(value))
+                    }
+                    placeholder="Optional"
+                    placeholderTextColor="#94A3B8"
+                  />
+                </View>
+              </View>
+            </View>
+          </View>
+
+          {subscriptionError ? (
+            <View style={styles.assetSectionErrorBox}>
+              <Ionicons name="alert-circle-outline" size={16} color="#DC2626" />
+              <Text style={styles.assetSectionErrorText}>
+                {subscriptionError}
+              </Text>
+            </View>
+          ) : null}
+
+          <View style={styles.subscriptionOptionsSection}>
+            <View style={styles.assetActionsSectionHeader}>
+              <Text style={styles.subscriptionSectionTitle}>Refill Items</Text>
+              <View style={styles.productCategoryCountBadge}>
+                <Text style={styles.productCategoryCount}>
+                  {subscriptionModalItems.length}
+                </Text>
+              </View>
+            </View>
+
+            {isLoadingSubscriptions ? (
+              <View style={styles.modalStateCard}>
+                <ActivityIndicator size="small" color="#1E40AF" />
+                <Text style={styles.modalStateText}>
+                  Loading subscription items...
+                </Text>
+              </View>
+            ) : subscriptionModalItems.length > 0 ? (
+              <View style={styles.subscriptionOptionsList}>
+                {subscriptionModalItems.map((subscription) =>
+                  renderSubscriptionOptionCard(subscription),
+                )}
+              </View>
+            ) : (
+              <View style={styles.assetSectionEmptyCard}>
+                <Ionicons name="water-outline" size={18} color="#94A3B8" />
+                <Text style={styles.assetSectionEmptyText}>
+                  No subscription items available.
+                </Text>
+              </View>
+            )}
+          </View>
+
+          <View style={styles.subscriptionModalActionRow}>
+            <TouchableOpacity
+              style={styles.siteFormCancelButton}
+              onPress={closeSubscriptionModal}
+              activeOpacity={0.8}
+            >
+              <Text style={styles.siteFormCancelText}>Cancel</Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={[
+                styles.siteFormSaveButton,
+                (isSavingSubscriptions ||
+                  isLoadingSubscriptions ||
+                  subscriptionModalItems.length === 0) &&
+                  styles.subscriptionSaveButtonDisabled,
+              ]}
+              onPress={saveSubscriptions}
+              disabled={
+                isSavingSubscriptions ||
+                isLoadingSubscriptions ||
+                subscriptionModalItems.length === 0
+              }
+              activeOpacity={0.8}
+            >
+              {isSavingSubscriptions ? (
+                <ActivityIndicator size="small" color="#FFFFFF" />
+              ) : (
+                <Text style={styles.siteFormSaveText}>Save</Text>
+              )}
+            </TouchableOpacity>
+          </View>
+        </ScrollView>
       </ActionModal>
 
       <ActionModal
@@ -3915,6 +5173,29 @@ const DirectSales: React.FC = () => {
               <Text style={styles.selectedCustomerMeta}>
                 {customerData.phone}
               </Text>
+              <View style={styles.customerBalanceRow}>
+                <Ionicons
+                  name={
+                    selectedCustomerWalletBalance < 0
+                      ? "alert-circle-outline"
+                      : "wallet-outline"
+                  }
+                  size={13}
+                  color={
+                    selectedCustomerWalletBalance < 0 ? "#DC2626" : "#0F766E"
+                  }
+                />
+                <Text
+                  style={[
+                    styles.customerBalanceText,
+                    selectedCustomerWalletBalance < 0
+                      ? styles.customerBalanceNegative
+                      : styles.customerBalancePositive,
+                  ]}
+                >
+                  {formatCustomerWalletBalance(selectedCustomerWalletBalance)}
+                </Text>
+              </View>
               <Text style={styles.selectedCustomerMeta}>
                 {customerData.sites.length} site
                 {customerData.sites.length === 1 ? "" : "s"}
@@ -4542,6 +5823,11 @@ const styles = StyleSheet.create({
     color: "#64748B",
     marginTop: 2,
   },
+  customerMatchBalance: {
+    fontSize: 11,
+    fontWeight: "700",
+    marginTop: 4,
+  },
   customerMatchMetaActive: {
     color: "#1E3A8A",
   },
@@ -4570,6 +5856,27 @@ const styles = StyleSheet.create({
     marginTop: 3,
     fontSize: 12,
     color: "#475569",
+  },
+  customerBalanceRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    alignSelf: "flex-start",
+    gap: 5,
+    marginTop: 7,
+    borderRadius: 999,
+    backgroundColor: "#FFFFFF",
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+  },
+  customerBalanceText: {
+    fontSize: 11,
+    fontWeight: "700",
+  },
+  customerBalancePositive: {
+    color: "#0F766E",
+  },
+  customerBalanceNegative: {
+    color: "#DC2626",
   },
   manageCustomerButton: {
     flexDirection: "row",
@@ -4751,6 +6058,327 @@ const styles = StyleSheet.create({
     fontSize: 12,
     fontWeight: "700",
     color: "#FFFFFF",
+  },
+  subscriptionLauncherPanel: {
+    gap: 8,
+  },
+  subscriptionLauncherButton: {
+    minHeight: 62,
+    borderRadius: 14,
+    borderWidth: 1,
+    borderColor: "#CCFBF1",
+    backgroundColor: "#F8FAFC",
+    flexDirection: "row",
+    alignItems: "center",
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+  },
+  subscriptionLauncherButtonDisabled: {
+    opacity: 0.72,
+  },
+  subscriptionLauncherIcon: {
+    width: 38,
+    height: 38,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: "#A7F3D0",
+    backgroundColor: "#ECFDF5",
+    alignItems: "center",
+    justifyContent: "center",
+    marginRight: 10,
+  },
+  subscriptionLauncherCopy: {
+    flex: 1,
+    gap: 3,
+    marginRight: 8,
+  },
+  subscriptionLauncherTitle: {
+    fontSize: 14,
+    fontWeight: "700",
+    color: "#0F172A",
+  },
+  subscriptionLauncherText: {
+    fontSize: 12,
+    color: "#64748B",
+  },
+  subscriptionLauncherAction: {
+    minHeight: 32,
+    borderRadius: 999,
+    borderWidth: 1,
+    borderColor: "#BFDBFE",
+    backgroundColor: "#EFF6FF",
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 4,
+    paddingHorizontal: 10,
+  },
+  subscriptionLauncherActionText: {
+    fontSize: 12,
+    fontWeight: "700",
+    color: "#1D4ED8",
+  },
+  subscriptionSummaryList: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    gap: 8,
+  },
+  subscriptionSummaryChip: {
+    maxWidth: "100%",
+    minHeight: 34,
+    borderRadius: 999,
+    borderWidth: 1,
+    borderColor: "#A7F3D0",
+    backgroundColor: "#ECFDF5",
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+  },
+  subscriptionSummaryText: {
+    maxWidth: 180,
+    fontSize: 11,
+    fontWeight: "700",
+    color: "#0F766E",
+  },
+  subscriptionSummaryQty: {
+    fontSize: 11,
+    fontWeight: "800",
+    color: "#134E4A",
+  },
+  subscriptionModalContent: {
+    paddingBottom: 8,
+    gap: 12,
+  },
+  subscriptionContextCard: {
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: "#DBEAFE",
+    backgroundColor: "#F8FAFC",
+    padding: 14,
+    flexDirection: "row",
+    alignItems: "center",
+  },
+  subscriptionContextIcon: {
+    width: 40,
+    height: 40,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: "#BFDBFE",
+    backgroundColor: "#EFF6FF",
+    alignItems: "center",
+    justifyContent: "center",
+    marginRight: 10,
+  },
+  subscriptionContextCopy: {
+    flex: 1,
+    gap: 3,
+    marginRight: 10,
+  },
+  subscriptionContextTitle: {
+    fontSize: 14,
+    fontWeight: "700",
+    color: "#0F172A",
+  },
+  subscriptionContextText: {
+    fontSize: 12,
+    lineHeight: 17,
+    color: "#64748B",
+  },
+  subscriptionContextBadge: {
+    minWidth: 30,
+    height: 30,
+    borderRadius: 15,
+    backgroundColor: "#1D4ED8",
+    alignItems: "center",
+    justifyContent: "center",
+    paddingHorizontal: 8,
+  },
+  subscriptionContextBadgeText: {
+    fontSize: 12,
+    fontWeight: "800",
+    color: "#FFFFFF",
+  },
+  subscriptionScheduleCard: {
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: "#E2E8F0",
+    backgroundColor: "#FFFFFF",
+    padding: 14,
+    gap: 10,
+  },
+  subscriptionSectionTitle: {
+    fontSize: 14,
+    fontWeight: "700",
+    color: "#0F172A",
+  },
+  subscriptionDateRow: {
+    flexDirection: "row",
+    gap: 10,
+  },
+  subscriptionDateField: {
+    flex: 1,
+    gap: 6,
+  },
+  subscriptionDateLabel: {
+    fontSize: 10,
+    fontWeight: "700",
+    color: "#64748B",
+    textTransform: "uppercase",
+    letterSpacing: 0.35,
+  },
+  subscriptionDateInputWrapper: {
+    minHeight: 42,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: "#CBD5E1",
+    backgroundColor: "#F8FAFC",
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+    paddingHorizontal: 10,
+  },
+  subscriptionDateInput: {
+    flex: 1,
+    paddingVertical: 0,
+    fontSize: 13,
+    fontWeight: "700",
+    color: "#0F172A",
+  },
+  subscriptionOptionsSection: {
+    gap: 10,
+  },
+  subscriptionOptionsList: {
+    gap: 10,
+  },
+  subscriptionOptionCard: {
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: "#E2E8F0",
+    backgroundColor: "#FFFFFF",
+    padding: 12,
+    gap: 12,
+  },
+  subscriptionOptionCardSelected: {
+    borderColor: "#5EEAD4",
+    backgroundColor: "#F0FDFA",
+  },
+  subscriptionOptionTopRow: {
+    flexDirection: "row",
+    alignItems: "center",
+  },
+  subscriptionOptionIcon: {
+    width: 44,
+    height: 44,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: "#A7F3D0",
+    backgroundColor: "#ECFDF5",
+    alignItems: "center",
+    justifyContent: "center",
+    overflow: "hidden",
+    marginRight: 10,
+  },
+  subscriptionOptionIconSelected: {
+    backgroundColor: "#0F766E",
+    borderColor: "#0F766E",
+  },
+  subscriptionOptionCopy: {
+    flex: 1,
+    gap: 3,
+    marginRight: 8,
+  },
+  subscriptionOptionTitle: {
+    fontSize: 13,
+    lineHeight: 18,
+    fontWeight: "700",
+    color: "#0F172A",
+  },
+  subscriptionOptionMeta: {
+    fontSize: 11,
+    color: "#64748B",
+    fontWeight: "600",
+  },
+  subscriptionToggleButton: {
+    minHeight: 34,
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: "#BFDBFE",
+    backgroundColor: "#EFF6FF",
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 5,
+    paddingHorizontal: 10,
+  },
+  subscriptionToggleButtonActive: {
+    backgroundColor: "#0F766E",
+    borderColor: "#0F766E",
+  },
+  subscriptionToggleText: {
+    fontSize: 11,
+    fontWeight: "700",
+    color: "#1D4ED8",
+  },
+  subscriptionToggleTextActive: {
+    color: "#FFFFFF",
+  },
+  subscriptionQuantityRow: {
+    borderTopWidth: 1,
+    borderTopColor: "#CCFBF1",
+    paddingTop: 12,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 10,
+  },
+  subscriptionQuantityCopy: {
+    flex: 1,
+    gap: 3,
+  },
+  subscriptionQuantityLabel: {
+    fontSize: 11,
+    fontWeight: "700",
+    color: "#0F172A",
+  },
+  subscriptionQuantityHint: {
+    fontSize: 11,
+    color: "#64748B",
+  },
+  subscriptionStepper: {
+    flexDirection: "row",
+    alignItems: "center",
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: "#99F6E4",
+    backgroundColor: "#FFFFFF",
+    padding: 3,
+  },
+  subscriptionStepperButton: {
+    width: 30,
+    height: 30,
+    borderRadius: 9,
+    backgroundColor: "#ECFDF5",
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  subscriptionQuantityInput: {
+    minWidth: 42,
+    maxWidth: 58,
+    paddingHorizontal: 6,
+    paddingVertical: 0,
+    textAlign: "center",
+    fontSize: 14,
+    fontWeight: "800",
+    color: "#0F766E",
+  },
+  subscriptionModalActionRow: {
+    flexDirection: "row",
+    gap: 10,
+    marginTop: 2,
+  },
+  subscriptionSaveButtonDisabled: {
+    opacity: 0.65,
   },
   routeAssignCard: {
     marginTop: 10,
@@ -5461,6 +7089,12 @@ const styles = StyleSheet.create({
     color: "#0F172A",
     flex: 1,
   },
+  productAssetIdText: {
+    marginBottom: 5,
+    fontSize: 10,
+    fontWeight: "600",
+    color: "#64748B",
+  },
   modalActionCardCompact: {
     borderRadius: 14,
     padding: 12,
@@ -5706,6 +7340,12 @@ const styles = StyleSheet.create({
     lineHeight: 18,
     fontWeight: "700",
     color: "#0F172A",
+  },
+  assetActionDetail: {
+    fontSize: 11,
+    lineHeight: 15,
+    fontWeight: "600",
+    color: "#64748B",
   },
   assetSourceBadge: {
     borderRadius: 999,

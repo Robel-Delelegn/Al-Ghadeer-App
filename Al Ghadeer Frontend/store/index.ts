@@ -97,8 +97,99 @@ interface CartItem {
   quantity: number;
   currency: string;
   category?: string; // Product category
+  assetCategory?: string | null;
   type?: "5L" | "10L" | "300ml" | "1L" | "20L" | "dispenser"; // Optional - not used in UI
 }
+
+const normalizeProductMatchKey = (value?: string | null) =>
+  (value || "")
+    .trim()
+    .toLowerCase()
+    .replace(/[\s_-]+/g, "");
+
+const getProductPrice = (product: Product) =>
+  typeof product.pricing === "number" && Number.isFinite(product.pricing)
+    ? product.pricing
+    : 0;
+
+const getProductStockLimit = (product: Product): number | null =>
+  typeof product.loaded_quantity === "number" &&
+  Number.isFinite(product.loaded_quantity)
+    ? Math.max(0, product.loaded_quantity)
+    : null;
+
+const hasMatchingProductCategory = (item: CartItem, product: Product) => {
+  const cartCategory = normalizeProductMatchKey(item.category);
+  const productCategory = normalizeProductMatchKey(product.category);
+
+  if (cartCategory && productCategory) {
+    return cartCategory === productCategory;
+  }
+
+  return (
+    normalizeProductMatchKey(item.item_type) ===
+    normalizeProductMatchKey(product.item_type)
+  );
+};
+
+const matchesCartItemToProduct = (item: CartItem, product: Product) => {
+  if (item.id === product.id) return true;
+  if (!item.item_id || !product.item_id || item.item_id !== product.item_id) {
+    return false;
+  }
+
+  // Assets can have multiple physical units with the same item_id. Keep those
+  // tied to their exact generated id so a stale asset selection cannot jump to
+  // a different serial number after a refresh.
+  if (item.item_type === "asset" || product.item_type === "asset") {
+    return false;
+  }
+
+  return hasMatchingProductCategory(item, product);
+};
+
+const toCartItem = (
+  product: Product,
+  quantity: number,
+  previous?: CartItem,
+): CartItem => ({
+  ...previous,
+  id: product.id,
+  item_id: product.item_id,
+  item_type: product.item_type,
+  name: product.name,
+  image: product.image_url ? { uri: product.image_url } : null,
+  price: getProductPrice(product),
+  quantity,
+  currency: previous?.currency || "AED",
+  category: product.category,
+  assetCategory: product.assetCategory ?? null,
+});
+
+const syncCartItemsWithProducts = (
+  cartItems: CartItem[],
+  products: Product[],
+) => {
+  if (cartItems.length === 0) return cartItems;
+  if (products.length === 0) return [];
+
+  return cartItems.flatMap((item) => {
+    const latestProduct = products.find((product) =>
+      matchesCartItemToProduct(item, product),
+    );
+    if (!latestProduct) return [];
+
+    const stockLimit = getProductStockLimit(latestProduct);
+    const quantity =
+      stockLimit === null
+        ? Math.max(0, item.quantity || 0)
+        : Math.min(Math.max(0, item.quantity || 0), stockLimit);
+
+    if (quantity <= 0) return [];
+
+    return [toCartItem(latestProduct, quantity, item)];
+  });
+};
 
 type SelectedPaymentMethod = "cash" | "wallet" | "credit" | "check";
 
@@ -108,16 +199,27 @@ export interface DirectSaleDraftProduct {
   id: string;
   type: "retail" | "refill" | "assets" | "other";
   itemId: string;
+  assetId?: string;
+  assetDisplayId?: string | null;
+  assetDisplayLabel?: string | null;
   label: string;
   pricePerUnit: number;
   unit: string | null;
   image_url: string | null;
+  description: string | null;
   category?: string | null;
   assetCategory?: string | null;
   originalPrice?: number;
   badge?: string;
   loaded_quantity?: number | string;
   available_stock?: number | string;
+}
+
+export interface DirectSaleDraftSiteSubscription {
+  itemId: string;
+  averageWeeklyQuantity: number;
+  startDate?: string | null;
+  endDate?: string | null;
 }
 
 export interface DirectSaleDraftCustomerSite {
@@ -132,12 +234,14 @@ export interface DirectSaleDraftCustomerSite {
   flatNo: string | null;
   deliveryInstructions: string | null;
   routeId: string | null;
+  subscriptions?: DirectSaleDraftSiteSubscription[];
 }
 
 export interface DirectSaleDraftCustomer {
   id: string;
   name: string;
   phone: string;
+  walletBalance: number;
   sites: DirectSaleDraftCustomerSite[];
 }
 
@@ -174,6 +278,7 @@ export interface DirectSaleDraft {
   assetDrafts: Record<string, DirectSaleDraftAssetDraft>;
   bottleDepositPrices: Record<string, string>;
   bottleDepositQuantities: Record<string, number>;
+  bottleReturnPrices: Record<string, string>;
   bottleReturnQuantities: Record<string, number>;
   creditCollectionAmount: string;
   creditCollectionRemark: string;
@@ -205,6 +310,7 @@ interface OrderStore {
   selectedPaymentMethod: SelectedPaymentMethod;
   lastConfirmPaymentResponse: LastConfirmPaymentResponse | null;
   directSaleDraft: DirectSaleDraft | null;
+  directSaleResetCounter: number;
 
   // Order actions
   selectOrder: (id: string) => void;
@@ -270,6 +376,7 @@ export const useOrderStore = create<OrderStore>()(
       selectedPaymentMethod: "cash" as SelectedPaymentMethod,
       lastConfirmPaymentResponse: null,
       directSaleDraft: null,
+      directSaleResetCounter: 0,
 
       // Order management actions
       setAssignedOrders: (orders) => set(() => ({ assignedOrders: orders })),
@@ -374,7 +481,10 @@ export const useOrderStore = create<OrderStore>()(
 
       // Product management actions
       setProducts: (products: Product[]) => {
-        set({ products });
+        set((state) => ({
+          products,
+          cartItems: syncCartItemsWithProducts(state.cartItems, products),
+        }));
       },
 
       addToCart: (product: Product, quantity: number) => {
@@ -421,7 +531,7 @@ export const useOrderStore = create<OrderStore>()(
             return {
               cartItems: state.cartItems.map((item) =>
                 item.id === product.id
-                  ? { ...item, quantity: finalQuantity }
+                  ? toCartItem(product, finalQuantity, item)
                   : item,
               ),
             };
@@ -430,18 +540,7 @@ export const useOrderStore = create<OrderStore>()(
           return {
             cartItems: [
               ...state.cartItems,
-              {
-                id: product.id,
-                item_id: product.item_id,
-                item_type: product.item_type,
-                name: product.name,
-                image: product.image_url ? { uri: product.image_url } : null,
-                price:
-                  typeof product.pricing === "number" ? product.pricing : 0,
-                quantity: actualQuantity,
-                currency: "AED",
-                category: product.category, // Include category from product
-              },
+              toCartItem(product, actualQuantity),
             ],
           };
         });
@@ -518,7 +617,10 @@ export const useOrderStore = create<OrderStore>()(
         set({ directSaleDraft: draft });
       },
       clearDirectSaleDraft: () => {
-        set({ directSaleDraft: null });
+        set((state) => ({
+          directSaleDraft: null,
+          directSaleResetCounter: state.directSaleResetCounter + 1,
+        }));
       },
 
       // Utility actions
@@ -534,13 +636,24 @@ export const useOrderStore = create<OrderStore>()(
     {
       name: "order-storage",
       storage: createJSONStorage(() => AsyncStorage),
+      merge: (persistedState, currentState) => {
+        const persisted = persistedState as Partial<OrderStore> | null;
+
+        return {
+          ...currentState,
+          currentDriver: persisted?.currentDriver ?? currentState.currentDriver,
+          completedOrders:
+            persisted?.completedOrders ?? currentState.completedOrders,
+          selectedOrder: persisted?.selectedOrder ?? currentState.selectedOrder,
+          products: [],
+          cartItems: [],
+          directSaleDraft: null,
+        };
+      },
       partialize: (state) => ({
-        cartItems: state.cartItems,
         currentDriver: state.currentDriver,
-        products: state.products,
         completedOrders: state.completedOrders,
         selectedOrder: state.selectedOrder,
-        directSaleDraft: state.directSaleDraft,
       }),
     },
   ),

@@ -1,6 +1,6 @@
-import { useAuthStore } from '@/store/auth';
-import { useRouter } from 'expo-router';
-import { Text, TouchableOpacity } from 'react-native';
+import { useAuthStore } from "@/store/auth";
+import { useRouter } from "expo-router";
+import { Text, TouchableOpacity } from "react-native";
 
 export const SignOutButton = () => {
   const { signOut } = useAuthStore();
@@ -10,9 +10,9 @@ export const SignOutButton = () => {
     try {
       await signOut();
       // Redirect to auth page
-      router.replace('/');
+      router.replace("/");
     } catch (err) {
-      console.error('Sign out error:', err);
+      console.error("Sign out error:", err);
     }
   };
 

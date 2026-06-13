@@ -5,7 +5,7 @@ import { parseApiResponseWithSoftError } from "@/utils/api";
 import { parseDeliveryTasks } from "@/utils/deliveries";
 import { getDriverRequestId } from "@/utils/driverIdentity";
 import { getTotalItemsCount, normalizeOrderProducts } from "@/utils/orderUtils";
-import { resolveResourceUrl } from "@/utils/resources";
+import { getApiBaseUrl, resolveResourceUrl } from "@/utils/resources";
 import { Ionicons } from "@expo/vector-icons";
 import { useRouter } from "expo-router";
 import * as Location from "expo-location";
@@ -28,7 +28,7 @@ import {
 } from "@/store/utils/alert";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
-const IP_ADDRESS = process.env.EXPO_PUBLIC_IP_ADDRESS;
+const IP_ADDRESS = getApiBaseUrl();
 const GOOGLE_API_KEY = process.env.EXPO_PUBLIC_GOOGLE_API_KEY;
 
 const formatTaskBucketLabel = (bucket: string) =>
@@ -152,8 +152,15 @@ const getHeldItemIconName = (
 const OrderDetails = () => {
   const insets = useSafeAreaInsets();
   const router = useRouter();
-  const { assignedOrders, selectedOrder, currentDriver, setAssignedOrders } =
-    useOrderStore();
+  const {
+    assignedOrders,
+    selectedOrder,
+    currentDriver,
+    setAssignedOrders,
+    clearCart,
+    setLastConfirmPaymentResponse,
+    setPaymentMethod,
+  } = useOrderStore();
   const { user } = useAuthStore();
   const { userLatitude, userLongitude } = useLocationStore();
   const [isLoading, setIsLoading] = useState(false);
@@ -274,15 +281,19 @@ const OrderDetails = () => {
   }, [fetchHeldItems]);
 
   const handleViewInMap = useCallback(async () => {
-    if (!order || !userLatitude || !userLongitude) return;
+    if (!order) return;
 
     try {
       setIsLoading(true);
       const latitude = order.latitude;
       const longitude = order.longitude;
 
-      if (!latitude || !longitude) {
+      if (!Number.isFinite(latitude) || !Number.isFinite(longitude)) {
         showErrorAlert("Error", "Customer location not available.");
+        return;
+      }
+      if (!Number.isFinite(userLatitude) || !Number.isFinite(userLongitude)) {
+        showErrorAlert("Error", "Current location not available.");
         return;
       }
 
@@ -297,6 +308,21 @@ const OrderDetails = () => {
 
   const handleProceed = () => {
     if (!order) return;
+    const normalizedPaymentMethod = (order.payment_method || "")
+      .trim()
+      .toLowerCase();
+
+    clearCart();
+    setLastConfirmPaymentResponse(null);
+    setPaymentMethod(
+      normalizedPaymentMethod === "wallet"
+        ? "wallet"
+        : normalizedPaymentMethod === "credit" ||
+            normalizedPaymentMethod === "invoice" ||
+            normalizedPaymentMethod === "credit_invoice"
+          ? "credit"
+          : "cash",
+    );
     router.push({
       pathname: "/(root)/(tabs)/add-products",
       params: { backTo: "order-details" },
@@ -308,7 +334,7 @@ const OrderDetails = () => {
     router.push({
       pathname: "/(root)/(tabs)/failed-deliveries",
       params: { backTo: "order-details" },
-    } as any);
+    });
   };
 
   const parseAddressComponents = (geocodeResult: any) => {

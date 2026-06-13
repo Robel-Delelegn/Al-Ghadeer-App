@@ -5,6 +5,7 @@ import {
   getRentItemDepositAction,
   getRentItemDisplayLabel,
 } from "@/utils/rentItems";
+import { VAT_MULTIPLIER, VAT_RATE } from "@/constants/tax";
 import { Ionicons } from "@expo/vector-icons";
 import { useRouter } from "expo-router";
 import React, { useCallback, useMemo, useEffect } from "react";
@@ -91,17 +92,6 @@ const Checkout: React.FC = () => {
     () => getOrderSelectedDeliveryActions(orderDetail),
     [orderDetail],
   );
-
-  // Initialize payment method based on requires_signature
-  useEffect(() => {
-    if (orderDetail) {
-      if (orderDetail.requires_signature === true) {
-        setPaymentMethod("credit");
-      } else {
-        setPaymentMethod("cash");
-      }
-    }
-  }, [orderDetail, setPaymentMethod]);
 
   useEffect(() => {
     const existingDraft = orderDetail?.draft_credit_collections?.[0];
@@ -204,7 +194,7 @@ const Checkout: React.FC = () => {
       }
       return sum + item.price * item.quantity;
     }, 0);
-    const vatAmount = sub * 0.05;
+    const vatAmount = sub * VAT_RATE;
 
     // Calculate bottle/asset movement total (no VAT) for selected actions.
     const rentTotal =
@@ -405,10 +395,13 @@ const Checkout: React.FC = () => {
                     </View>
                     <View style={styles.itemPricing}>
                       <Text style={styles.itemPrice}>
-                        AED {(item.price * 1.05 * item.quantity).toFixed(2)}
+                        AED{" "}
+                        {(item.price * VAT_MULTIPLIER * item.quantity).toFixed(
+                          2,
+                        )}
                       </Text>
                       <Text style={styles.itemUnitPrice}>
-                        @ {(item.price * 1.05).toFixed(2)}
+                        @ {(item.price * VAT_MULTIPLIER).toFixed(2)}
                       </Text>
                     </View>
                   </View>

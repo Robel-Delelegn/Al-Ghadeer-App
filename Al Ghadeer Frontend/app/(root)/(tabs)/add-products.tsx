@@ -3,7 +3,7 @@ import { useOrderStore } from "@/store/index";
 import { useAuthStore, authenticatedFetch } from "@/store/auth";
 import { parseApiResponseWithSoftError } from "@/utils/api";
 import { getDriverRequestId } from "@/utils/driverIdentity";
-import { resolveResourceUrl } from "@/utils/resources";
+import { getApiBaseUrl, resolveResourceUrl } from "@/utils/resources";
 import { extractTruckAssets, TruckAsset } from "@/utils/truckLoad";
 import { Product } from "@/types/order";
 import { getProductQuantity, getProductCategory } from "@/utils/orderUtils";
@@ -22,11 +22,13 @@ import {
 } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
-const IP_ADDRESS = process.env.EXPO_PUBLIC_IP_ADDRESS;
+const IP_ADDRESS = getApiBaseUrl();
 
 interface ServerProduct {
   id: string;
   itemId: string;
+  assetDisplayId?: string | null;
+  assetDisplayLabel?: string | null;
   type: "retail" | "refill" | "assets" | "other";
   name: string;
   price: number;
@@ -41,6 +43,15 @@ interface ServerProduct {
 }
 
 type ProductGroup = "wholesale" | "refill" | "assets" | "other";
+
+type ProductSelectionSignatureLine = {
+  id: string;
+  itemId?: string;
+  itemType?: string;
+  category?: string;
+  quantity: number;
+  price: number;
+};
 
 const EMPTY_BOTTLE_PRODUCT_PREFIX = "sale-empty-bottle:";
 const TRUCK_ASSET_PRODUCT_PREFIX = "sale-asset:";
@@ -60,6 +71,29 @@ const normalizeCategory = (value?: string | null) =>
     .toLowerCase()
     .replace(/[\s_-]+/g, "");
 
+const buildProductSelectionSignature = (
+  lines: ProductSelectionSignatureLine[],
+) =>
+  JSON.stringify(
+    lines
+      .map((line) => ({
+        id: line.id,
+        itemId: line.itemId || "",
+        itemType: normalizeCategory(line.itemType),
+        category: normalizeCategory(line.category),
+        quantity: Math.max(0, Number(line.quantity) || 0),
+        price: Number.isFinite(Number(line.price))
+          ? Number(Number(line.price).toFixed(2))
+          : 0,
+      }))
+      .filter((line) => line.quantity > 0)
+      .sort((first, second) =>
+        `${first.id}:${first.itemId}:${first.itemType}:${first.category}`.localeCompare(
+          `${second.id}:${second.itemId}:${second.itemType}:${second.category}`,
+        ),
+      ),
+  );
+
 const isEmptyBottleSaleProduct = (
   product: Pick<ServerProduct, "id" | "category">,
 ) =>
@@ -69,6 +103,63 @@ const isEmptyBottleSaleProduct = (
 
 const isTruckAssetSaleProduct = (product: Pick<ServerProduct, "id">) =>
   product.id.startsWith(TRUCK_ASSET_PRODUCT_PREFIX);
+
+const isGenericAssetCategory = (value?: string | null) => {
+  const normalized = normalizeCategory(value);
+  return (
+    !normalized ||
+    normalized === "asset" ||
+    normalized === "assets" ||
+    normalized === "assetitem" ||
+    normalized === "assetproduct"
+  );
+};
+
+const getSpecificAssetCategory = (...values: (string | null | undefined)[]) => {
+  for (const value of values) {
+    const label = (value || "").trim();
+    if (label && !isGenericAssetCategory(label)) return label;
+  }
+  return "";
+};
+
+const appendUniqueDisplayPart = (parts: string[], value?: string | null) => {
+  const label = (value || "").trim();
+  if (!label) return;
+  const normalized = label.toLowerCase();
+  if (parts.some((part) => part.toLowerCase() === normalized)) return;
+  parts.push(label);
+};
+
+const getAssetProductName = (
+  metadata: ServerProduct | undefined,
+  asset: TruckAsset,
+) =>
+  metadata?.name ||
+  metadata?.assetCategory ||
+  asset.category ||
+  asset.label ||
+  "Asset";
+
+const getAssetProductTitle = (product: ServerProduct) =>
+  getSpecificAssetCategory(product.assetCategory, product.category) ||
+  product.name ||
+  "Asset";
+
+const getAssetProductDetail = (product: ServerProduct) => {
+  const title = getAssetProductTitle(product);
+  const parts: string[] = [];
+
+  if (product.name.trim().toLowerCase() !== title.trim().toLowerCase()) {
+    appendUniqueDisplayPart(parts, product.name);
+  }
+  appendUniqueDisplayPart(parts, product.assetDisplayLabel);
+  if (product.assetDisplayId) {
+    appendUniqueDisplayPart(parts, `ID: ${product.assetDisplayId}`);
+  }
+
+  return parts.join(" · ");
+};
 
 const getProductStockGroupKey = (
   product: Pick<ServerProduct, "id" | "itemId" | "type" | "category">,
@@ -231,23 +322,22 @@ const buildSellableProducts = (
       assetProductsById.get(asset.itemId) || assetProductsById.get(asset.id);
     truckAssetItemIds.add(asset.itemId);
 
-    const name =
-      asset.serial && !asset.label.includes(asset.serial)
-        ? `${asset.label} (${asset.serial})`
-        : asset.label;
+    const assetDisplayId = asset.serial || asset.id;
     const price = metadata?.price ?? 0;
 
     return [
       {
         id: `${TRUCK_ASSET_PRODUCT_PREFIX}${asset.id}:${asset.serial || asset.itemId}`,
         itemId: asset.itemId,
+        assetDisplayId,
+        assetDisplayLabel: asset.label || metadata?.name || null,
         type: "assets" as const,
-        name: name || metadata?.name || "Asset",
+        name: getAssetProductName(metadata, asset),
         price,
         unit: metadata?.unit ?? null,
         image_url:
           resolveResourceUrl(asset.image_url) || metadata?.image_url || null,
-        description: metadata?.description ?? null,
+        description: metadata?.description ?? asset.description ?? null,
         category: asset.category || metadata?.category || "Assets",
         assetCategory: asset.category || metadata?.assetCategory || null,
         originalPrice: metadata?.originalPrice,
@@ -296,6 +386,8 @@ const ProductItem: React.FC<{
   initialQuantity = 0,
   availableStock = Infinity,
 }) => {
+  const assetTitle = group === "assets" ? getAssetProductTitle(product) : "";
+  const assetDetail = group === "assets" ? getAssetProductDetail(product) : "";
   const isMinStock = quantity === 0;
   const isSelected = quantity > 0;
   const isMaxStock =
@@ -357,7 +449,7 @@ const ProductItem: React.FC<{
         <View style={styles.productInfo}>
           <View style={styles.productNameContainer}>
             <Text style={styles.productName} numberOfLines={2}>
-              {product.name}
+              {assetTitle || product.name}
             </Text>
             {product.badge && (
               <View style={styles.badge}>
@@ -365,6 +457,11 @@ const ProductItem: React.FC<{
               </View>
             )}
           </View>
+          {group === "assets" && assetDetail ? (
+            <Text style={styles.productAssetIdText} numberOfLines={1}>
+              {assetDetail}
+            </Text>
+          ) : null}
           <Text style={styles.productMetaText}>
             {group === "refill"
               ? "Refill item"
@@ -452,6 +549,7 @@ const ProductList: React.FC = () => {
     cartItems,
     currentDriver,
     getAvailableStock,
+    setAssignedOrders,
     setProducts: setStoreProducts,
   } = useOrderStore();
   const { user } = useAuthStore();
@@ -474,6 +572,7 @@ const ProductList: React.FC = () => {
       setApiError(null);
       if (!driverId) {
         setProducts([]);
+        setStoreProducts([]);
         setApiError("Driver ID is missing. Please sign in again.");
         return;
       }
@@ -489,6 +588,7 @@ const ProductList: React.FC = () => {
       if (customerSiteId) {
         params.set("siteId", customerSiteId);
       }
+      params.set("filter", "all");
       const query = params.toString();
       const url = `${IP_ADDRESS}/products${query ? `?${query}` : ""}`;
 
@@ -540,6 +640,9 @@ const ProductList: React.FC = () => {
             image_url: resolveResourceUrl(serverProduct.image_url) || "",
             pricing: serverProduct.price,
             category: serverProduct.category,
+            assetCategory: serverProduct.assetCategory,
+            unit: serverProduct.unit,
+            pricePerUnit: serverProduct.price,
             loaded_quantity: serverProduct.loaded_quantity,
           }),
         );
@@ -548,6 +651,7 @@ const ProductList: React.FC = () => {
     } catch (err) {
       console.error("Error fetching products:", err);
       setProducts([]);
+      setStoreProducts([]);
       setApiError(err instanceof Error ? err.message : "Failed to load items.");
     } finally {
       setLoading(false);
@@ -689,9 +793,46 @@ const ProductList: React.FC = () => {
         image_url: fullImageUrl,
         pricing: serverProduct.price,
         category: orderCategory || serverProduct.category || "", // Prefer order category, then product category
+        assetCategory: serverProduct.assetCategory,
+        unit: serverProduct.unit,
+        pricePerUnit: serverProduct.price,
         loaded_quantity: serverProduct.loaded_quantity, // Include loaded_quantity for stock tracking
       };
     });
+
+    const currentCartSignature = buildProductSelectionSignature(
+      cartItems.map((item) => ({
+        id: item.id,
+        itemId: item.item_id,
+        itemType: item.item_type,
+        category: item.category,
+        quantity: item.quantity,
+        price: item.price,
+      })),
+    );
+    const nextCartSignature = buildProductSelectionSignature(
+      cartProducts.map((product) => ({
+        id: product.id,
+        itemId: product.item_id,
+        itemType: product.item_type,
+        category: product.category,
+        quantity: quantities[product.id] || 0,
+        price: product.pricing,
+      })),
+    );
+
+    if (currentOrder && currentCartSignature !== nextCartSignature) {
+      setAssignedOrders(
+        assignedOrders.map((order) => {
+          if (order.id !== currentOrder.id) return order;
+          return {
+            ...order,
+            draft_delivery_actions: undefined,
+            draft_credit_collections: undefined,
+          };
+        }),
+      );
+    }
 
     clearCart();
 
@@ -706,7 +847,17 @@ const ProductList: React.FC = () => {
       pathname: "/(root)/(tabs)/bottles-assets",
       params: { backTo: "add-products" },
     });
-  }, [saleProducts, quantities, addToCart, clearCart, router, currentOrder]);
+  }, [
+    addToCart,
+    assignedOrders,
+    cartItems,
+    clearCart,
+    currentOrder,
+    quantities,
+    router,
+    saleProducts,
+    setAssignedOrders,
+  ]);
 
   const handleBack = useCallback(() => {
     if (params.backTo === "checkout") {
@@ -1623,6 +1774,12 @@ const styles = StyleSheet.create({
     fontWeight: "700",
     color: "#1E40AF",
     flex: 1,
+  },
+  productAssetIdText: {
+    marginBottom: 3,
+    fontSize: 10,
+    fontWeight: "600",
+    color: "#64748B",
   },
   badge: {
     backgroundColor: "#FEF3C7",

@@ -17,6 +17,7 @@ export interface DriverHistoryDepositReturn {
   quantity: number;
   unitPrice: number;
   label: string;
+  assetCategory: string | null;
   imageUrl: string | null;
 }
 
@@ -25,6 +26,7 @@ export interface DriverHistorySaleItem {
   itemId: string;
   itemType: "asset" | "retail" | "refill";
   label: string;
+  assetCategory: string | null;
   imageUrl: string | null;
   quantity: number;
   unitPrice: number;
@@ -44,6 +46,7 @@ export type DriverHistorySalePayment =
   | { method: "cash"; amount: number }
   | { method: "check"; amount: number }
   | { method: "wallet"; amount: number }
+  | { method: "credit"; amount: number }
   | null;
 
 export interface DriverHistorySale {
@@ -193,6 +196,11 @@ const normalizeDepositReturn = (
   value: unknown,
 ): DriverHistoryDepositReturn | null => {
   const record = isRecord(value) ? value : null;
+  const item = isRecord(record?.item)
+    ? record.item
+    : isRecord(record?.product)
+      ? record.product
+      : null;
   const type = toText(record?.type);
   const depositKind = toText(record?.depositKind);
   const quantity = toNumber(record?.quantity);
@@ -215,14 +223,27 @@ const normalizeDepositReturn = (
     depositKind,
     quantity,
     unitPrice,
-    label: toText(record.label),
+    label: toText(record.label) || toText(record.name) || toText(item?.label),
+    assetCategory:
+      toNullableText(record.assetCategory) ??
+      toNullableText(record.asset_category) ??
+      toNullableText(record.category) ??
+      toNullableText(item?.assetCategory) ??
+      toNullableText(item?.asset_category) ??
+      toNullableText(item?.category),
     imageUrl: resolveResourceUrl(toNullableText(record.imageUrl)),
   };
 };
 
 const normalizeSaleItem = (value: unknown): DriverHistorySaleItem | null => {
   const record = isRecord(value) ? value : null;
-  const itemType = toText(record?.itemType);
+  const item = isRecord(record?.item)
+    ? record.item
+    : isRecord(record?.product)
+      ? record.product
+      : null;
+  const rawItemType = toText(record?.itemType);
+  const itemType = rawItemType === "assets" ? "asset" : rawItemType;
   const quantity = toNumber(record?.quantity);
   const unitPrice = toNumber(record?.unitPrice);
 
@@ -239,7 +260,14 @@ const normalizeSaleItem = (value: unknown): DriverHistorySaleItem | null => {
     id: toText(record.id),
     itemId: toText(record.itemId),
     itemType,
-    label: toText(record.label),
+    label: toText(record.label) || toText(record.name) || toText(item?.label),
+    assetCategory:
+      toNullableText(record.assetCategory) ??
+      toNullableText(record.asset_category) ??
+      toNullableText(record.category) ??
+      toNullableText(item?.assetCategory) ??
+      toNullableText(item?.asset_category) ??
+      toNullableText(item?.category),
     imageUrl: resolveResourceUrl(toNullableText(record.imageUrl)),
     quantity,
     unitPrice,
@@ -262,16 +290,34 @@ const normalizeInvoice = (value: unknown): DriverHistoryInvoice | null => {
   };
 };
 
-const normalizeSalePayment = (value: unknown): DriverHistorySalePayment => {
-  const record = isRecord(value) ? value : null;
-  const method = toText(record?.method);
-  const amount = toNumber(record?.amount);
-
+const normalizeSalePaymentMethod = (
+  value: unknown,
+): NonNullable<DriverHistorySalePayment>["method"] | null => {
+  const method = toText(value).toLowerCase();
+  if (method === "cash") return "cash";
+  if (method === "check" || method === "cheque") return "check";
+  if (method === "wallet") return "wallet";
   if (
-    !record ||
-    amount === null ||
-    (method !== "cash" && method !== "check" && method !== "wallet")
+    method === "credit" ||
+    method === "invoice" ||
+    method === "credit_invoice"
   ) {
+    return "credit";
+  }
+  return null;
+};
+
+const normalizeSalePayment = (
+  value: unknown,
+  fallbackAmount: number | null = null,
+): DriverHistorySalePayment => {
+  const record = isRecord(value) ? value : null;
+  const method = normalizeSalePaymentMethod(
+    record ? record.method ?? record.payment_method : value,
+  );
+  const amount = toNumber(record?.amount) ?? fallbackAmount;
+
+  if (!method || amount === null) {
     return null;
   }
 
@@ -298,6 +344,13 @@ const normalizeSale = (value: unknown): DriverHistorySale | null => {
     return null;
   }
 
+  const invoice = normalizeInvoice(record.invoice);
+  const payment =
+    normalizeSalePayment(
+      record.payment ?? record.paymentMethod ?? record.payment_method,
+      total,
+    ) ?? (invoice ? { method: "credit" as const, amount: total } : null);
+
   return {
     saleId: toText(record.saleId),
     items: Array.isArray(record.items)
@@ -310,8 +363,8 @@ const normalizeSale = (value: unknown): DriverHistorySale | null => {
       vat,
       total,
     },
-    payment: normalizeSalePayment(record.payment),
-    invoice: normalizeInvoice(record.invoice),
+    payment,
+    invoice,
   };
 };
 

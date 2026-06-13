@@ -1,3 +1,4 @@
+import { VAT_RATE } from "@/constants/tax";
 import { authenticatedFetch } from "@/store/auth";
 import { useOrderStore } from "@/store/index";
 import { showErrorAlert, showSuccessAlert } from "@/store/utils/alert";
@@ -13,6 +14,7 @@ import {
   getRentItemDepositAction,
   getRentItemDepositKind,
 } from "@/utils/rentItems";
+import { getApiBaseUrl } from "@/utils/resources";
 import { Ionicons } from "@expo/vector-icons";
 import * as FileSystem from "expo-file-system";
 import { useLocalSearchParams, useRouter } from "expo-router";
@@ -28,7 +30,7 @@ import {
 } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
-const IP_ADDRESS = process.env.EXPO_PUBLIC_IP_ADDRESS;
+const IP_ADDRESS = getApiBaseUrl();
 
 type PrintModule = typeof import("expo-print");
 
@@ -38,18 +40,39 @@ type ReceiptViewMode = "delivery-note" | "invoice";
 
 type DeliveryActionRow = {
   id: string;
+  itemId: string | null;
   label: string;
+  assetFallbackLabel?: string | null;
+  assetCategory?: string | null;
   quantity: number;
   unitPrice: number;
   type: "deposit" | "deposit_return";
   depositKind: "asset" | "bottle";
+  isAsset: boolean;
 };
 
 type SaleRow = {
   id: string;
+  itemId: string | null;
   label: string;
+  assetFallbackLabel?: string | null;
+  assetCategory?: string | null;
   quantity: number;
   unitPrice: number;
+  isAsset: boolean;
+};
+
+type ItemDisplayData = {
+  label: string;
+  itemId?: string | null;
+  isAsset?: boolean;
+  assetFallbackLabel?: string | null;
+  assetCategory?: string | null;
+};
+
+type AssetDisplayLookupValue = {
+  label: string | null;
+  assetCategory: string | null;
 };
 
 type CreditCollectionRow = {
@@ -150,6 +173,108 @@ const formatOptionalLinePrice = (value: number): string => {
   return hasLinePrice(value) ? formatCurrency(value) : "";
 };
 
+const normalizeItemKind = (value: unknown): string => {
+  return String(value || "")
+    .trim()
+    .toLowerCase()
+    .replace(/[\s_-]+/g, "");
+};
+
+const isAssetKind = (...values: unknown[]): boolean => {
+  return values.some((value) => normalizeItemKind(value).includes("asset"));
+};
+
+const isGenericAssetLabel = (value: string): boolean => {
+  const normalized = normalizeItemKind(value);
+  return (
+    normalized === "asset" ||
+    normalized === "assets" ||
+    normalized === "assetitem" ||
+    normalized === "assetproduct"
+  );
+};
+
+const getSpecificAssetCategory = (...values: (string | null | undefined)[]) => {
+  for (const value of values) {
+    const label = typeof value === "string" ? value.trim() : "";
+    if (label && !isGenericAssetLabel(label)) return label;
+  }
+  return null;
+};
+
+const appendUniqueDisplayPart = (parts: string[], value?: string | null) => {
+  const label = typeof value === "string" ? value.trim() : "";
+  if (!label) return;
+
+  const normalized = normalizeItemKind(label);
+  if (parts.some((part) => normalizeItemKind(part) === normalized)) return;
+  parts.push(label);
+};
+
+const getAssetReceiptParts = (item: ItemDisplayData) => {
+  const rawLabel = item.label.trim();
+  const fallbackLabel =
+    typeof item.assetFallbackLabel === "string"
+      ? item.assetFallbackLabel.trim()
+      : "";
+  const assetCategory =
+    typeof item.assetCategory === "string" ? item.assetCategory.trim() : "";
+
+  const primaryLabel =
+    assetCategory && !isGenericAssetLabel(assetCategory)
+      ? assetCategory
+      : fallbackLabel && !isGenericAssetLabel(fallbackLabel)
+        ? fallbackLabel
+        : rawLabel || fallbackLabel || assetCategory || "Asset";
+  const itemId =
+    item.isAsset && typeof item.itemId === "string" ? item.itemId.trim() : "";
+  const normalizedItemId = normalizeItemKind(itemId);
+
+  const secondaryParts: string[] = [];
+  if (
+    rawLabel &&
+    normalizeItemKind(rawLabel) !== normalizeItemKind(primaryLabel) &&
+    normalizeItemKind(rawLabel) !== normalizedItemId
+  ) {
+    appendUniqueDisplayPart(secondaryParts, rawLabel);
+  }
+  if (
+    fallbackLabel &&
+    normalizeItemKind(fallbackLabel) !== normalizeItemKind(primaryLabel) &&
+    normalizeItemKind(fallbackLabel) !== normalizedItemId
+  ) {
+    appendUniqueDisplayPart(secondaryParts, fallbackLabel);
+  }
+  if (itemId && normalizedItemId !== normalizeItemKind(primaryLabel)) {
+    appendUniqueDisplayPart(secondaryParts, `Asset ID: ${itemId}`);
+  }
+
+  return {
+    label: primaryLabel,
+    detail: secondaryParts.join(" · ") || null,
+  };
+};
+
+const getItemDisplayParts = (item: ItemDisplayData) => {
+  if (item.isAsset) {
+    return getAssetReceiptParts(item);
+  }
+
+  return {
+    label: item.label.trim() || "Item",
+    detail: null,
+  };
+};
+
+const buildItemLabelHtml = (item: ItemDisplayData): string => {
+  const { label, detail } = getItemDisplayParts(item);
+  const detailHtml = detail
+    ? `<div style="margin-top:2px;font-size:10px;color:#64748b;">${escapeHtml(detail)}</div>`
+    : "";
+
+  return `${escapeHtml(label)}${detailHtml}`;
+};
+
 const escapeHtml = (value: string): string => {
   return value
     .replace(/&/g, "&amp;")
@@ -186,10 +311,65 @@ const getFallbackRentItemLabel = (
   return `${kind} ${action}`;
 };
 
+const addAssetDisplayLookup = (
+  lookup: Map<string, AssetDisplayLookupValue>,
+  keys: (string | null | undefined)[],
+  value: AssetDisplayLookupValue,
+) => {
+  const cleanLabel = typeof value.label === "string" ? value.label.trim() : "";
+  const cleanAssetCategory = getSpecificAssetCategory(value.assetCategory);
+
+  if (!cleanLabel && !cleanAssetCategory) return;
+
+  keys.forEach((key) => {
+    const cleanKey = typeof key === "string" ? key.trim() : "";
+    if (!cleanKey) return;
+
+    const existing = lookup.get(cleanKey);
+    lookup.set(cleanKey, {
+      label: existing?.label || cleanLabel || null,
+      assetCategory: existing?.assetCategory || cleanAssetCategory,
+    });
+  });
+};
+
+const getAssetDisplayLookup = (
+  lookup: Map<string, AssetDisplayLookupValue>,
+  keys: (string | null | undefined)[],
+): AssetDisplayLookupValue | null => {
+  for (const key of keys) {
+    const cleanKey = typeof key === "string" ? key.trim() : "";
+    if (!cleanKey) continue;
+    const value = lookup.get(cleanKey);
+    if (value) return value;
+  }
+
+  return null;
+};
+
 const getDeliveryActionTypeLabel = (row: DeliveryActionRow): string => {
   const kind = row.depositKind === "bottle" ? "Bottle" : "Asset";
   const action = row.type === "deposit" ? "Deposit" : "Return";
   return `${kind} ${action}`;
+};
+
+const ReceiptItemLabel: React.FC<{
+  item: ItemDisplayData;
+  style: React.ComponentProps<typeof Text>["style"];
+}> = ({ item, style }) => {
+  const { label, detail } = getItemDisplayParts(item);
+
+  return (
+    <Text style={style}>
+      <Text>{label}</Text>
+      {detail ? (
+        <>
+          <Text style={styles.invoiceItemMetaText}>{"\n"}</Text>
+          <Text style={styles.invoiceItemMetaText}>{detail}</Text>
+        </>
+      ) : null}
+    </Text>
+  );
 };
 
 const buildActionSectionHtml = (rows: DeliveryActionRow[]): string => {
@@ -203,7 +383,7 @@ const buildActionSectionHtml = (rows: DeliveryActionRow[]): string => {
       (row) => `
         <tr>
           <td>${escapeHtml(getDeliveryActionTypeLabel(row))}</td>
-          <td>${escapeHtml(row.label)}</td>
+          <td>${buildItemLabelHtml(row)}</td>
           <td class="qty-cell">${escapeHtml(formatQuantity(row.quantity))}</td>
           ${
             hasPricedRows
@@ -288,7 +468,7 @@ const DeliveryNoteInfoRow: React.FC<{
 
 const DeliveryNoteTableSection: React.FC<{
   title: string;
-  rows: { id: string; label: string; quantity: number; unitPrice: number }[];
+  rows: SaleRow[];
 }> = ({ title, rows }) => {
   if (rows.length === 0) {
     return null;
@@ -327,9 +507,10 @@ const DeliveryNoteTableSection: React.FC<{
             index !== rows.length - 1 && styles.invoiceItemRowBorder,
           ]}
         >
-          <Text style={[styles.invoiceItemText, styles.invoiceProductCell]}>
-            {row.label}
-          </Text>
+          <ReceiptItemLabel
+            item={row}
+            style={[styles.invoiceItemText, styles.invoiceProductCell]}
+          />
           <Text style={[styles.invoiceItemText, styles.invoiceQtyCell]}>
             {formatQuantity(row.quantity)}
           </Text>
@@ -394,9 +575,10 @@ const DeliveryNoteActionSection: React.FC<{
           <Text style={[styles.invoiceItemText, styles.deliveryNoteTypeCell]}>
             {getDeliveryActionTypeLabel(row)}
           </Text>
-          <Text style={[styles.invoiceItemText, styles.invoiceProductCell]}>
-            {row.label}
-          </Text>
+          <ReceiptItemLabel
+            item={row}
+            style={[styles.invoiceItemText, styles.invoiceProductCell]}
+          />
           <Text style={[styles.invoiceItemText, styles.invoiceQtyCell]}>
             {formatQuantity(row.quantity)}
           </Text>
@@ -555,60 +737,183 @@ const PaymentReceipt: React.FC = () => {
     ],
   );
 
+  const saleAssetDisplayLookup = useMemo(() => {
+    const lookup = new Map<string, AssetDisplayLookupValue>();
+
+    if (orderDetail?.products) {
+      normalizeOrderProducts(orderDetail.products).productsArray.forEach(
+        (product) => {
+          if (
+            !isAssetKind(product.type, product.category, product.asset_category)
+          ) {
+            return;
+          }
+          addAssetDisplayLookup(lookup, [product.item_id, product.id], {
+            label: product.name || product.asset_category || null,
+            assetCategory: product.asset_category ?? product.category ?? null,
+          });
+        },
+      );
+    }
+
+    cartItems.forEach((item) => {
+      if (!isAssetKind(item.item_type, item.category)) return;
+      addAssetDisplayLookup(lookup, [item.item_id, item.id], {
+        label: item.name,
+        assetCategory: item.assetCategory ?? item.category ?? null,
+      });
+    });
+
+    return lookup;
+  }, [cartItems, orderDetail?.products]);
+
+  const deliveryActionAssetDisplayLookup = useMemo(() => {
+    const lookup = new Map<string, AssetDisplayLookupValue>();
+    const rentItems = [
+      ...(orderDetail?.rent_items ?? []),
+      ...(orderDetail?.draft_delivery_actions ?? []),
+    ];
+
+    rentItems.forEach((item) => {
+      if (getRentItemDepositKind(item) !== "asset") return;
+      addAssetDisplayLookup(lookup, [item.item_id, item.id], {
+        label: item.name,
+        assetCategory: item.asset_category ?? null,
+      });
+    });
+
+    return lookup;
+  }, [orderDetail?.draft_delivery_actions, orderDetail?.rent_items]);
+
   const saleRows = useMemo<SaleRow[]>(() => {
     if (confirmationDetail?.sale?.items?.length) {
-      return confirmationDetail.sale.items.map((item) => ({
-        id: item.id || item.itemId,
-        label: item.label,
-        quantity: item.quantity,
-        unitPrice: item.unitPrice,
-      }));
+      return confirmationDetail.sale.items.map((item) => {
+        const assetDisplay = getAssetDisplayLookup(saleAssetDisplayLookup, [
+          item.itemId,
+          item.id,
+        ]);
+
+        return {
+          id: item.id || item.itemId,
+          itemId: item.itemId || item.id || null,
+          label: item.label,
+          assetFallbackLabel: assetDisplay?.label ?? null,
+          assetCategory:
+            item.assetCategory ?? assetDisplay?.assetCategory ?? null,
+          quantity: item.quantity,
+          unitPrice: item.unitPrice,
+          isAsset: isAssetKind(item.itemType),
+        };
+      });
     }
 
     if (orderDetail?.products) {
       return normalizeOrderProducts(orderDetail.products).productsArray.map(
-        (product) => ({
-          id: product.id,
-          label: product.name,
-          quantity: product.quantity,
-          unitPrice: typeof product.price === "number" ? product.price : 0,
-        }),
+        (product) => {
+          const assetDisplay = getAssetDisplayLookup(saleAssetDisplayLookup, [
+            product.item_id,
+            product.id,
+          ]);
+
+          return {
+            id: product.id,
+            itemId: product.item_id || product.id || null,
+            label: product.name,
+            assetFallbackLabel: assetDisplay?.label ?? null,
+            assetCategory:
+              product.asset_category ?? assetDisplay?.assetCategory ?? null,
+            quantity: product.quantity,
+            unitPrice: typeof product.price === "number" ? product.price : 0,
+            isAsset: isAssetKind(
+              product.type,
+              product.category,
+              product.asset_category,
+            ),
+          };
+        },
       );
     }
 
     return cartItems
       .filter((item) => item?.name)
-      .map((item) => ({
-        id: item.id,
-        label: item.name,
-        quantity: item.quantity,
-        unitPrice: item.price,
-      }));
-  }, [cartItems, confirmationDetail?.sale?.items, orderDetail?.products]);
+      .map((item) => {
+        const assetDisplay = getAssetDisplayLookup(saleAssetDisplayLookup, [
+          item.item_id,
+          item.id,
+        ]);
+
+        return {
+          id: item.id,
+          itemId: item.item_id || item.id || null,
+          label: item.name,
+          assetFallbackLabel: assetDisplay?.label ?? null,
+          assetCategory:
+            item.assetCategory ??
+            assetDisplay?.assetCategory ??
+            (isAssetKind(item.item_type, item.category) ? item.category : null),
+          quantity: item.quantity,
+          unitPrice: item.price,
+          isAsset: isAssetKind(item.item_type, item.category),
+        };
+      });
+  }, [
+    cartItems,
+    confirmationDetail?.sale?.items,
+    orderDetail?.products,
+    saleAssetDisplayLookup,
+  ]);
 
   const deliveryActionRows = useMemo<DeliveryActionRow[]>(() => {
     if (confirmationDetail?.depositReturns?.length) {
-      return confirmationDetail.depositReturns.map((entry) => ({
-        id: entry.id,
-        label: entry.label,
-        quantity: entry.quantity,
-        unitPrice: entry.unitPrice,
-        type: entry.type,
-        depositKind: entry.depositKind,
-      }));
+      return confirmationDetail.depositReturns.map((entry) => {
+        const assetDisplay = getAssetDisplayLookup(
+          deliveryActionAssetDisplayLookup,
+          [entry.itemId, entry.id],
+        );
+
+        return {
+          id: entry.id,
+          itemId: entry.itemId || entry.id || null,
+          label: entry.label,
+          assetFallbackLabel: assetDisplay?.label ?? null,
+          assetCategory:
+            entry.assetCategory ?? assetDisplay?.assetCategory ?? null,
+          quantity: entry.quantity,
+          unitPrice: entry.unitPrice,
+          type: entry.type,
+          depositKind: entry.depositKind,
+          isAsset: entry.depositKind === "asset",
+        };
+      });
     }
 
     return getOrderSelectedDeliveryActions(orderDetail)
       .filter((item) => (item.quantity || 0) > 0)
-      .map((item) => ({
-        id: item.id,
-        label: getFallbackRentItemLabel(item),
-        quantity: item.quantity,
-        unitPrice: typeof item.price === "number" ? item.price : 0,
-        type: getRentItemDepositAction(item),
-        depositKind: getRentItemDepositKind(item),
-      }));
-  }, [confirmationDetail?.depositReturns, orderDetail]);
+      .map((item) => {
+        const assetDisplay = getAssetDisplayLookup(
+          deliveryActionAssetDisplayLookup,
+          [item.item_id, item.id],
+        );
+
+        return {
+          id: item.id,
+          itemId: item.item_id || item.id || null,
+          label: getFallbackRentItemLabel(item),
+          assetFallbackLabel: assetDisplay?.label ?? null,
+          assetCategory:
+            item.asset_category ?? assetDisplay?.assetCategory ?? null,
+          quantity: item.quantity,
+          unitPrice: typeof item.price === "number" ? item.price : 0,
+          type: getRentItemDepositAction(item),
+          depositKind: getRentItemDepositKind(item),
+          isAsset: getRentItemDepositKind(item) === "asset",
+        };
+      });
+  }, [
+    confirmationDetail?.depositReturns,
+    deliveryActionAssetDisplayLookup,
+    orderDetail,
+  ]);
 
   const creditCollectionRows = useMemo<CreditCollectionRow[]>(() => {
     if (confirmationDetail?.creditCollections?.length) {
@@ -666,7 +971,7 @@ const PaymentReceipt: React.FC = () => {
   const subtotalAmount =
     confirmationDetail?.sale?.totals.subtotal ?? computedSubtotal;
   const vatAmount =
-    confirmationDetail?.sale?.totals.vat ?? computedSubtotal * 0.05;
+    confirmationDetail?.sale?.totals.vat ?? computedSubtotal * VAT_RATE;
   const totalAmount =
     confirmationDetail?.sale?.totals.total ?? subtotalAmount + vatAmount;
 
@@ -891,7 +1196,7 @@ const PaymentReceipt: React.FC = () => {
             .map(
               (row) => `
                 <tr>
-                  <td>${escapeHtml(row.label)}</td>
+                  <td>${buildItemLabelHtml(row)}</td>
                   <td class="qty-cell">${escapeHtml(formatQuantity(row.quantity))}</td>
                   ${
                     hasPricedSaleRows
@@ -1203,15 +1508,15 @@ const PaymentReceipt: React.FC = () => {
         ? saleRows
             .map((row) => {
               const priceExVat = row.unitPrice;
-              const itemVatTotal = priceExVat * 0.05 * row.quantity;
-              const itemTotal = (priceExVat + priceExVat * 0.05) * row.quantity;
+              const unitVat = priceExVat * VAT_RATE;
+              const itemTotal = (priceExVat + unitVat) * row.quantity;
 
               return `
                 <tr style="border-bottom: 1px solid #e5e7eb;">
-                  <td style="padding: 6px; text-align: left; font-size: 11px;">${escapeHtml(row.label)}</td>
+                  <td style="padding: 6px; text-align: left; font-size: 11px;">${buildItemLabelHtml(row)}</td>
                   <td style="padding: 6px; text-align: center; font-size: 11px;">${escapeHtml(formatQuantity(row.quantity))}</td>
                   <td style="padding: 6px; text-align: right; font-size: 11px;">${priceExVat.toFixed(2)}</td>
-                  <td style="padding: 6px; text-align: right; font-size: 11px;">${itemVatTotal.toFixed(2)}</td>
+                  <td style="padding: 6px; text-align: right; font-size: 11px;">${unitVat.toFixed(2)}</td>
                   <td style="padding: 6px; text-align: right; font-size: 11px; font-weight: bold;">${itemTotal.toFixed(2)}</td>
                 </tr>
               `;
@@ -1375,10 +1680,10 @@ const PaymentReceipt: React.FC = () => {
             <table class="items-table">
                 <thead>
                   <tr>
-                    <th style="text-align: left;">Product</th>
-                    <th style="text-align: center;">Qty</th>
-                    <th style="text-align: right;">Price (ex VAT)</th>
-                    <th style="text-align:right;">VAT</th>
+                    <th style="text-align: left;">Products</th>
+                    <th style="text-align: center;">Quantity</th>
+                    <th style="text-align: right;">Unit Price</th>
+                    <th style="text-align:right;">Unit VAT</th>
                     <th style="text-align:right;">Total</th>
                   </tr>
                 </thead>
@@ -1387,15 +1692,15 @@ const PaymentReceipt: React.FC = () => {
 
             <div class="total-section">
               <div class="total-row">
-                <span>Subtotal (Excluding VAT):</span>
+                <span>Subtotal Without VAT:</span>
                 <span>${subtotalAmount.toFixed(2)}</span>
               </div>
               <div class="total-row">
-                <span>VAT (5%):</span>
+                <span>Total VAT:</span>
                 <span>${vatAmount.toFixed(2)}</span>
               </div>
               <div class="total-row final-total">
-                <span>Total (Including VAT):</span>
+                <span>Total Including VAT:</span>
                 <span>${totalAmount.toFixed(2)}</span>
               </div>
             </div>
@@ -1648,15 +1953,7 @@ const PaymentReceipt: React.FC = () => {
               </View>
             )}
 
-            <DeliveryNoteTableSection
-              title="Delivered Items"
-              rows={saleRows.map((row) => ({
-                id: row.id,
-                label: row.label,
-                quantity: row.quantity,
-                unitPrice: row.unitPrice,
-              }))}
-            />
+            <DeliveryNoteTableSection title="Delivered Items" rows={saleRows} />
             <DeliveryNoteActionSection rows={deliveryActionRows} />
             <DeliveryNoteCashCollectionSection rows={creditCollectionRows} />
 
@@ -1742,12 +2039,12 @@ const PaymentReceipt: React.FC = () => {
                     styles.invoiceProductCell,
                   ]}
                 >
-                  Product
+                  Products
                 </Text>
                 <Text
                   style={[styles.invoiceItemsHeaderText, styles.invoiceQtyCell]}
                 >
-                  Qty
+                  Quantity
                 </Text>
                 <Text
                   style={[
@@ -1755,12 +2052,12 @@ const PaymentReceipt: React.FC = () => {
                     styles.invoiceAmountCell,
                   ]}
                 >
-                  Price (ex VAT)
+                  Unit Price
                 </Text>
                 <Text
                   style={[styles.invoiceItemsHeaderText, styles.invoiceVatCell]}
                 >
-                  VAT
+                  Unit VAT
                 </Text>
                 <Text
                   style={[
@@ -1775,9 +2072,8 @@ const PaymentReceipt: React.FC = () => {
               {saleRows.length > 0 ? (
                 saleRows.map((row, index) => {
                   const priceExVat = row.unitPrice;
-                  const itemVatTotal = priceExVat * 0.05 * row.quantity;
-                  const itemTotal =
-                    (priceExVat + priceExVat * 0.05) * row.quantity;
+                  const unitVat = priceExVat * VAT_RATE;
+                  const itemTotal = (priceExVat + unitVat) * row.quantity;
 
                   return (
                     <View
@@ -1788,14 +2084,13 @@ const PaymentReceipt: React.FC = () => {
                           styles.invoiceItemRowBorder,
                       ]}
                     >
-                      <Text
+                      <ReceiptItemLabel
+                        item={row}
                         style={[
                           styles.invoiceItemText,
                           styles.invoiceProductCell,
                         ]}
-                      >
-                        {row.label}
-                      </Text>
+                      />
                       <Text
                         style={[styles.invoiceItemText, styles.invoiceQtyCell]}
                       >
@@ -1812,7 +2107,7 @@ const PaymentReceipt: React.FC = () => {
                       <Text
                         style={[styles.invoiceItemText, styles.invoiceVatCell]}
                       >
-                        AED {itemVatTotal.toFixed(2)}
+                        AED {unitVat.toFixed(2)}
                       </Text>
                       <Text
                         style={[
@@ -1836,14 +2131,14 @@ const PaymentReceipt: React.FC = () => {
             <View style={styles.invoiceTotalsSection}>
               <View style={styles.invoiceDetailRow}>
                 <Text style={styles.invoiceSummaryLabel}>
-                  Subtotal (Excluding VAT)
+                  Subtotal Without VAT
                 </Text>
                 <Text style={styles.invoiceDetailValue}>
                   {formatCurrency(subtotalAmount)}
                 </Text>
               </View>
               <View style={styles.invoiceDetailRow}>
-                <Text style={styles.invoiceSummaryLabel}>VAT (5%)</Text>
+                <Text style={styles.invoiceSummaryLabel}>Total VAT</Text>
                 <Text style={styles.invoiceDetailValue}>
                   {formatCurrency(vatAmount)}
                 </Text>
@@ -1852,7 +2147,7 @@ const PaymentReceipt: React.FC = () => {
                 style={[styles.invoiceDetailRow, styles.invoiceTotalFinalRow]}
               >
                 <Text style={styles.invoiceFinalLabel}>
-                  Total (Including VAT)
+                  Total Including VAT
                 </Text>
                 <Text style={styles.invoiceFinalValue}>
                   {formatCurrency(totalAmount)}
@@ -2417,7 +2712,7 @@ const styles = StyleSheet.create({
     flex: 1,
   },
   invoiceQtyCell: {
-    width: 35,
+    width: 48,
     textAlign: "center",
   },
   invoiceVatCell: {
@@ -2468,6 +2763,12 @@ const styles = StyleSheet.create({
   invoiceItemText: {
     color: "#212529",
     fontSize: 11,
+    fontFamily: "Jakarta-Regular",
+  },
+  invoiceItemMetaText: {
+    color: "#64748B",
+    fontSize: 9,
+    lineHeight: 13,
     fontFamily: "Jakarta-Regular",
   },
   invoiceItemTotalText: {

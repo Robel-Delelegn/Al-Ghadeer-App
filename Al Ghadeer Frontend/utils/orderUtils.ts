@@ -11,6 +11,7 @@ export interface OrderProduct {
   image_url?: string | null;
   type?: string;
   category?: string;
+  asset_category?: string | null;
 }
 
 /**

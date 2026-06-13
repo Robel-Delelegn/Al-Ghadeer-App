@@ -1,5 +1,5 @@
-import { useAlertStore } from '@/store/alert';
-import { AlertButton } from '@/components/CustomAlert';
+import { useAlertStore } from "@/store/alert";
+import { AlertButton } from "@/components/CustomAlert";
 
 /**
  * Custom alert utility to replace React Native's Alert.alert
@@ -15,7 +15,7 @@ export { useAlertStore };
 export const showSuccessAlert = (
   title: string,
   message?: string,
-  buttons?: AlertButton[]
+  buttons?: AlertButton[],
 ) => {
   const { showSuccess } = useAlertStore.getState();
   showSuccess(title, message, buttons);
@@ -27,7 +27,7 @@ export const showSuccessAlert = (
 export const showErrorAlert = (
   title: string,
   message?: string,
-  buttons?: AlertButton[]
+  buttons?: AlertButton[],
 ) => {
   const { showError } = useAlertStore.getState();
   showError(title, message, buttons);
@@ -39,7 +39,7 @@ export const showErrorAlert = (
 export const showWarningAlert = (
   title: string,
   message?: string,
-  buttons?: AlertButton[]
+  buttons?: AlertButton[],
 ) => {
   const { showWarning } = useAlertStore.getState();
   showWarning(title, message, buttons);
@@ -51,7 +51,7 @@ export const showWarningAlert = (
 export const showInfoAlert = (
   title: string,
   message?: string,
-  buttons?: AlertButton[]
+  buttons?: AlertButton[],
 ) => {
   const { showInfo } = useAlertStore.getState();
   showInfo(title, message, buttons);
@@ -63,7 +63,7 @@ export const showInfoAlert = (
 export const showAlert = (config: {
   title: string;
   message?: string;
-  type?: 'success' | 'error' | 'warning' | 'info';
+  type?: "success" | "error" | "warning" | "info";
   buttons?: AlertButton[];
   onDismiss?: () => void;
 }) => {
@@ -78,16 +78,27 @@ export const showAlert = (config: {
 export const alert = (
   title: string,
   message?: string,
-  buttons?: AlertButton[]
+  buttons?: AlertButton[],
 ) => {
   // Auto-detect type from title
   const titleLower = title.toLowerCase();
-  
-  if (titleLower.includes('error') || titleLower.includes('failed') || titleLower.includes('fail')) {
+
+  if (
+    titleLower.includes("error") ||
+    titleLower.includes("failed") ||
+    titleLower.includes("fail")
+  ) {
     showErrorAlert(title, message, buttons);
-  } else if (titleLower.includes('success') || titleLower.includes('successful')) {
+  } else if (
+    titleLower.includes("success") ||
+    titleLower.includes("successful")
+  ) {
     showSuccessAlert(title, message, buttons);
-  } else if (titleLower.includes('warning') || titleLower.includes('required') || titleLower.includes('missing')) {
+  } else if (
+    titleLower.includes("warning") ||
+    titleLower.includes("required") ||
+    titleLower.includes("missing")
+  ) {
     showWarningAlert(title, message, buttons);
   } else {
     showInfoAlert(title, message, buttons);

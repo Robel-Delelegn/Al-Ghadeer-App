@@ -1,6 +1,6 @@
 const DEFAULT_API_BASE_URL = "http://localhost:3000";
 
-const getApiBaseUrl = (): string => {
+export const getApiBaseUrl = (): string => {
   return (process.env.EXPO_PUBLIC_IP_ADDRESS || DEFAULT_API_BASE_URL)
     .trim()
     .replace(/\/+$/, "");

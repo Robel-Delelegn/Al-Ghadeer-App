@@ -1,4 +1,5 @@
 import ApiErrorText from "@/components/ApiErrorText";
+import { VAT_RATE } from "@/constants/tax";
 import { useOrderStore } from "@/store/index";
 import { authenticatedFetch } from "@/store/auth";
 import { Order } from "@/types/order";
@@ -37,8 +38,9 @@ import {
   getDriverHistorySaleId,
   normalizeDeliveryConfirmationResponse,
 } from "@/utils/driverHistory";
+import { getApiBaseUrl } from "@/utils/resources";
 
-const IP_ADDRESS = process.env.EXPO_PUBLIC_IP_ADDRESS;
+const IP_ADDRESS = getApiBaseUrl();
 
 const readDeliveryNoteId = (value: unknown): string | undefined => {
   if (!value || typeof value !== "object") return undefined;
@@ -125,7 +127,7 @@ const PaymentConfirmation: React.FC = () => {
       }
       return sum + item.price * item.quantity;
     }, 0);
-    const vatAmount = sub * 0.05;
+    const vatAmount = sub * VAT_RATE;
 
     // Calculate bottle/asset movement total (no VAT) from editable quantities.
     const rentTotal = editableRentItems.reduce((sum, item) => {
@@ -254,7 +256,7 @@ const PaymentConfirmation: React.FC = () => {
         (sum, item) => sum + item.unitPrice * item.quantity,
         0,
       );
-      const saleVat = saleSubtotal * 0.05;
+      const saleVat = saleSubtotal * VAT_RATE;
       const saleTotal = saleSubtotal + saleVat;
 
       const depositsReturns = rentItems.map((item) => ({
@@ -490,7 +492,7 @@ const PaymentConfirmation: React.FC = () => {
                 .filter((item) => item?.name)
                 .map((item, index) => {
                   const priceExVat = item.price;
-                  const vatAmount = priceExVat * 0.05;
+                  const vatAmount = priceExVat * VAT_RATE;
                   const priceWithVat = priceExVat + vatAmount;
                   const itemVatTotal = vatAmount * item.quantity;
                   const itemTotal = priceWithVat * item.quantity;

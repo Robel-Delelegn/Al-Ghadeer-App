@@ -16,6 +16,7 @@ export interface CustomerHeldAsset {
   label: string;
   description: string | null;
   image_url: string | null;
+  unit: string | null;
   serial: string;
   assetCategory: string | null;
 }
@@ -35,8 +36,25 @@ const toText = (value: unknown): string => {
   return typeof value === "string" ? value.trim() : "";
 };
 
-const toNullableText = (value: unknown): string | null => {
-  const text = toText(value);
+const pickText = (
+  record: Record<string, unknown> | null | undefined,
+  fields: string[],
+): string => {
+  if (!record) return "";
+
+  for (const field of fields) {
+    const text = toText(record[field]);
+    if (text) return text;
+  }
+
+  return "";
+};
+
+const pickNullableText = (
+  record: Record<string, unknown> | null | undefined,
+  fields: string[],
+): string | null => {
+  const text = pickText(record, fields);
   return text.length > 0 ? text : null;
 };
 
@@ -53,16 +71,86 @@ const toNumber = (value: unknown): number | null => {
   return null;
 };
 
+const pickNumber = (
+  record: Record<string, unknown> | null | undefined,
+  fields: string[],
+): number | null => {
+  if (!record) return null;
+
+  for (const field of fields) {
+    const parsed = toNumber(record[field]);
+    if (parsed !== null) return parsed;
+  }
+
+  return null;
+};
+
+const pickArray = (
+  record: Record<string, unknown> | null,
+  fields: string[],
+): unknown[] => {
+  if (!record) return [];
+
+  for (const field of fields) {
+    const value = record[field];
+    if (Array.isArray(value)) return value;
+  }
+
+  return [];
+};
+
 const normalizeBottle = (value: unknown): CustomerHeldBottle | null => {
   const record = isRecord(value) ? value : null;
   if (!record) return null;
 
-  const fullBottleId = toText(record.fullBottleId);
-  const emptyBottleId = toText(record.emptyBottleId);
-  const label = toText(record.label);
-  const quantity = Math.max(0, Math.floor(toNumber(record.quantity) ?? 0));
+  const item = isRecord(record.item) ? record.item : null;
+  const fallbackItemId =
+    pickText(record, ["itemId", "item_id", "bottleId", "bottle_id", "id"]) ||
+    pickText(item, ["itemId", "item_id", "id"]);
+  const fullBottleId =
+    pickText(record, [
+      "fullBottleId",
+      "full_bottle_id",
+      "filledBottleId",
+      "filled_bottle_id",
+      "fullItemId",
+      "full_item_id",
+    ]) || fallbackItemId;
+  const emptyBottleId =
+    pickText(record, [
+      "emptyBottleId",
+      "empty_bottle_id",
+      "emptyItemId",
+      "empty_item_id",
+      "itemId",
+      "item_id",
+      "bottleId",
+      "bottle_id",
+      "id",
+    ]) ||
+    pickText(item, ["itemId", "item_id", "id"]) ||
+    fallbackItemId;
+  const label =
+    pickText(record, ["label", "name", "title"]) ||
+    pickText(item, ["label", "name", "title"]) ||
+    emptyBottleId ||
+    "Bottle";
+  const quantity = Math.max(
+    0,
+    Math.floor(
+      pickNumber(record, [
+        "quantity",
+        "qty",
+        "count",
+        "heldQuantity",
+        "held_quantity",
+        "availableQuantity",
+        "available_quantity",
+      ]) ?? 0,
+    ),
+  );
 
-  if (!fullBottleId || !emptyBottleId || !label || quantity <= 0) {
+  if (!emptyBottleId || quantity <= 0) {
     return null;
   }
 
@@ -70,10 +158,16 @@ const normalizeBottle = (value: unknown): CustomerHeldBottle | null => {
     fullBottleId,
     emptyBottleId,
     label,
-    description: toNullableText(record.description),
-    image_url: toNullableText(record.image_url),
+    description:
+      pickNullableText(record, ["description", "details"]) ??
+      pickNullableText(item, ["description", "details"]),
+    image_url:
+      pickNullableText(record, ["image_url", "imageUrl"]) ??
+      pickNullableText(item, ["image_url", "imageUrl"]),
     quantity,
-    unit: toNullableText(record.unit),
+    unit:
+      pickNullableText(record, ["unit", "unitName", "unit_name"]) ??
+      pickNullableText(item, ["unit", "unitName", "unit_name"]),
   };
 };
 
@@ -81,39 +175,84 @@ const normalizeAsset = (value: unknown): CustomerHeldAsset | null => {
   const record = isRecord(value) ? value : null;
   if (!record) return null;
 
-  const itemId = toText(record.itemId);
-  const label = toText(record.label);
-  const serial = toText(record.serial);
+  const item = isRecord(record.item) ? record.item : null;
+  const itemId =
+    pickText(record, ["itemId", "item_id", "assetId", "asset_id", "id"]) ||
+    pickText(item, ["itemId", "item_id", "assetId", "asset_id", "id"]);
+  const label =
+    pickText(record, ["label", "name", "title"]) ||
+    pickText(item, ["label", "name", "title"]) ||
+    itemId ||
+    "Asset";
+  const serial =
+    pickText(record, [
+      "serial",
+      "serialNumber",
+      "serial_number",
+      "assetSerial",
+      "asset_serial",
+    ]) ||
+    pickText(item, [
+      "serial",
+      "serialNumber",
+      "serial_number",
+      "assetSerial",
+      "asset_serial",
+    ]) ||
+    pickText(record, ["id"]) ||
+    itemId;
 
-  if (!itemId || !label || !serial) {
+  if (!itemId) {
     return null;
   }
 
   return {
     itemId,
     label,
-    description: toNullableText(record.description),
-    image_url: toNullableText(record.image_url),
+    description:
+      pickNullableText(record, ["description", "details"]) ??
+      pickNullableText(item, ["description", "details"]),
+    image_url:
+      pickNullableText(record, ["image_url", "imageUrl"]) ??
+      pickNullableText(item, ["image_url", "imageUrl"]),
+    unit:
+      pickNullableText(record, ["unit", "unitName", "unit_name"]) ??
+      pickNullableText(item, ["unit", "unitName", "unit_name"]),
     serial,
-    assetCategory: toNullableText(record.assetCategory),
+    assetCategory:
+      pickNullableText(record, [
+        "assetCategory",
+        "asset_category",
+        "category",
+      ]) ??
+      pickNullableText(item, ["assetCategory", "asset_category", "category"]),
   };
 };
 
 export const normalizeCustomerHeldItems = (
   value: unknown,
 ): CustomerHeldItems => {
-  const record = isRecord(value) ? value : null;
+  const root = isRecord(value) ? value : null;
+  const record = isRecord(root?.data) ? root.data : root;
   return {
-    bottles: Array.isArray(record?.bottles)
-      ? record.bottles
-          .map((entry) => normalizeBottle(entry))
-          .filter((entry): entry is CustomerHeldBottle => entry !== null)
-      : [],
-    assets: Array.isArray(record?.assets)
-      ? record.assets
-          .map((entry) => normalizeAsset(entry))
-          .filter((entry): entry is CustomerHeldAsset => entry !== null)
-      : [],
+    bottles: pickArray(record, [
+      "bottles",
+      "heldBottles",
+      "held_bottles",
+      "customerBottles",
+      "customer_bottles",
+    ])
+      .map((entry) => normalizeBottle(entry))
+      .filter((entry): entry is CustomerHeldBottle => entry !== null),
+    assets: pickArray(record, [
+      "assets",
+      "heldAssets",
+      "held_assets",
+      "customerAssets",
+      "customer_assets",
+    ])
+      .map((entry) => normalizeAsset(entry))
+      .filter((entry): entry is CustomerHeldAsset => entry !== null),
   };
 };
 
@@ -151,6 +290,7 @@ const toHeldAssetRentItem = (asset: CustomerHeldAsset): RentItem => {
     deposit_kind: "asset",
     action_source: "held_item",
     max_quantity: 1,
+    unit: asset.unit,
     asset_category: asset.assetCategory,
     description: asset.description,
   };
@@ -212,6 +352,7 @@ export const mergeHeldItemsIntoRentItems = (
         typeof existing.max_quantity === "number"
           ? existing.max_quantity
           : nextItem.max_quantity,
+      unit: existing.unit ?? nextItem.unit,
       asset_category: existing.asset_category ?? nextItem.asset_category,
       description: existing.description ?? nextItem.description,
     });

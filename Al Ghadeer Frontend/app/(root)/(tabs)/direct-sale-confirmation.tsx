@@ -1,4 +1,5 @@
 import ApiErrorText from "@/components/ApiErrorText";
+import { VAT_MULTIPLIER, VAT_RATE } from "@/constants/tax";
 import { authenticatedFetch } from "@/store/auth";
 import {
   DirectSaleDraft,
@@ -17,6 +18,7 @@ import {
   normalizeDriverHistoryDetail,
 } from "@/utils/driverHistory";
 import { resolveResourceUrl } from "@/utils/resources";
+import { getTruckBulkItemMatchKeys } from "@/utils/truckLoad";
 import { Ionicons } from "@expo/vector-icons";
 import { useRouter } from "expo-router";
 import React, { useCallback, useMemo, useState } from "react";
@@ -47,6 +49,7 @@ interface SaleRequestBody {
   customerId: string;
   siteId?: string;
   paymentMethod: PaymentMethod;
+  payment_method?: PaymentMethod;
   remark?: string;
   totals?: {
     subtotal: number;
@@ -56,6 +59,10 @@ interface SaleRequestBody {
   retails?: {
     id: string;
     quantity: number;
+    price: number;
+  }[];
+  assets?: {
+    id: string;
     price: number;
   }[];
   refills?: {
@@ -120,8 +127,7 @@ const EMPTY_TRUCK_BULK_ITEMS: NonNullable<
   ReturnType<typeof useOrderStore.getState>["directSaleDraft"]
 >["truckBulkItems"] = [];
 const EMPTY_QUANTITIES: Record<string, number> = {};
-const EMPTY_BOTTLE_PRODUCT_PREFIX = "sale-empty-bottle:";
-const EMPTY_BOTTLE_CATEGORY = "empty_bottle";
+const TRUCK_ASSET_PRODUCT_PREFIX = "sale-asset:";
 
 const normalizeCategory = (category?: string | null) =>
   (category || "")
@@ -129,17 +135,30 @@ const normalizeCategory = (category?: string | null) =>
     .toLowerCase()
     .replace(/[\s_-]+/g, "");
 
-const isEmptyBottleSaleProduct = (
-  product: Pick<DirectSaleDraftProduct, "id" | "category">,
-) =>
-  product.id.startsWith(EMPTY_BOTTLE_PRODUCT_PREFIX) ||
-  normalizeCategory(product.category) ===
-    normalizeCategory(EMPTY_BOTTLE_CATEGORY);
-
-const getSaleLineType = (type?: string | null): "retail" | "refill" => {
-  const normalized = normalizeCategory(type);
+const getSaleLineType = (
+  product: Pick<DirectSaleDraftProduct, "type" | "category">,
+): "retail" | "asset" | "refill" => {
+  const normalized = normalizeCategory(product.type);
+  const normalizedCategory = normalizeCategory(product.category);
   if (normalized.includes("refill")) return "refill";
+  if (normalized.includes("asset") || normalizedCategory.includes("asset")) {
+    return "asset";
+  }
   return "retail";
+};
+
+const getDirectSaleAssetId = (
+  product: Pick<DirectSaleDraftProduct, "id" | "itemId" | "assetId">,
+) => {
+  if (product.assetId?.trim()) return product.assetId.trim();
+  if (product.id.startsWith(TRUCK_ASSET_PRODUCT_PREFIX)) {
+    const assetId = product.id
+      .slice(TRUCK_ASSET_PRODUCT_PREFIX.length)
+      .split(":")[0]
+      ?.trim();
+    if (assetId) return assetId;
+  }
+  return product.itemId;
 };
 
 const toEmptyRefillLabel = (label: string) => {
@@ -173,6 +192,13 @@ const toPriceValue = (value: unknown): number | null => {
     if (Number.isFinite(parsed)) return parsed;
   }
   return null;
+};
+
+const formatCustomerWalletBalance = (balance: number) => {
+  if (balance < 0) {
+    return `Outstanding balance: AED ${Math.abs(balance).toFixed(2)}`;
+  }
+  return `Wallet balance: AED ${balance.toFixed(2)}`;
 };
 
 const formatSiteAddress = (
@@ -242,6 +268,8 @@ const DirectSaleConfirmation = () => {
           label: product.label,
           assetCategory: product.assetCategory,
           image_url: product.image_url,
+          description: product.description,
+          unit: product.unit,
         }),
       );
     const assetMetadataByItemId = new Map(
@@ -300,45 +328,30 @@ const DirectSaleConfirmation = () => {
         refillProductsById.set(product.id, product);
       });
 
-    const selectedRefillQuantities = new Map<string, number>();
-    products
-      .filter(
-        (product) =>
-          product.type === "refill" || isEmptyBottleSaleProduct(product),
-      )
-      .forEach((product) => {
-        const selectedQuantity = quantities[product.id] || 0;
-        if (selectedQuantity <= 0) return;
-        selectedRefillQuantities.set(
-          product.itemId,
-          (selectedRefillQuantities.get(product.itemId) || 0) +
-            selectedQuantity,
-        );
-      });
-
     return truckBulkItems.reduce<BottleDepositOption[]>((options, bulkItem) => {
-      const refillProduct = refillProductsById.get(bulkItem.id);
-      if (!refillProduct) return options;
-      const reservedForSales =
-        selectedRefillQuantities.get(refillProduct.itemId) ||
-        selectedRefillQuantities.get(bulkItem.id) ||
-        0;
-      const availableQuantity = Math.max(
-        0,
-        bulkItem.quantity - reservedForSales,
-      );
-      if (availableQuantity <= 0) return options;
+      const matchKeys = getTruckBulkItemMatchKeys(bulkItem);
+      const refillProduct = matchKeys
+        .map((key) => refillProductsById.get(key))
+        .find((product): product is DirectSaleDraftProduct => Boolean(product));
+      const availableQuantity = Math.max(0, bulkItem.quantity);
+      if (
+        availableQuantity <= 0 ||
+        (!bulkItem.isRefillableBottle && !refillProduct)
+      ) {
+        return options;
+      }
       options.push({
         key: `truck:bottle:${bulkItem.id}`,
-        itemId: bulkItem.id,
-        label: toEmptyRefillLabel(refillProduct.label || bulkItem.label),
-        unit: refillProduct.unit,
-        imageUrl: refillProduct.image_url,
+        itemId: bulkItem.emptyBottleId || bulkItem.itemId || bulkItem.id,
+        label: toEmptyRefillLabel(refillProduct?.label || bulkItem.label),
+        unit: refillProduct?.unit ?? bulkItem.unit,
+        imageUrl:
+          refillProduct?.image_url || resolveResourceUrl(bulkItem.image_url),
         availableQuantity,
       });
       return options;
     }, []);
-  }, [products, quantities, truckBulkItems]);
+  }, [products, truckBulkItems]);
 
   const selectedAssetEntries = useMemo(
     () =>
@@ -371,13 +384,31 @@ const DirectSaleConfirmation = () => {
         .map((bottle) => {
           const quantity =
             directSaleDraft?.bottleReturnQuantities[bottle.key] ?? 0;
-          return quantity > 0 ? { ...bottle, quantity } : null;
+          if (quantity <= 0) return null;
+          const priceDraft =
+            directSaleDraft?.bottleReturnPrices?.[bottle.key] ?? "0.00";
+          const unitPrice = toPriceValue(priceDraft);
+          return {
+            ...bottle,
+            quantity,
+            priceDraft,
+            unitPrice: unitPrice ?? Number.NaN,
+          };
         })
         .filter(
-          (bottle): bottle is BottleReturnOption & { quantity: number } =>
-            bottle !== null,
+          (
+            bottle,
+          ): bottle is BottleReturnOption & {
+            quantity: number;
+            priceDraft: string;
+            unitPrice: number;
+          } => bottle !== null,
         ),
-    [bottleReturnOptions, directSaleDraft?.bottleReturnQuantities],
+    [
+      bottleReturnOptions,
+      directSaleDraft?.bottleReturnPrices,
+      directSaleDraft?.bottleReturnQuantities,
+    ],
   );
 
   const selectedBottleDepositEntries = useMemo(
@@ -422,7 +453,7 @@ const DirectSaleConfirmation = () => {
       ),
     [quantities, selectedProducts],
   );
-  const vat = subtotal * 0.05;
+  const vat = subtotal * VAT_RATE;
   const totalAmount = subtotal + vat;
   const bottleReturnCount = selectedBottleReturnEntries.reduce(
     (sum, bottle) => sum + bottle.quantity,
@@ -437,6 +468,13 @@ const DirectSaleConfirmation = () => {
   const depositValue =
     selectedAssetEntries.reduce(
       (sum, asset) => (Number.isFinite(asset.price) ? sum + asset.price : sum),
+      0,
+    ) +
+    selectedBottleReturnEntries.reduce(
+      (sum, bottle) =>
+        Number.isFinite(bottle.unitPrice)
+          ? sum + bottle.unitPrice * bottle.quantity
+          : sum,
       0,
     ) +
     selectedBottleDepositEntries.reduce(
@@ -547,11 +585,22 @@ const DirectSaleConfirmation = () => {
       );
       return;
     }
+    const invalidBottleReturn = selectedBottleReturnEntries.find(
+      (bottle) => !Number.isFinite(bottle.unitPrice) || bottle.unitPrice < 0,
+    );
+    if (invalidBottleReturn) {
+      showWarningAlert(
+        "Invalid Bottle Return Value",
+        `Enter a valid value for ${invalidBottleReturn.label}.`,
+      );
+      return;
+    }
 
     setIsProcessing(true);
     setApiError(null);
     try {
       const retails: NonNullable<SaleRequestBody["retails"]> = [];
+      const assets: NonNullable<SaleRequestBody["assets"]> = [];
       const refills: NonNullable<SaleRequestBody["refills"]> = [];
       const depositsReturns: NonNullable<SaleRequestBody["depositsReturns"]> = [
         ...selectedAssetEntries.map((asset) => ({
@@ -573,7 +622,7 @@ const DirectSaleConfirmation = () => {
           itemId: bottle.itemId,
           depositKind: "bottle" as const,
           quantity: bottle.quantity,
-          unitPrice: 0,
+          unitPrice: Number(bottle.unitPrice.toFixed(2)),
         })),
       ];
 
@@ -583,13 +632,24 @@ const DirectSaleConfirmation = () => {
         const unitPrice = Number(product.pricePerUnit);
         if (!Number.isFinite(unitPrice)) return;
 
-        const lineType = getSaleLineType(product.type);
+        const lineType = getSaleLineType(product);
         if (lineType === "refill") {
           refills.push({
             filledBottleId: product.itemId,
             filledQuantity: quantity,
             price: unitPrice,
           });
+          return;
+        }
+
+        if (lineType === "asset") {
+          const assetQuantity = Math.max(0, Math.floor(quantity));
+          for (let index = 0; index < assetQuantity; index += 1) {
+            assets.push({
+              id: getDirectSaleAssetId(product),
+              price: unitPrice,
+            });
+          }
           return;
         }
 
@@ -612,18 +672,20 @@ const DirectSaleConfirmation = () => {
             ]
           : [];
 
-      const saleSubtotal = [...retails, ...refills].reduce((sum, item) => {
-        if ("filledQuantity" in item) {
-          return sum + item.price * item.filledQuantity;
-        }
-        return sum + item.price * item.quantity;
-      }, 0);
-      const saleVat = saleSubtotal * 0.05;
+      const saleSubtotal =
+        retails.reduce((sum, item) => sum + item.price * item.quantity, 0) +
+        assets.reduce((sum, item) => sum + item.price, 0) +
+        refills.reduce(
+          (sum, item) => sum + item.price * item.filledQuantity,
+          0,
+        );
+      const saleVat = saleSubtotal * VAT_RATE;
       const saleTotalForPayload = saleSubtotal + saleVat;
 
       const saleData: SaleRequestBody = {
         customerId: directSaleDraft.customerData.id,
         paymentMethod: directSaleDraft.paymentMethod,
+        payment_method: directSaleDraft.paymentMethod,
         totals: {
           subtotal: Number(saleSubtotal.toFixed(2)),
           vat: Number(saleVat.toFixed(2)),
@@ -641,6 +703,9 @@ const DirectSaleConfirmation = () => {
       }
       if (retails.length > 0) {
         saleData.retails = retails;
+      }
+      if (assets.length > 0) {
+        saleData.assets = assets;
       }
       if (refills.length > 0) {
         saleData.refills = refills;
@@ -696,30 +761,77 @@ const DirectSaleConfirmation = () => {
       const saleItems = Array.isArray(saleDetail?.items)
         ? saleDetail.items
         : [];
+      const selectedProductLookup = new Map<string, DirectSaleDraftProduct>();
+      selectedProducts.forEach((product) => {
+        const lineType = getSaleLineType(product);
+        const keys = [
+          product.id,
+          product.itemId,
+          product.assetId,
+          lineType === "asset" ? getDirectSaleAssetId(product) : null,
+        ];
+
+        keys.forEach((key) => {
+          const cleanKey = key?.trim();
+          if (cleanKey && !selectedProductLookup.has(cleanKey)) {
+            selectedProductLookup.set(cleanKey, product);
+          }
+        });
+      });
+      const getSelectedProductForSaleItem = (
+        item: (typeof saleItems)[number],
+      ) =>
+        selectedProductLookup.get(item.itemId) ||
+        selectedProductLookup.get(item.id) ||
+        null;
+      const getSaleItemDisplayLabel = (item: (typeof saleItems)[number]) => {
+        const selectedProduct = getSelectedProductForSaleItem(item);
+        return (
+          selectedProduct?.label || item.label || item.assetCategory || "Asset"
+        );
+      };
       const cartItemsFromSale =
         saleItems.length > 0
-          ? saleItems.map((item) => ({
-              id: item.itemId || item.id,
-              name: item.label,
-              image: resolveResourceUrl(item.imageUrl)
-                ? { uri: resolveResourceUrl(item.imageUrl)! }
-                : null,
-              price: item.unitPrice,
-              quantity: item.quantity,
-              currency: "AED" as const,
-              category: item.itemType,
-            }))
-          : selectedProducts.map((product) => ({
-              id: product.id,
-              name: product.label,
-              image: resolveResourceUrl(product.image_url)
-                ? { uri: resolveResourceUrl(product.image_url)! }
-                : null,
-              price: product.pricePerUnit,
-              quantity: quantities[product.id],
-              currency: "AED" as const,
-              category: product.type || "",
-            }));
+          ? saleItems.map((item) => {
+              const selectedProduct = getSelectedProductForSaleItem(item);
+              const imageUrl =
+                resolveResourceUrl(item.imageUrl) ||
+                resolveResourceUrl(selectedProduct?.image_url);
+
+              return {
+                id: item.itemId || item.id,
+                item_id: item.itemId || item.id,
+                item_type: item.itemType,
+                name: getSaleItemDisplayLabel(item),
+                image: imageUrl ? { uri: imageUrl } : null,
+                price: item.unitPrice,
+                quantity: item.quantity,
+                currency: "AED" as const,
+                category: selectedProduct?.type || item.itemType,
+                assetCategory:
+                  selectedProduct?.assetCategory ?? item.assetCategory ?? null,
+              };
+            })
+          : selectedProducts.map((product) => {
+              const lineType = getSaleLineType(product);
+              return {
+                id: product.id,
+                item_id:
+                  lineType === "asset"
+                    ? getDirectSaleAssetId(product)
+                    : product.itemId,
+                item_type: lineType,
+                name: product.label,
+                image: resolveResourceUrl(product.image_url)
+                  ? { uri: resolveResourceUrl(product.image_url)! }
+                  : null,
+                price: product.pricePerUnit,
+                quantity: quantities[product.id],
+                currency: "AED" as const,
+                category: product.type || "",
+                assetCategory: product.assetCategory ?? null,
+              };
+            });
       const selectedRentItems: NonNullable<Order["rent_items"]> = [
         ...selectedAssetEntries.map((asset) => ({
           id: asset.key,
@@ -760,7 +872,7 @@ const DirectSaleConfirmation = () => {
           item_id: bottle.itemId,
           name: bottle.label,
           category: "deposit" as const,
-          price: 0,
+          price: Number(bottle.unitPrice.toFixed(2)),
           quantity: bottle.quantity,
           image_url: bottle.imageUrl || "",
           in_truck: true,
@@ -814,19 +926,29 @@ const DirectSaleConfirmation = () => {
           : {}),
         products:
           saleItems.length > 0
-            ? saleItems.map((item) => ({
-                id: item.itemId || item.id,
-                name: item.label,
-                quantity: item.quantity,
-                type: item.itemType,
-                category: item.itemType,
-              }))
+            ? saleItems.map((item) => {
+                const selectedProduct = getSelectedProductForSaleItem(item);
+                return {
+                  id: item.itemId || item.id,
+                  item_id: selectedProduct?.itemId || item.itemId || item.id,
+                  name: getSaleItemDisplayLabel(item),
+                  quantity: item.quantity,
+                  price: item.unitPrice,
+                  type: item.itemType,
+                  category: selectedProduct?.type || item.itemType,
+                  asset_category:
+                    selectedProduct?.assetCategory ?? item.assetCategory,
+                };
+              })
             : selectedProducts.map((product) => ({
                 id: product.id,
+                item_id: product.itemId,
                 name: product.label,
                 quantity: quantities[product.id],
+                price: product.pricePerUnit,
                 type: product.type,
                 category: product.type,
+                asset_category: product.assetCategory,
               })),
       };
 
@@ -903,6 +1025,8 @@ const DirectSaleConfirmation = () => {
 
   const customerName = directSaleDraft.customerData?.name || "Customer";
   const customerPhone = directSaleDraft.customerData?.phone || "-";
+  const customerWalletBalance =
+    toPriceValue(directSaleDraft.customerData?.walletBalance) ?? 0;
   const selectedSiteLabel =
     directSaleDraft.selectedSite?.siteName ||
     formatSiteAddress(directSaleDraft.selectedSite) ||
@@ -952,6 +1076,16 @@ const DirectSaleConfirmation = () => {
             <View style={styles.customerDetails}>
               <Text style={styles.customerName}>{customerName}</Text>
               <Text style={styles.customerPhone}>{customerPhone}</Text>
+              <Text
+                style={[
+                  styles.customerWalletBalance,
+                  customerWalletBalance < 0
+                    ? styles.customerWalletBalanceNegative
+                    : styles.customerWalletBalancePositive,
+                ]}
+              >
+                {formatCustomerWalletBalance(customerWalletBalance)}
+              </Text>
             </View>
           </View>
           <View style={styles.addressBox}>
@@ -1004,12 +1138,12 @@ const DirectSaleConfirmation = () => {
                       AED{" "}
                       {(
                         product.pricePerUnit *
-                        1.05 *
+                        VAT_MULTIPLIER *
                         (quantities[product.id] || 0)
                       ).toFixed(2)}
                     </Text>
                     <Text style={styles.itemUnitPrice}>
-                      @ {(product.pricePerUnit * 1.05).toFixed(2)}
+                      @ {(product.pricePerUnit * VAT_MULTIPLIER).toFixed(2)}
                     </Text>
                   </View>
                 </View>
@@ -1043,7 +1177,7 @@ const DirectSaleConfirmation = () => {
                   key={bottle.key}
                   label={bottle.label}
                   meta={`Bottle Return - Qty: ${bottle.quantity}`}
-                  price="AED 0.00"
+                  price={`AED ${(bottle.unitPrice * bottle.quantity).toFixed(2)}`}
                   icon="return-up-back-outline"
                   tone="return"
                   showDivider={
@@ -1418,6 +1552,17 @@ const styles = StyleSheet.create({
     fontSize: 13,
     color: "#6B7280",
     marginTop: 2,
+  },
+  customerWalletBalance: {
+    fontSize: 12,
+    fontWeight: "700",
+    marginTop: 4,
+  },
+  customerWalletBalancePositive: {
+    color: "#0F766E",
+  },
+  customerWalletBalanceNegative: {
+    color: "#DC2626",
   },
   addressBox: {
     flexDirection: "row",

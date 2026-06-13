@@ -1,15 +1,15 @@
-import { InputFieldProps } from '@/types/type';
-import { useState } from 'react';
+import { InputFieldProps } from "@/types/type";
+import { useState } from "react";
 import {
-    Image,
-    Keyboard,
-    KeyboardAvoidingView,
-    Platform,
-    Text,
-    TextInput,
-    TouchableWithoutFeedback,
-    View,
-} from 'react-native';
+  Image,
+  Keyboard,
+  KeyboardAvoidingView,
+  Platform,
+  Text,
+  TextInput,
+  TouchableWithoutFeedback,
+  View,
+} from "react-native";
 
 const InputField = ({
   label,
@@ -25,18 +25,22 @@ const InputField = ({
   const [focused, setFocused] = useState(false);
 
   return (
-    <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : 'height'}>
+    <KeyboardAvoidingView
+      behavior={Platform.OS === "ios" ? "padding" : "height"}
+    >
       <TouchableWithoutFeedback onPress={Keyboard.dismiss}>
         <View className="my-2 w-full">
-          <Text className={`text-sm font-JakartaMedium mb-2 text-gray-600 ${labelStyle}`}>
+          <Text
+            className={`text-sm font-JakartaMedium mb-2 text-gray-600 ${labelStyle}`}
+          >
             {label}
           </Text>
           <View
-            className={`flex-row items-center bg-white rounded-2xl border ${focused ? 'border-[#0286FF]' : 'border-gray-200'} ${containerStyle}`}
+            className={`flex-row items-center bg-white rounded-2xl border ${focused ? "border-[#0286FF]" : "border-gray-200"} ${containerStyle}`}
             style={{
               paddingHorizontal: 14,
               paddingVertical: 10,
-              shadowColor: '#1E40AF',
+              shadowColor: "#1E40AF",
               shadowOpacity: focused ? 0.12 : 0.06,
               shadowRadius: focused ? 16 : 12,
               shadowOffset: { width: 0, height: 8 },

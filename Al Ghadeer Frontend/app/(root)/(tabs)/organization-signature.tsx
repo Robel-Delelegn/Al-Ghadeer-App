@@ -1,4 +1,5 @@
 import ApiErrorText from "@/components/ApiErrorText";
+import { VAT_RATE } from "@/constants/tax";
 import { useOrderStore } from "@/store/index";
 import { authenticatedFetch } from "@/store/auth";
 import { Order } from "@/types/order";
@@ -45,10 +46,11 @@ import {
   getDriverHistorySaleId,
   normalizeDeliveryConfirmationResponse,
 } from "@/utils/driverHistory";
+import { getApiBaseUrl } from "@/utils/resources";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import type { SignatureViewRef } from "react-native-signature-canvas";
 
-const IP_ADDRESS = process.env.EXPO_PUBLIC_IP_ADDRESS;
+const IP_ADDRESS = getApiBaseUrl();
 
 const readDeliveryNoteId = (value: unknown): string | undefined => {
   if (!value || typeof value !== "object") return undefined;
@@ -118,6 +120,18 @@ const OrganizationSignature: React.FC = () => {
   const orderDetail = assignedOrders.find(
     (item) => selectedOrder === item.id,
   ) as Order | undefined;
+
+  useEffect(() => {
+    setReceiverName("");
+    setReceiverPosition("");
+    setNotes("");
+    setHasSignature(false);
+    setSignatureData(null);
+    setShowSignatureModal(false);
+    setHasDrawnSignature(false);
+    setApiError(null);
+  }, [orderDetail?.id]);
+
   const editableRentItems = useMemo(
     () => getOrderSelectedDeliveryActions(orderDetail),
     [orderDetail],
@@ -156,7 +170,7 @@ const OrganizationSignature: React.FC = () => {
       }
       return sum + item.price * item.quantity;
     }, 0);
-    const vatAmount = sub * 0.05;
+    const vatAmount = sub * VAT_RATE;
     const total = sub + vatAmount;
     const count = cartItems.reduce(
       (sum, item) => sum + (item?.quantity || 0),
@@ -347,7 +361,7 @@ const OrganizationSignature: React.FC = () => {
         }
         return sum + item.price * item.quantity;
       }, 0);
-      const vatAmount = sub * 0.05;
+      const vatAmount = sub * VAT_RATE;
       const total = sub + vatAmount;
 
       const rentItems = editableRentItems

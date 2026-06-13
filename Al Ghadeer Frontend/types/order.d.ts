@@ -101,8 +101,8 @@ export interface ApiOrderItem {
   latitude: number;
   longitude: number;
   delivery_instructions: string | null;
-  start_time: string;
-  end_time: string;
+  start_time: string | null;
+  end_time: string | null;
   total_amount: number;
   delivery_zone: string | null;
   payment_method: string;
@@ -111,9 +111,10 @@ export interface ApiOrderItem {
     id: string;
     name: string;
     quantity: number;
-    category: "retail-item" | "refill" | "assets";
+    category: "retail-item" | "refill" | "assets" | "asset";
     price: number;
     in_truck: boolean;
+    asset_category?: string | null;
   }[];
   other_actions?: {
     id: string;
@@ -147,8 +148,8 @@ export interface ApiOrderItem {
     email: string | null;
     site_id: string;
     availability: {
-      start_time: string;
-      end_time: string;
+      start_time: string | null;
+      end_time: string | null;
     } | null;
     requires_signature: boolean;
     customer_type: string;
@@ -178,6 +179,17 @@ export interface Order {
   customer_email?: string;
   customer_address?: string;
   customer_type?: "individual" | "organization";
+  customer?: {
+    id?: string;
+    name?: string;
+    phone?: string;
+    email?: string | null;
+    site_id?: string;
+    latitude?: number;
+    longitude?: number;
+    requires_signature?: boolean;
+    customer_type?: string;
+  } | null;
   latitude?: number;
   longitude?: number;
   delivery_instructions?: string;
@@ -212,6 +224,7 @@ export interface Order {
         image_url?: string | null;
         type?: string;
         category?: string;
+        asset_category?: string | null;
       }[]
     | Record<string, number>;
   total_amount?: number;
@@ -227,8 +240,8 @@ export interface Order {
   zone?: string;
   delivery_zone?: string;
   // Availability times
-  start_time?: string;
-  end_time?: string;
+  start_time?: string | null;
+  end_time?: string | null;
   // Completion time (for history)
   completed_at?: string;
   // Signature requirement
@@ -287,9 +300,12 @@ export interface Product {
   item_id?: string;
   item_type?: "asset" | "retail" | "refill";
   name: string;
-  description: string;
-  image_url: string;
+  description?: string | null;
+  image_url?: string | null;
   category?: string; // Product category
+  assetCategory?: string | null;
+  unit?: string | null;
+  pricePerUnit?: number;
 
   // Pricing
   pricing: number;

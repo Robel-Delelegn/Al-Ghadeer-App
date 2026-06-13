@@ -25,6 +25,8 @@ export interface DeliveryStop {
   id: string;
   display_id: string;
   date: string;
+  start_time: string | null;
+  end_time: string | null;
   address: DeliveryAddress;
   instructions: string | null;
   route_id: string | null;
@@ -45,6 +47,8 @@ export interface DeliveryTaskItem {
   type: "asset" | "retail" | "refill";
   unit: string | null;
   image_url: string | null;
+  serial?: string | null;
+  asset_category?: string | null;
 }
 
 export type DeliveryTaskLineKind = "sale" | "deposit" | "return";
@@ -146,6 +150,8 @@ export interface ParsedDeliveryTaskLine {
   itemType: "asset" | "retail" | "refill";
   unit: string | null;
   imageUrl: string | null;
+  serial: string | null;
+  assetCategory: string | null;
   quantity: number;
   unitPrice: number;
   totalPrice: number;
@@ -258,6 +264,26 @@ const parseDeliveryTaskLines = (
     const label =
       pickFirstText(item || line, ["label", "name", "title"]) ||
       `Item ${index + 1}`;
+    const serial =
+      toNullableText(
+        line.serial ??
+          line.serialNumber ??
+          line.serial_number ??
+          line.assetSerial ??
+          line.asset_serial ??
+          item?.serial ??
+          item?.serialNumber ??
+          item?.serial_number ??
+          item?.assetSerial ??
+          item?.asset_serial,
+      ) ?? null;
+    const assetCategory =
+      toNullableText(
+        line.assetCategory ??
+          line.asset_category ??
+          item?.assetCategory ??
+          item?.asset_category,
+      ) ?? null;
     const quantity = Math.max(0, toNumber(line.quantity) ?? 0);
     const unitPrice = toMoney(
       line.unit_price ??
@@ -281,6 +307,8 @@ const parseDeliveryTaskLines = (
         toNullableText(
           line.image_url ?? line.imageUrl ?? item?.image_url ?? item?.imageUrl,
         ) ?? null,
+      serial,
+      assetCategory,
       quantity,
       unitPrice,
       totalPrice: toMoney(quantity * unitPrice),
@@ -324,6 +352,7 @@ interface PlannedOrderProduct {
   image_url: string | null;
   type: "asset" | "retail" | "refill";
   category: string;
+  asset_category?: string | null;
 }
 
 interface PlannedRentItem {
@@ -336,6 +365,7 @@ interface PlannedRentItem {
   image_url: string;
   unit: string | null;
   serial?: string | null;
+  asset_category?: string | null;
   in_truck: boolean;
   max_quantity?: number;
   deposit_action: "deposit" | "deposit_return";
@@ -371,6 +401,9 @@ const derivePlannedOrderProducts = (
         if (!existing.unit && line.unit) {
           existing.unit = line.unit;
         }
+        if (!existing.asset_category && line.assetCategory) {
+          existing.asset_category = line.assetCategory;
+        }
         if (existing.price <= 0 && line.unitPrice > 0) {
           existing.price = line.unitPrice;
         }
@@ -387,6 +420,7 @@ const derivePlannedOrderProducts = (
         image_url: line.imageUrl,
         type: line.itemType,
         category: line.itemType,
+        asset_category: line.assetCategory,
       });
     });
   });
@@ -437,6 +471,8 @@ const derivePlannedRentItems = (tasks: unknown[]): PlannedRentItem[] => {
         quantity,
         image_url: line.imageUrl || "",
         unit: line.unit,
+        serial: line.serial,
+        asset_category: line.assetCategory,
         in_truck: true,
         max_quantity: quantity,
         deposit_action: depositAction,
@@ -467,6 +503,8 @@ export const mapDeliveryToOrder = (delivery: DeliveryStop): Order => {
     order_number: delivery.display_id || delivery.id,
     display_id: delivery.display_id || delivery.id,
     date: delivery.date,
+    start_time: delivery.start_time,
+    end_time: delivery.end_time,
     status: "assigned",
     customer_id: delivery.customer.id,
     customer_site_id: delivery.address.location_id,
@@ -795,7 +833,9 @@ export const getDeliveryEarlierAttemptsTodayCount = (
   return Math.max(0, Math.floor(numericValue));
 };
 
-export const toDeliverySaleItemType = (value: unknown) =>
+export type DeliverySaleItemType = "asset" | "retail" | "refill";
+
+export const toDeliverySaleItemType = (value: unknown): DeliverySaleItemType =>
   normalizeItemType(value);
 
 export const toMoney = (value: unknown): number => {

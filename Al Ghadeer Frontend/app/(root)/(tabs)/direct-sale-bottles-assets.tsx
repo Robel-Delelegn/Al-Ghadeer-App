@@ -6,6 +6,7 @@ import {
 } from "@/store/index";
 import { toTransferableAssetProduct } from "@/utils/assetTransfers";
 import { resolveResourceUrl } from "@/utils/resources";
+import { getTruckBulkItemMatchKeys } from "@/utils/truckLoad";
 import { Ionicons } from "@expo/vector-icons";
 import { useRouter } from "expo-router";
 import React, { useCallback, useEffect, useMemo, useState } from "react";
@@ -61,22 +62,57 @@ const EMPTY_TRUCK_ASSETS: NonNullable<
 const EMPTY_TRUCK_BULK_ITEMS: NonNullable<
   ReturnType<typeof useOrderStore.getState>["directSaleDraft"]
 >["truckBulkItems"] = [];
-const EMPTY_QUANTITIES: Record<string, number> = {};
-const EMPTY_BOTTLE_PRODUCT_PREFIX = "sale-empty-bottle:";
-const EMPTY_BOTTLE_CATEGORY = "empty_bottle";
-
 const normalizeCategory = (category?: string | null) =>
   (category || "")
     .trim()
     .toLowerCase()
     .replace(/[\s_-]+/g, "");
 
-const isEmptyBottleSaleProduct = (
-  product: Pick<DirectSaleDraftProduct, "id" | "category">,
-) =>
-  product.id.startsWith(EMPTY_BOTTLE_PRODUCT_PREFIX) ||
-  normalizeCategory(product.category) ===
-    normalizeCategory(EMPTY_BOTTLE_CATEGORY);
+const isGenericAssetCategory = (value?: string | null) => {
+  const normalized = normalizeCategory(value);
+  return (
+    !normalized ||
+    normalized === "asset" ||
+    normalized === "assets" ||
+    normalized === "assetitem" ||
+    normalized === "assetproduct"
+  );
+};
+
+const getSpecificAssetCategory = (...values: (string | null | undefined)[]) => {
+  for (const value of values) {
+    const label = (value || "").trim();
+    if (label && !isGenericAssetCategory(label)) return label;
+  }
+  return "";
+};
+
+const appendUniqueDisplayPart = (parts: string[], value?: string | null) => {
+  const label = (value || "").trim();
+  if (!label) return;
+  const normalized = label.toLowerCase();
+  if (parts.some((part) => part.toLowerCase() === normalized)) return;
+  parts.push(label);
+};
+
+const getAssetOptionTitle = (asset: AssetOption) =>
+  getSpecificAssetCategory(asset.category) || asset.label || "Asset";
+
+const getAssetOptionDetail = (asset: AssetOption) => {
+  const title = getAssetOptionTitle(asset);
+  const parts: string[] = [];
+
+  if (asset.label.trim().toLowerCase() !== title.trim().toLowerCase()) {
+    appendUniqueDisplayPart(parts, asset.label);
+  }
+  if (asset.serial) {
+    appendUniqueDisplayPart(parts, `S/N ${asset.serial}`);
+  } else if (asset.itemId !== asset.label) {
+    appendUniqueDisplayPart(parts, `ID: ${asset.itemId}`);
+  }
+
+  return parts.join(" · ");
+};
 
 const toEmptyRefillLabel = (label: string) => {
   const trimmedLabel = label.trim();
@@ -208,6 +244,9 @@ const DirectSaleBottlesAssets = () => {
   const [bottleDepositQuantities, setBottleDepositQuantities] = useState<
     Record<string, number>
   >(directSaleDraft?.bottleDepositQuantities || {});
+  const [bottleReturnPrices, setBottleReturnPrices] = useState<
+    Record<string, string>
+  >(directSaleDraft?.bottleReturnPrices || {});
   const [bottleReturnQuantities, setBottleReturnQuantities] = useState<
     Record<string, number>
   >(directSaleDraft?.bottleReturnQuantities || {});
@@ -217,7 +256,6 @@ const DirectSaleBottlesAssets = () => {
   const truckAssets = directSaleDraft?.truckAssets ?? EMPTY_TRUCK_ASSETS;
   const truckBulkItems =
     directSaleDraft?.truckBulkItems ?? EMPTY_TRUCK_BULK_ITEMS;
-  const quantities = directSaleDraft?.quantities ?? EMPTY_QUANTITIES;
 
   const assetOptions = useMemo<AssetOption[]>(() => {
     const transferableAssetProducts = products
@@ -229,6 +267,8 @@ const DirectSaleBottlesAssets = () => {
           label: product.label,
           assetCategory: product.assetCategory,
           image_url: product.image_url,
+          description: product.description,
+          unit: product.unit,
         }),
       );
     const assetMetadataByItemId = new Map(
@@ -290,49 +330,34 @@ const DirectSaleBottlesAssets = () => {
         refillProductsById.set(product.id, product);
       });
 
-    const selectedRefillQuantities = new Map<string, number>();
-    products
-      .filter(
-        (product) =>
-          product.type === "refill" || isEmptyBottleSaleProduct(product),
-      )
-      .forEach((product) => {
-        const selectedQuantity = quantities[product.id] || 0;
-        if (selectedQuantity <= 0) return;
-        selectedRefillQuantities.set(
-          product.itemId,
-          (selectedRefillQuantities.get(product.itemId) || 0) +
-            selectedQuantity,
-        );
-      });
-
     return truckBulkItems.reduce<BottleDepositOption[]>((options, bulkItem) => {
-      const refillProduct = refillProductsById.get(bulkItem.id);
-      if (!refillProduct) return options;
+      const matchKeys = getTruckBulkItemMatchKeys(bulkItem);
+      const refillProduct = matchKeys
+        .map((key) => refillProductsById.get(key))
+        .find((product): product is DirectSaleDraftProduct => Boolean(product));
 
-      const reservedForSales =
-        selectedRefillQuantities.get(refillProduct.itemId) ||
-        selectedRefillQuantities.get(bulkItem.id) ||
-        0;
-      const availableQuantity = Math.max(
-        0,
-        bulkItem.quantity - reservedForSales,
-      );
+      const availableQuantity = Math.max(0, bulkItem.quantity);
 
-      if (availableQuantity <= 0) return options;
+      if (
+        availableQuantity <= 0 ||
+        (!bulkItem.isRefillableBottle && !refillProduct)
+      ) {
+        return options;
+      }
 
       options.push({
         key: `truck:bottle:${bulkItem.id}`,
-        itemId: bulkItem.id,
-        label: toEmptyRefillLabel(refillProduct.label || bulkItem.label),
-        unit: refillProduct.unit,
-        imageUrl: refillProduct.image_url,
+        itemId: bulkItem.emptyBottleId || bulkItem.itemId || bulkItem.id,
+        label: toEmptyRefillLabel(refillProduct?.label || bulkItem.label),
+        unit: refillProduct?.unit ?? bulkItem.unit,
+        imageUrl:
+          refillProduct?.image_url || resolveResourceUrl(bulkItem.image_url),
         availableQuantity,
       });
 
       return options;
     }, []);
-  }, [products, quantities, truckBulkItems]);
+  }, [products, truckBulkItems]);
 
   const heldAssetOptions = useMemo(
     () => assetOptions.filter((asset) => asset.source === "held"),
@@ -397,6 +422,16 @@ const DirectSaleBottlesAssets = () => {
     });
   }, [bottleDepositOptions]);
 
+  useEffect(() => {
+    setBottleReturnPrices((previousPrices) => {
+      const nextPrices: Record<string, string> = {};
+      bottleReturnOptions.forEach((bottle) => {
+        nextPrices[bottle.key] = previousPrices[bottle.key] ?? "0.00";
+      });
+      return nextPrices;
+    });
+  }, [bottleReturnOptions]);
+
   const selectedAssetEntries = useMemo(
     () =>
       assetOptions
@@ -426,13 +461,26 @@ const DirectSaleBottlesAssets = () => {
       bottleReturnOptions
         .map((bottle) => {
           const quantity = bottleReturnQuantities[bottle.key] ?? 0;
-          return quantity > 0 ? { ...bottle, quantity } : null;
+          if (quantity <= 0) return null;
+          const priceDraft = bottleReturnPrices[bottle.key] ?? "0.00";
+          const unitPrice = toPriceValue(priceDraft);
+          return {
+            ...bottle,
+            quantity,
+            priceDraft,
+            unitPrice: unitPrice ?? Number.NaN,
+          };
         })
         .filter(
-          (bottle): bottle is BottleReturnOption & { quantity: number } =>
-            bottle !== null,
+          (
+            bottle,
+          ): bottle is BottleReturnOption & {
+            quantity: number;
+            priceDraft: string;
+            unitPrice: number;
+          } => bottle !== null,
         ),
-    [bottleReturnOptions, bottleReturnQuantities],
+    [bottleReturnOptions, bottleReturnPrices, bottleReturnQuantities],
   );
 
   const selectedBottleDepositEntries = useMemo(
@@ -480,6 +528,13 @@ const DirectSaleBottlesAssets = () => {
       (sum, asset) => (Number.isFinite(asset.price) ? sum + asset.price : sum),
       0,
     ) +
+    selectedBottleReturnEntries.reduce(
+      (sum, bottle) =>
+        Number.isFinite(bottle.unitPrice)
+          ? sum + bottle.unitPrice * bottle.quantity
+          : sum,
+      0,
+    ) +
     selectedBottleDepositEntries.reduce(
       (sum, bottle) =>
         Number.isFinite(bottle.unitPrice)
@@ -497,12 +552,14 @@ const DirectSaleBottlesAssets = () => {
       assetDrafts,
       bottleDepositPrices,
       bottleDepositQuantities,
+      bottleReturnPrices,
       bottleReturnQuantities,
     });
   }, [
     assetDrafts,
     bottleDepositPrices,
     bottleDepositQuantities,
+    bottleReturnPrices,
     bottleReturnQuantities,
     directSaleDraft,
     setDirectSaleDraft,
@@ -574,6 +631,15 @@ const DirectSaleBottlesAssets = () => {
     },
     [bottleReturnOptions],
   );
+  const handleChangeBottleReturnPrice = useCallback(
+    (bottleKey: string, value: string) => {
+      setBottleReturnPrices((previousPrices) => ({
+        ...previousPrices,
+        [bottleKey]: sanitizeMoneyInput(value),
+      }));
+    },
+    [],
+  );
 
   const handleChangeBottleDepositQuantity = useCallback(
     (bottleKey: string, delta: number) => {
@@ -616,6 +682,8 @@ const DirectSaleBottlesAssets = () => {
     const isSelected = draft.selected;
     const isReturn = isReturnAsset(asset);
     const accentColor = isReturn ? "#047857" : "#1D4ED8";
+    const assetTitle = getAssetOptionTitle(asset);
+    const assetDetail = getAssetOptionDetail(asset);
 
     return (
       <View
@@ -656,7 +724,7 @@ const DirectSaleBottlesAssets = () => {
           <View style={styles.movementContent}>
             <View style={styles.movementTitleRow}>
               <Text style={styles.movementTitle} numberOfLines={2}>
-                {asset.label}
+                {assetTitle}
               </Text>
               <View
                 style={[
@@ -673,24 +741,17 @@ const DirectSaleBottlesAssets = () => {
                 </Text>
               </View>
             </View>
+            {assetDetail ? (
+              <Text style={styles.movementDetail} numberOfLines={1}>
+                {assetDetail}
+              </Text>
+            ) : null}
             <View style={styles.metaRow}>
               <View style={styles.metaPill}>
                 <Text style={styles.metaPillText}>
                   {isReturn ? "Held" : "On truck"}
                 </Text>
               </View>
-              <View style={styles.metaPill}>
-                <Text style={styles.metaPillText}>
-                  {asset.category || "Asset"}
-                </Text>
-              </View>
-              {asset.serial ? (
-                <View style={styles.metaPill}>
-                  <Text style={styles.metaPillText} numberOfLines={1}>
-                    S/N {asset.serial}
-                  </Text>
-                </View>
-              ) : null}
             </View>
           </View>
         </View>
@@ -741,6 +802,7 @@ const DirectSaleBottlesAssets = () => {
 
   const renderBottleReturnCard = (bottle: BottleReturnOption) => {
     const quantity = bottleReturnQuantities[bottle.key] ?? 0;
+    const price = bottleReturnPrices[bottle.key] ?? "0.00";
     return (
       <View
         key={bottle.key}
@@ -795,10 +857,23 @@ const DirectSaleBottlesAssets = () => {
             </View>
           </View>
         </View>
-        <View style={styles.movementActionRow}>
-          <Text style={[styles.movementVerb, { color: "#047857" }]}>
-            Collect
-          </Text>
+        <View style={styles.valueActionRow}>
+          <View style={styles.valueEditor}>
+            <Text style={styles.valueLabel}>Unit Value</Text>
+            <View style={styles.valueInputRow}>
+              <Text style={styles.valuePrefix}>AED</Text>
+              <TextInput
+                style={styles.valueInput}
+                value={price}
+                onChangeText={(value) =>
+                  handleChangeBottleReturnPrice(bottle.key, value)
+                }
+                placeholder="0.00"
+                placeholderTextColor="#94A3B8"
+                keyboardType="decimal-pad"
+              />
+            </View>
+          </View>
           <QuantityStepper
             quantity={quantity}
             maxQuantity={bottle.availableQuantity}
@@ -1052,7 +1127,7 @@ const DirectSaleBottlesAssets = () => {
             ) : (
               <EmptySection
                 icon="water-outline"
-                text="No bottle deposits are available after selected refills."
+                text="No bottle deposits available."
               />
             )}
           </View>
@@ -1367,6 +1442,13 @@ const styles = StyleSheet.create({
     lineHeight: 19,
     fontWeight: "700",
     color: "#1E40AF",
+  },
+  movementDetail: {
+    marginTop: 3,
+    fontSize: 11,
+    lineHeight: 15,
+    fontWeight: "600",
+    color: "#64748B",
   },
   selectedBadge: {
     borderRadius: 999,

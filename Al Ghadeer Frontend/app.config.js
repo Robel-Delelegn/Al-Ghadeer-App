@@ -1,7 +1,7 @@
 // Load environment variables from .env file
 // This ensures variables are available during build time (including assembleRelease)
 try {
-  require('dotenv').config();
+  require("dotenv").config();
 } catch (e) {
   // dotenv is optional - Expo CLI also loads .env files automatically
   // but this ensures they're available when app.config.js is evaluated
@@ -19,40 +19,41 @@ module.exports = {
     splash: {
       image: "./assets/images/alghadeer_logo.png",
       resizeMode: "contain",
-      backgroundColor: "#ffffff"
+      backgroundColor: "#ffffff",
     },
     newArchEnabled: true,
     ios: {
       infoPlist: {
-        NSLocationWhenInUseUsageDescription: "This app uses your location to show maps."
+        NSLocationWhenInUseUsageDescription:
+          "This app uses your location to show maps.",
       },
       supportsTablet: true,
       config: {
-        googleMapsApiKey: process.env.EXPO_PUBLIC_GOOGLE_API_KEY || "AIzaSyAmLgiMgJ1cn24JYzdmxkdp4HBNqwH4X4U"
-      }
+        googleMapsApiKey: process.env.EXPO_PUBLIC_GOOGLE_API_KEY,
+      },
     },
     android: {
       permissions: [
         "ACCESS_FINE_LOCATION",
         "ACCESS_COARSE_LOCATION",
-        "ACCESS_BACKGROUND_LOCATION"
+        "ACCESS_BACKGROUND_LOCATION",
       ],
       adaptiveIcon: {
         foregroundImage: "./assets/images/adaptive-icon.png",
-        backgroundColor: "#ffffff"
+        backgroundColor: "#ffffff",
       },
       config: {
         googleMaps: {
-          apiKey: process.env.EXPO_PUBLIC_GOOGLE_API_KEY
-        }
+          apiKey: process.env.EXPO_PUBLIC_GOOGLE_API_KEY,
+        },
       },
       edgeToEdgeEnabled: true,
-      package: "com.anonymous.alghadeerwaterdriver"
+      package: "com.anonymous.alghadeerwaterdriver",
     },
     web: {
       bundler: "metro",
       output: "static",
-      favicon: "./assets/images/favicon.png"
+      favicon: "./assets/images/favicon.png",
     },
     plugins: [
       [
@@ -60,38 +61,39 @@ module.exports = {
         {
           image: "./assets/images/alghadeer_logo.png",
           resizeMode: "contain",
-          backgroundColor: "#ffffff"
-        }
+          backgroundColor: "#ffffff",
+        },
       ],
       [
         "expo-maps",
         {
           requestLocationPermission: true,
-          locationPermission: "Allow $(PRODUCT_NAME) to use your location"
-        }
+          locationPermission: "Allow $(PRODUCT_NAME) to use your location",
+        },
       ],
       [
         "expo-location",
         {
-          locationAlwaysAndWhenInUsePermission: "This app needs your location to show where you are on the map.",
-          isAndroidBackgroundLocationEnabled: false
-        }
+          locationAlwaysAndWhenInUsePermission:
+            "This app needs your location to show where you are on the map.",
+          isAndroidBackgroundLocationEnabled: false,
+        },
       ],
       "expo-router",
       "expo-secure-store",
-      "react-native-edge-to-edge"
+      "react-native-edge-to-edge",
     ],
     experiments: {
-      typedRoutes: true
+      typedRoutes: true,
     },
     extra: {
       router: {},
       eas: {
-        projectId: "0dc14db6-63e8-4b9e-b0e8-7ac7163b5ab6"
+        projectId: "0dc14db6-63e8-4b9e-b0e8-7ac7163b5ab6",
       },
       // Make environment variables accessible in the app
       ipAddress: process.env.EXPO_PUBLIC_IP_ADDRESS,
-      googleApiKey: process.env.EXPO_PUBLIC_GOOGLE_API_KEY
-    }
-  }
+      googleApiKey: process.env.EXPO_PUBLIC_GOOGLE_API_KEY,
+    },
+  },
 };

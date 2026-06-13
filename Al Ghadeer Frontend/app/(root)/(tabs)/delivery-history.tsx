@@ -1,7 +1,9 @@
 import ApiErrorText from "@/components/ApiErrorText";
-import { authenticatedFetch } from "@/store/auth";
+import { authenticatedFetch, useAuthStore } from "@/store/auth";
+import { useOrderStore } from "@/store/index";
 import { parseApiResponseWithSoftError } from "@/utils/api";
 import { formatDeliveryAddress, parseDeliveryTasks } from "@/utils/deliveries";
+import { getDriverRequestId } from "@/utils/driverIdentity";
 import {
   DriverHistoryDetail,
   DriverHistoryListPayload,
@@ -47,11 +49,19 @@ type HistoryViewTab = "records" | "summary";
 
 type SummaryTone = "neutral" | "success" | "danger" | "money" | "asset";
 type IconName = React.ComponentProps<typeof Ionicons>["name"];
+type ApiRecord = Record<string, unknown>;
 
 interface NormalizedHistoryTask {
   id: string;
   title: string;
   meta: string[];
+}
+
+interface SummarySoldItem {
+  key: string;
+  label: string;
+  quantity: number;
+  amount: number;
 }
 
 const parseServerDate = (rawValue: string): Date | null => {
@@ -203,6 +213,193 @@ const formatAddress = (
 
 const toTrimmedText = (value: unknown): string => {
   return typeof value === "string" ? value.trim() : "";
+};
+
+const isApiRecord = (value: unknown): value is ApiRecord => {
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+};
+
+const readFirstValue = (source: unknown, keys: string[]): unknown => {
+  if (!isApiRecord(source)) return undefined;
+
+  for (let i = 0; i < keys.length; i += 1) {
+    const key = keys[i];
+    const value = source[key];
+    if (value === null || value === undefined) continue;
+    if (typeof value === "string" && !value.trim()) continue;
+    return value;
+  }
+
+  return undefined;
+};
+
+const unwrapDateValue = (value: unknown): unknown => {
+  if (!isApiRecord(value)) return value;
+
+  const seconds = readFirstValue(value, ["seconds", "_seconds"]);
+  if (typeof seconds === "number" && Number.isFinite(seconds)) {
+    return seconds;
+  }
+
+  return (
+    readFirstValue(value, [
+      "date",
+      "dateTime",
+      "datetime",
+      "iso",
+      "timestamp",
+      "value",
+      "$date",
+      "$numberLong",
+    ]) ?? value
+  );
+};
+
+const parseExpenseDate = (value: unknown): Date | null => {
+  let dateLike = value;
+  for (let i = 0; i < 3; i += 1) {
+    const unwrapped = unwrapDateValue(dateLike);
+    if (unwrapped === dateLike) break;
+    dateLike = unwrapped;
+  }
+
+  if (dateLike instanceof Date) {
+    return Number.isNaN(dateLike.getTime()) ? null : dateLike;
+  }
+
+  if (typeof dateLike === "number" && Number.isFinite(dateLike)) {
+    const timestamp = dateLike > 9999999999 ? dateLike : dateLike * 1000;
+    const parsed = new Date(timestamp);
+    return Number.isNaN(parsed.getTime()) ? null : parsed;
+  }
+
+  if (typeof dateLike === "string") {
+    return parseServerDate(dateLike);
+  }
+
+  return null;
+};
+
+const parseExpenseAmount = (value: unknown): number => {
+  if (isApiRecord(value)) {
+    const nestedAmount = readFirstValue(value, [
+      "amount",
+      "value",
+      "total",
+      "totalAmount",
+      "total_amount",
+    ]);
+    if (nestedAmount !== undefined) return parseExpenseAmount(nestedAmount);
+  }
+
+  if (typeof value === "number" && Number.isFinite(value)) return value;
+
+  if (typeof value === "string") {
+    const parsed = Number(value.replace(/[^\d.-]/g, ""));
+    return Number.isFinite(parsed) ? parsed : 0;
+  }
+
+  return 0;
+};
+
+const parseExpenseBoolean = (value: unknown): boolean => {
+  if (typeof value === "boolean") return value;
+  if (typeof value === "number" && Number.isFinite(value)) return value !== 0;
+  if (typeof value === "string") {
+    const normalized = value.trim().toLowerCase();
+    return ["true", "yes", "y", "1", "paid"].includes(normalized);
+  }
+  return false;
+};
+
+const normalizeExpenseStatus = (value: unknown): string => {
+  if (typeof value !== "string") return "";
+  return value
+    .trim()
+    .toLowerCase()
+    .replace(/[\s-]+/g, "_");
+};
+
+const getExpenseRecordDate = (expense: unknown): Date | null =>
+  parseExpenseDate(
+    readFirstValue(expense, [
+      "date",
+      "expenseDate",
+      "expense_date",
+      "requestDate",
+      "request_date",
+      "spentAt",
+      "spent_at",
+      "submissionDate",
+      "submission_date",
+      "submittedAt",
+      "submitted_at",
+      "createdAt",
+      "created_at",
+      "requestedAt",
+      "requested_at",
+    ]),
+  );
+
+const getExpenseRecordAmount = (expense: unknown): number =>
+  parseExpenseAmount(
+    readFirstValue(expense, [
+      "amount",
+      "value",
+      "total",
+      "totalAmount",
+      "total_amount",
+    ]),
+  );
+
+const isApprovedExpenseForDeduction = (expense: unknown): boolean => {
+  const status = normalizeExpenseStatus(
+    readFirstValue(expense, [
+      "status",
+      "state",
+      "approvalStatus",
+      "approval_status",
+    ]),
+  );
+  const paid =
+    parseExpenseBoolean(
+      readFirstValue(expense, ["paid", "isPaid", "is_paid"]),
+    ) || status.includes("paid");
+  const rejected = status.includes("reject") || status.includes("decline");
+  const hasApprovalMarker = Boolean(
+    readFirstValue(expense, [
+      "approvedAt",
+      "approved_at",
+      "approvedBy",
+      "approved_by",
+      "reviewedAt",
+      "reviewed_at",
+      "reviewedBy",
+      "reviewed_by",
+    ]),
+  );
+
+  return (
+    !paid &&
+    !rejected &&
+    (status.includes("approved") ||
+      status.includes("accepted") ||
+      hasApprovalMarker)
+  );
+};
+
+const normalizeExpenseListPayload = (payload: unknown): unknown[] => {
+  if (Array.isArray(payload)) return payload;
+  if (!isApiRecord(payload)) return [];
+
+  const nestedList = readFirstValue(payload, [
+    "expenses",
+    "items",
+    "data",
+    "results",
+  ]);
+
+  return Array.isArray(nestedList) ? nestedList : [];
 };
 
 const formatTaskValue = (value: unknown): string => {
@@ -415,16 +612,41 @@ const SummaryAmountRow: React.FC<{
   label: string;
   amount: number;
   icon: IconName;
-}> = ({ label, amount, icon }) => {
+  emphasis?: boolean;
+}> = ({ label, amount, icon, emphasis = false }) => {
   return (
-    <View style={styles.summaryAmountRow}>
+    <View
+      style={[
+        styles.summaryAmountRow,
+        emphasis && styles.summaryAmountRowEmphasis,
+      ]}
+    >
       <View style={styles.summaryAmountLabelWrap}>
-        <View style={styles.summaryAmountIcon}>
+        <View
+          style={[
+            styles.summaryAmountIcon,
+            emphasis && styles.summaryAmountIconEmphasis,
+          ]}
+        >
           <Ionicons name={icon} size={14} color="#0369A1" />
         </View>
-        <Text style={styles.summaryAmountLabel}>{label}</Text>
+        <Text
+          style={[
+            styles.summaryAmountLabel,
+            emphasis && styles.summaryAmountLabelEmphasis,
+          ]}
+        >
+          {label}
+        </Text>
       </View>
-      <Text style={styles.summaryAmountValue}>AED {formatAmount(amount)}</Text>
+      <Text
+        style={[
+          styles.summaryAmountValue,
+          emphasis && styles.summaryAmountValueEmphasis,
+        ]}
+      >
+        AED {formatAmount(amount)}
+      </Text>
     </View>
   );
 };
@@ -453,6 +675,8 @@ const SummaryMovementRow: React.FC<{
 
 const HistoryScreen = () => {
   const insets = useSafeAreaInsets();
+  const { user } = useAuthStore();
+  const { currentDriver } = useOrderStore();
 
   const [activeTab, setActiveTab] = useState<HistoryViewTab>("records");
   const [search, setSearch] = useState("");
@@ -479,6 +703,7 @@ const HistoryScreen = () => {
   const [loadingMore, setLoadingMore] = useState(false);
   const [apiError, setApiError] = useState<string | null>(null);
   const [summaryItems, setSummaryItems] = useState<DriverHistoryDetail[]>([]);
+  const [summaryApprovedExpenses, setSummaryApprovedExpenses] = useState(0);
   const [summaryLoading, setSummaryLoading] = useState(true);
   const [summaryRefreshing, setSummaryRefreshing] = useState(false);
   const [summaryError, setSummaryError] = useState<string | null>(null);
@@ -488,6 +713,52 @@ const HistoryScreen = () => {
   const [detailError, setDetailError] = useState<string | null>(null);
   const [detailData, setDetailData] = useState<DriverHistoryDetail | null>(
     null,
+  );
+
+  const driverId = useMemo(
+    () =>
+      getDriverRequestId({
+        user,
+        currentDriver,
+      }),
+    [user, currentDriver],
+  );
+
+  const fetchApprovedExpensesForDay = useCallback(
+    async (day: Date): Promise<number> => {
+      if (!driverId) {
+        throw new Error("Driver ID not available for approved expenses.");
+      }
+
+      const params = new URLSearchParams();
+      params.set("status", "approved");
+
+      const response = await authenticatedFetch(
+        `${API_BASE_URL}/expenses?${params.toString()}`,
+        {
+          method: "GET",
+          headers: {
+            "X-Driver-Id": driverId,
+          },
+        },
+      );
+      const result = await parseApiResponseWithSoftError<unknown>(response);
+
+      if (!result.ok) {
+        throw new Error(result.error);
+      }
+
+      return normalizeExpenseListPayload(result.data).reduce<number>(
+        (sum, expense) => {
+          if (!isApprovedExpenseForDeduction(expense)) return sum;
+          const expenseDate = getExpenseRecordDate(expense);
+          if (!sameCalendarDay(expenseDate, day)) return sum;
+          return sum + getExpenseRecordAmount(expense);
+        },
+        0,
+      );
+    },
+    [driverId],
   );
 
   const fetchHistory = useCallback(
@@ -630,8 +901,21 @@ const HistoryScreen = () => {
           pageToLoad += 1;
         }
 
+        let approvedExpenseTotal = 0;
+        try {
+          approvedExpenseTotal = await fetchApprovedExpensesForDay(today);
+        } catch (expenseError) {
+          setSummaryError(
+            expenseError instanceof Error
+              ? expenseError.message
+              : "Could not load approved expenses.",
+          );
+        }
+
+        setSummaryApprovedExpenses(approvedExpenseTotal);
         setSummaryItems(loadedItems);
       } catch (error) {
+        setSummaryApprovedExpenses(0);
         setSummaryItems([]);
         setSummaryError(
           error instanceof Error
@@ -643,7 +927,7 @@ const HistoryScreen = () => {
         setSummaryRefreshing(false);
       }
     },
-    [],
+    [fetchApprovedExpensesForDay],
   );
 
   useFocusEffect(
@@ -824,6 +1108,7 @@ const HistoryScreen = () => {
       (item) => item.isSuccessful === false,
     );
     const failureReasonCounts = new Map<string, number>();
+    const soldItemsByKey = new Map<string, SummarySoldItem>();
 
     const summary = {
       records: todayItems.length,
@@ -836,12 +1121,15 @@ const HistoryScreen = () => {
       walletSales: 0,
       creditSales: 0,
       balanceCollections: 0,
+      approvedExpenses: summaryApprovedExpenses,
+      netDriverCollection: 0,
       bottlesLeft: 0,
       bottlesLeftValue: 0,
       bottlesCollected: 0,
       assetsLeft: 0,
       assetsLeftValue: 0,
       assetsCollected: 0,
+      soldItems: [] as SummarySoldItem[],
       notesCount: 0,
       topFailureReason: "None",
     };
@@ -870,6 +1158,37 @@ const HistoryScreen = () => {
         } else {
           summary.creditSales += item.sale.totals.total;
         }
+
+        item.sale.items.forEach((saleItem) => {
+          const quantity = saleItem.quantity || 0;
+          if (quantity <= 0) return;
+
+          const label =
+            saleItem.itemType === "asset"
+              ? saleItem.assetCategory?.trim() ||
+                saleItem.label?.trim() ||
+                "Asset"
+              : saleItem.label?.trim() ||
+                saleItem.assetCategory?.trim() ||
+                "Sold Item";
+          const key =
+            `${saleItem.itemType}:${saleItem.itemId || saleItem.id || label}`.toLowerCase();
+          const existing = soldItemsByKey.get(key);
+          const amount = quantity * (saleItem.unitPrice || 0);
+
+          if (existing) {
+            existing.quantity += quantity;
+            existing.amount += amount;
+            return;
+          }
+
+          soldItemsByKey.set(key, {
+            key,
+            label,
+            quantity,
+            amount,
+          });
+        });
       }
 
       item.creditCollections.forEach((entry) => {
@@ -899,6 +1218,12 @@ const HistoryScreen = () => {
       });
     });
 
+    summary.netDriverCollection =
+      summary.cashSales + summary.balanceCollections - summary.approvedExpenses;
+    summary.soldItems = Array.from(soldItemsByKey.values()).sort((a, b) =>
+      a.label.localeCompare(b.label),
+    );
+
     const topFailure = Array.from(failureReasonCounts.entries()).sort(
       (first, second) => second[1] - first[1],
     )[0];
@@ -908,7 +1233,7 @@ const HistoryScreen = () => {
     }
 
     return summary;
-  }, [summaryItems]);
+  }, [summaryApprovedExpenses, summaryItems]);
 
   const fetchHistoryDetail = useCallback(async (id: string) => {
     setShowDetail(true);
@@ -1317,8 +1642,24 @@ const HistoryScreen = () => {
                 <View style={styles.summaryPanel}>
                   <SummaryAmountRow
                     icon="cash-outline"
-                    label="Cash sales"
+                    label="Cash sale collected"
                     amount={todaySummary.cashSales}
+                  />
+                  <SummaryAmountRow
+                    icon="remove-circle-outline"
+                    label="Approved expenses"
+                    amount={todaySummary.approvedExpenses}
+                  />
+                  <SummaryAmountRow
+                    icon="archive-outline"
+                    label="Balance collected"
+                    amount={todaySummary.balanceCollections}
+                  />
+                  <SummaryAmountRow
+                    icon="calculator-outline"
+                    label="Net amount to collect from driver"
+                    amount={todaySummary.netDriverCollection}
+                    emphasis
                   />
                   <SummaryAmountRow
                     icon="receipt-outline"
@@ -1335,11 +1676,25 @@ const HistoryScreen = () => {
                     label="Credit sales"
                     amount={todaySummary.creditSales}
                   />
-                  <SummaryAmountRow
-                    icon="archive-outline"
-                    label="Balance collected"
-                    amount={todaySummary.balanceCollections}
-                  />
+                </View>
+              </SummarySection>
+
+              <SummarySection title="Items Sold">
+                <View style={styles.summaryPanel}>
+                  {todaySummary.soldItems.length > 0 ? (
+                    todaySummary.soldItems.map((item) => (
+                      <SummaryMovementRow
+                        key={item.key}
+                        label={item.label}
+                        count={item.quantity}
+                        amount={item.amount}
+                      />
+                    ))
+                  ) : (
+                    <Text style={styles.summaryEmptyText}>
+                      No sold items today.
+                    </Text>
+                  )}
                 </View>
               </SummarySection>
 
@@ -2072,6 +2427,9 @@ const styles = StyleSheet.create({
     justifyContent: "space-between",
     gap: 12,
   },
+  summaryAmountRowEmphasis: {
+    backgroundColor: "#ECFDF5",
+  },
   summaryAmountLabelWrap: {
     flex: 1,
     flexDirection: "row",
@@ -2086,17 +2444,33 @@ const styles = StyleSheet.create({
     alignItems: "center",
     justifyContent: "center",
   },
+  summaryAmountIconEmphasis: {
+    backgroundColor: "#D1FAE5",
+  },
   summaryAmountLabel: {
     flex: 1,
     color: "#334155",
     fontSize: 13,
     fontWeight: "700",
   },
+  summaryAmountLabelEmphasis: {
+    color: "#065F46",
+  },
   summaryAmountValue: {
     color: "#0F172A",
     fontSize: 13,
     fontWeight: "800",
     textAlign: "right",
+  },
+  summaryAmountValueEmphasis: {
+    color: "#047857",
+  },
+  summaryEmptyText: {
+    paddingHorizontal: 12,
+    paddingVertical: 14,
+    color: "#64748B",
+    fontSize: 13,
+    fontWeight: "700",
   },
   summaryMovementRow: {
     minHeight: 50,

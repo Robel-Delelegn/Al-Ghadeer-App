@@ -166,13 +166,6 @@ export default function Layout() {
         }}
       />
       <Tabs.Screen
-        name="unsuccessful-report"
-        options={{
-          headerShown: false,
-          href: null, // Hide from tab bar
-        }}
-      />
-      <Tabs.Screen
         name="payment-confirmation"
         options={{
           headerShown: false,

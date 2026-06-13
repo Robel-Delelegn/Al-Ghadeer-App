@@ -6,6 +6,8 @@ export interface AssetProductSource {
   label: string;
   assetCategory?: string | null;
   image_url?: string | null;
+  description?: string | null;
+  unit?: string | null;
 }
 
 export interface TransferableAssetProduct {
@@ -15,6 +17,8 @@ export interface TransferableAssetProduct {
   serial: string | null;
   assetCategory: string | null;
   imageUrl: string | null;
+  description: string | null;
+  unit: string | null;
 }
 
 export type TransferAssetRentItem = NonNullable<Order["rent_items"]>[number];
@@ -51,6 +55,8 @@ export const toTransferableAssetProduct = (
     serial: parsed.serial,
     assetCategory: product.assetCategory?.trim() || null,
     imageUrl: product.image_url?.trim() || null,
+    description: product.description?.trim() || null,
+    unit: product.unit?.trim() || null,
   };
 };
 
@@ -61,10 +67,12 @@ export const toTransferAssetRentItem = (
     id: asset.itemId,
     item_id: asset.itemId,
     name: asset.label,
+    description: asset.description,
     category: "deposit",
     price: 0,
     quantity: 0,
     image_url: asset.imageUrl || "",
+    unit: asset.unit,
     serial: asset.serial,
     in_truck: false,
     max_quantity: asset.serial ? 1 : undefined,
@@ -101,7 +109,9 @@ export const mergeAssetProductsIntoRentItems = (
       ...existing,
       item_id: existing.item_id || asset.itemId,
       name: existing.name || asset.label,
+      description: existing.description ?? asset.description,
       image_url: existing.image_url || asset.imageUrl || "",
+      unit: existing.unit ?? asset.unit,
       serial: existing.serial ?? asset.serial,
       category: existing.category || "deposit",
       price: typeof existing.price === "number" ? existing.price : 0,
