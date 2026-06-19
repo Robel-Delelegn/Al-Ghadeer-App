@@ -98,6 +98,7 @@ interface CartItem {
   currency: string;
   category?: string; // Product category
   assetCategory?: string | null;
+  loaded_quantity?: number;
   type?: "5L" | "10L" | "300ml" | "1L" | "20L" | "dispenser"; // Optional - not used in UI
 }
 
@@ -164,6 +165,7 @@ const toCartItem = (
   currency: previous?.currency || "AED",
   category: product.category,
   assetCategory: product.assetCategory ?? null,
+  loaded_quantity: product.loaded_quantity,
 });
 
 const syncCartItemsWithProducts = (

@@ -46,6 +46,7 @@ const SUMMARY_MAX_PAGES = 20;
 
 type HistoryKindFilter = "all" | "delivery" | "direct_sale";
 type HistoryViewTab = "records" | "summary";
+type CalendarTarget = "records" | "summary";
 
 type SummaryTone = "neutral" | "success" | "danger" | "money" | "asset";
 type IconName = React.ComponentProps<typeof Ionicons>["name"];
@@ -587,11 +588,21 @@ const SummaryMetricCard: React.FC<{
           { backgroundColor: getSummaryToneIconBackground(tone) },
         ]}
       >
-        <Ionicons name={icon} size={17} color={getSummaryToneIconColor(tone)} />
+        <Ionicons name={icon} size={15} color={getSummaryToneIconColor(tone)} />
       </View>
-      <Text style={styles.summaryMetricLabel}>{label}</Text>
-      <Text style={styles.summaryMetricValue}>{value}</Text>
-      {helper ? <Text style={styles.summaryMetricHelper}>{helper}</Text> : null}
+      <View style={styles.summaryMetricBody}>
+        <Text style={styles.summaryMetricLabel} numberOfLines={1}>
+          {label}
+        </Text>
+        <Text style={styles.summaryMetricValue} numberOfLines={1}>
+          {value}
+        </Text>
+        {helper ? (
+          <Text style={styles.summaryMetricHelper} numberOfLines={1}>
+            {helper}
+          </Text>
+        ) : null}
+      </View>
     </View>
   );
 };
@@ -692,6 +703,8 @@ const HistoryScreen = () => {
     return new Date(now.getFullYear(), now.getMonth(), 1);
   });
   const [showCalendar, setShowCalendar] = useState(false);
+  const [calendarTarget, setCalendarTarget] =
+    useState<CalendarTarget>("records");
 
   const [items, setItems] = useState<DriverHistoryDetail[]>([]);
   const [page, setPage] = useState(1);
@@ -704,6 +717,9 @@ const HistoryScreen = () => {
   const [apiError, setApiError] = useState<string | null>(null);
   const [summaryItems, setSummaryItems] = useState<DriverHistoryDetail[]>([]);
   const [summaryApprovedExpenses, setSummaryApprovedExpenses] = useState(0);
+  const [summaryDate, setSummaryDate] = useState<Date>(() =>
+    normalizeCalendarDay(new Date()),
+  );
   const [summaryLoading, setSummaryLoading] = useState(true);
   const [summaryRefreshing, setSummaryRefreshing] = useState(false);
   const [summaryError, setSummaryError] = useState<string | null>(null);
@@ -848,7 +864,7 @@ const HistoryScreen = () => {
     [appliedFrom, appliedTo, kindFilter],
   );
 
-  const fetchTodaySummary = useCallback(
+  const fetchDailySummary = useCallback(
     async ({ isRefresh = false }: { isRefresh?: boolean } = {}) => {
       try {
         if (isRefresh) {
@@ -858,9 +874,9 @@ const HistoryScreen = () => {
         }
         setSummaryError(null);
 
-        const today = new Date();
-        const from = toDayStartIso(today);
-        const to = toDayEndIso(today);
+        const targetDate = normalizeCalendarDay(summaryDate);
+        const from = toDayStartIso(targetDate);
+        const to = toDayEndIso(targetDate);
         const loadedItems: DriverHistoryDetail[] = [];
         const loadedIds = new Set<string>();
         let pageToLoad = 1;
@@ -903,7 +919,7 @@ const HistoryScreen = () => {
 
         let approvedExpenseTotal = 0;
         try {
-          approvedExpenseTotal = await fetchApprovedExpensesForDay(today);
+          approvedExpenseTotal = await fetchApprovedExpensesForDay(targetDate);
         } catch (expenseError) {
           setSummaryError(
             expenseError instanceof Error
@@ -918,40 +934,44 @@ const HistoryScreen = () => {
         setSummaryApprovedExpenses(0);
         setSummaryItems([]);
         setSummaryError(
-          error instanceof Error
-            ? error.message
-            : "Could not load today's summary.",
+          error instanceof Error ? error.message : "Could not load summary.",
         );
       } finally {
         setSummaryLoading(false);
         setSummaryRefreshing(false);
       }
     },
-    [fetchApprovedExpensesForDay],
+    [fetchApprovedExpensesForDay, summaryDate],
   );
 
   useFocusEffect(
     useCallback(() => {
       void fetchHistory({ pageToLoad: 1, append: false, isRefresh: false });
-      void fetchTodaySummary({ isRefresh: false });
-    }, [fetchHistory, fetchTodaySummary]),
+    }, [fetchHistory]),
+  );
+
+  useFocusEffect(
+    useCallback(() => {
+      void fetchDailySummary({ isRefresh: false });
+    }, [fetchDailySummary]),
   );
 
   const onRefresh = useCallback(() => {
     if (activeTab === "summary") {
-      void fetchTodaySummary({ isRefresh: true });
+      void fetchDailySummary({ isRefresh: true });
       return;
     }
 
     void fetchHistory({ pageToLoad: 1, append: false, isRefresh: true });
-  }, [activeTab, fetchHistory, fetchTodaySummary]);
+  }, [activeTab, fetchDailySummary, fetchHistory]);
 
   const onLoadMore = useCallback(() => {
     if (loading || loadingMore || refreshing || !hasMore) return;
     void fetchHistory({ pageToLoad: page + 1, append: true, isRefresh: false });
   }, [fetchHistory, hasMore, loading, loadingMore, page, refreshing]);
 
-  const openCalendar = useCallback(() => {
+  const openRecordsCalendar = useCallback(() => {
+    setCalendarTarget("records");
     setDraftFromDate(selectedFromDate);
     setDraftToDate(selectedToDate);
 
@@ -961,6 +981,21 @@ const HistoryScreen = () => {
     );
     setShowCalendar(true);
   }, [selectedFromDate, selectedToDate]);
+
+  const openSummaryCalendar = useCallback(() => {
+    const normalizedSummaryDate = normalizeCalendarDay(summaryDate);
+    setCalendarTarget("summary");
+    setDraftFromDate(normalizedSummaryDate);
+    setDraftToDate(null);
+    setCalendarMonth(
+      new Date(
+        normalizedSummaryDate.getFullYear(),
+        normalizedSummaryDate.getMonth(),
+        1,
+      ),
+    );
+    setShowCalendar(true);
+  }, [summaryDate]);
 
   const closeCalendar = useCallback(() => {
     setShowCalendar(false);
@@ -978,6 +1013,12 @@ const HistoryScreen = () => {
     (date: Date) => {
       const picked = normalizeCalendarDay(date);
 
+      if (calendarTarget === "summary") {
+        setDraftFromDate(picked);
+        setDraftToDate(null);
+        return;
+      }
+
       if (!draftFromDate || (draftFromDate && draftToDate)) {
         setDraftFromDate(picked);
         setDraftToDate(null);
@@ -993,19 +1034,40 @@ const HistoryScreen = () => {
 
       setDraftToDate(picked);
     },
-    [draftFromDate, draftToDate],
+    [calendarTarget, draftFromDate, draftToDate],
   );
 
   const applyDateFilter = useCallback(() => {
     const effectiveFrom = draftFromDate;
     const effectiveTo = draftToDate || draftFromDate;
 
+    if (calendarTarget === "summary") {
+      if (effectiveFrom) {
+        setSummaryDate(normalizeCalendarDay(effectiveFrom));
+      }
+      setShowCalendar(false);
+      return;
+    }
+
     setSelectedFromDate(effectiveFrom);
     setSelectedToDate(effectiveTo);
     setAppliedFrom(effectiveFrom ? toDayStartIso(effectiveFrom) : "");
     setAppliedTo(effectiveTo ? toDayEndIso(effectiveTo) : "");
     setShowCalendar(false);
-  }, [draftFromDate, draftToDate]);
+  }, [calendarTarget, draftFromDate, draftToDate]);
+
+  const clearCalendarDraft = useCallback(() => {
+    if (calendarTarget === "summary") {
+      const today = normalizeCalendarDay(new Date());
+      setDraftFromDate(today);
+      setDraftToDate(null);
+      setCalendarMonth(new Date(today.getFullYear(), today.getMonth(), 1));
+      return;
+    }
+
+    setDraftFromDate(null);
+    setDraftToDate(null);
+  }, [calendarTarget]);
 
   const clearDateFilter = useCallback(() => {
     setSelectedFromDate(null);
@@ -1088,17 +1150,26 @@ const HistoryScreen = () => {
     };
   }, [filteredItems.length, kindFilter, kindScopedItems, total]);
 
-  const todayLabel = useMemo(() => formatCalendarDateLabel(new Date()), []);
+  const summaryDateLabel = useMemo(
+    () => formatCalendarDateLabel(summaryDate),
+    [summaryDate],
+  );
 
-  const todaySummary = useMemo(() => {
-    const today = new Date();
-    const todayItems = summaryItems.filter((item) =>
-      sameCalendarDay(parseServerDate(item.createdAt), today),
+  const summaryEyebrowLabel = useMemo(
+    () =>
+      sameCalendarDay(summaryDate, new Date()) ? "Today" : "Selected date",
+    [summaryDate],
+  );
+
+  const dailySummary = useMemo(() => {
+    const targetDate = normalizeCalendarDay(summaryDate);
+    const dailyItems = summaryItems.filter((item) =>
+      sameCalendarDay(parseServerDate(item.createdAt), targetDate),
     );
-    const scheduledDeliveries = todayItems.filter((item) =>
+    const scheduledDeliveries = dailyItems.filter((item) =>
       isScheduledDeliveryHistory(item),
     );
-    const directSales = todayItems.filter((item) =>
+    const directSales = dailyItems.filter((item) =>
       isAdhocDeliveryHistory(item),
     );
     const successfulDeliveries = scheduledDeliveries.filter(
@@ -1111,17 +1182,20 @@ const HistoryScreen = () => {
     const soldItemsByKey = new Map<string, SummarySoldItem>();
 
     const summary = {
-      records: todayItems.length,
+      records: dailyItems.length,
+      subscriptionDeliveries: 0,
       successfulDeliveries: successfulDeliveries.length,
       failedDeliveries: failedDeliveries.length,
       directSales: directSales.length,
-      totalVisits: todayItems.length,
+      totalVisits: dailyItems.length,
       cashSales: 0,
       checkSales: 0,
       walletSales: 0,
       creditSales: 0,
       balanceCollections: 0,
       approvedExpenses: summaryApprovedExpenses,
+      bottleDepositCash: 0,
+      bottleReturnCash: 0,
       netDriverCollection: 0,
       bottlesLeft: 0,
       bottlesLeftValue: 0,
@@ -1129,15 +1203,20 @@ const HistoryScreen = () => {
       assetsLeft: 0,
       assetsLeftValue: 0,
       assetsCollected: 0,
+      itemsSoldCount: 0,
       soldItems: [] as SummarySoldItem[],
       notesCount: 0,
       topFailureReason: "None",
     };
 
-    todayItems.forEach((item) => {
+    dailyItems.forEach((item) => {
       if (item.remark?.trim()) {
         summary.notesCount += 1;
       }
+
+      summary.subscriptionDeliveries += parseDeliveryTasks(item.tasks).filter(
+        (task) => task.type === "subscription",
+      ).length;
 
       if (item.isSuccessful === false) {
         const reason = item.failureReason?.trim() || "No reason recorded";
@@ -1162,6 +1241,8 @@ const HistoryScreen = () => {
         item.sale.items.forEach((saleItem) => {
           const quantity = saleItem.quantity || 0;
           if (quantity <= 0) return;
+
+          summary.itemsSoldCount += quantity;
 
           const label =
             saleItem.itemType === "asset"
@@ -1203,8 +1284,10 @@ const HistoryScreen = () => {
           if (entry.type === "deposit") {
             summary.bottlesLeft += quantity;
             summary.bottlesLeftValue += value;
+            summary.bottleDepositCash += value;
           } else {
             summary.bottlesCollected += quantity;
+            summary.bottleReturnCash += value;
           }
           return;
         }
@@ -1219,7 +1302,11 @@ const HistoryScreen = () => {
     });
 
     summary.netDriverCollection =
-      summary.cashSales + summary.balanceCollections - summary.approvedExpenses;
+      summary.cashSales +
+      summary.balanceCollections +
+      summary.bottleDepositCash -
+      summary.bottleReturnCash -
+      summary.approvedExpenses;
     summary.soldItems = Array.from(soldItemsByKey.values()).sort((a, b) =>
       a.label.localeCompare(b.label),
     );
@@ -1233,7 +1320,7 @@ const HistoryScreen = () => {
     }
 
     return summary;
-  }, [summaryApprovedExpenses, summaryItems]);
+  }, [summaryApprovedExpenses, summaryDate, summaryItems]);
 
   const fetchHistoryDetail = useCallback(async (id: string) => {
     setShowDetail(true);
@@ -1364,7 +1451,7 @@ const HistoryScreen = () => {
           <Ionicons name="time-outline" size={14} color="#1E40AF" />
           <Text style={styles.headerCountText}>
             {activeTab === "summary"
-              ? todaySummary.records
+              ? dailySummary.records
               : filteredItems.length}
           </Text>
         </View>
@@ -1442,7 +1529,7 @@ const HistoryScreen = () => {
                 styles.calendarTrigger,
                 hasDateFilter && styles.calendarTriggerActive,
               ]}
-              onPress={openCalendar}
+              onPress={openRecordsCalendar}
               activeOpacity={0.85}
             >
               <Ionicons
@@ -1592,19 +1679,34 @@ const HistoryScreen = () => {
           {summaryLoading ? (
             <View style={styles.loadingWrap}>
               <ActivityIndicator size="large" color="#1E40AF" />
-              <Text style={styles.loadingText}>Loading today summary...</Text>
+              <Text style={styles.loadingText}>Loading summary...</Text>
             </View>
           ) : (
             <>
               <View style={styles.summaryHeaderCard}>
-                <View>
-                  <Text style={styles.summaryEyebrow}>Today</Text>
+                <View style={styles.summaryHeaderCopy}>
+                  <Text style={styles.summaryEyebrow}>
+                    {summaryEyebrowLabel}
+                  </Text>
                   <Text style={styles.summaryTitle}>Driver Summary</Text>
-                  <Text style={styles.summaryDate}>{todayLabel}</Text>
+                  <TouchableOpacity
+                    style={styles.summaryDateTrigger}
+                    onPress={openSummaryCalendar}
+                    activeOpacity={0.85}
+                  >
+                    <Ionicons
+                      name="calendar-outline"
+                      size={15}
+                      color="#1E40AF"
+                    />
+                    <Text style={styles.summaryDateTriggerText}>
+                      {summaryDateLabel}
+                    </Text>
+                  </TouchableOpacity>
                 </View>
                 <View style={styles.summaryRecordBadge}>
                   <Text style={styles.summaryRecordValue}>
-                    {todaySummary.records}
+                    {dailySummary.records}
                   </Text>
                   <Text style={styles.summaryRecordLabel}>records</Text>
                 </View>
@@ -1613,27 +1715,50 @@ const HistoryScreen = () => {
               <SummarySection title="Work Summary">
                 <View style={styles.summaryMetricGrid}>
                   <SummaryMetricCard
-                    icon="checkmark-circle-outline"
-                    label="Completed"
-                    value={todaySummary.successfulDeliveries}
+                    icon="repeat-outline"
+                    label="Subscription"
+                    value={dailySummary.subscriptionDeliveries}
                     tone="success"
                   />
                   <SummaryMetricCard
                     icon="close-circle-outline"
                     label="Failed"
-                    value={todaySummary.failedDeliveries}
+                    value={dailySummary.failedDeliveries}
                     tone="danger"
                   />
                   <SummaryMetricCard
                     icon="cash-outline"
                     label="Direct Sales"
-                    value={todaySummary.directSales}
+                    value={dailySummary.directSales}
                     tone="money"
                   />
                   <SummaryMetricCard
                     icon="map-outline"
                     label="Total Visits"
-                    value={todaySummary.totalVisits}
+                    value={dailySummary.totalVisits}
+                  />
+                  <SummaryMetricCard
+                    icon="cube-outline"
+                    label="Items Sold"
+                    value={formatSummaryCount(dailySummary.itemsSoldCount)}
+                    tone="asset"
+                  />
+                  <SummaryMetricCard
+                    icon="arrow-redo-circle-outline"
+                    label="Bottles Left"
+                    value={formatSummaryCount(dailySummary.bottlesLeft)}
+                    helper={
+                      dailySummary.bottlesLeftValue > 0
+                        ? `AED ${formatAmount(dailySummary.bottlesLeftValue)}`
+                        : undefined
+                    }
+                    tone="asset"
+                  />
+                  <SummaryMetricCard
+                    icon="return-down-back-outline"
+                    label="Bottles Collected"
+                    value={formatSummaryCount(dailySummary.bottlesCollected)}
+                    tone="success"
                   />
                 </View>
               </SummarySection>
@@ -1643,81 +1768,81 @@ const HistoryScreen = () => {
                   <SummaryAmountRow
                     icon="cash-outline"
                     label="Cash sale collected"
-                    amount={todaySummary.cashSales}
+                    amount={dailySummary.cashSales}
+                  />
+                  <SummaryAmountRow
+                    icon="add-circle-outline"
+                    label="Bottle deposit cash"
+                    amount={dailySummary.bottleDepositCash}
                   />
                   <SummaryAmountRow
                     icon="remove-circle-outline"
                     label="Approved expenses"
-                    amount={todaySummary.approvedExpenses}
+                    amount={dailySummary.approvedExpenses}
                   />
                   <SummaryAmountRow
                     icon="archive-outline"
                     label="Balance collected"
-                    amount={todaySummary.balanceCollections}
+                    amount={dailySummary.balanceCollections}
                   />
                   <SummaryAmountRow
-                    icon="calculator-outline"
-                    label="Net amount to collect from driver"
-                    amount={todaySummary.netDriverCollection}
-                    emphasis
+                    icon="return-down-back-outline"
+                    label="Bottle return cash"
+                    amount={dailySummary.bottleReturnCash}
                   />
                   <SummaryAmountRow
                     icon="receipt-outline"
                     label="Check sales"
-                    amount={todaySummary.checkSales}
+                    amount={dailySummary.checkSales}
                   />
                   <SummaryAmountRow
                     icon="wallet-outline"
                     label="Wallet sales"
-                    amount={todaySummary.walletSales}
+                    amount={dailySummary.walletSales}
                   />
                   <SummaryAmountRow
                     icon="document-text-outline"
                     label="Credit sales"
-                    amount={todaySummary.creditSales}
+                    amount={dailySummary.creditSales}
+                  />
+                  <SummaryAmountRow
+                    icon="calculator-outline"
+                    label="Net amount to collect from driver"
+                    amount={dailySummary.netDriverCollection}
+                    emphasis
                   />
                 </View>
               </SummarySection>
 
-              <SummarySection title="Items Sold">
+              <SummarySection title="Assets">
                 <View style={styles.summaryPanel}>
-                  {todaySummary.soldItems.length > 0 ? (
-                    todaySummary.soldItems.map((item) => (
+                  <SummaryMovementRow
+                    label="Assets left with customers"
+                    count={dailySummary.assetsLeft}
+                    amount={dailySummary.assetsLeftValue}
+                  />
+                  <SummaryMovementRow
+                    label="Assets collected"
+                    count={dailySummary.assetsCollected}
+                  />
+                </View>
+              </SummarySection>
+
+              <SummarySection title="Products Sold">
+                <View style={styles.summaryPanel}>
+                  {dailySummary.soldItems.length > 0 ? (
+                    dailySummary.soldItems.map((item) => (
                       <SummaryMovementRow
                         key={item.key}
                         label={item.label}
                         count={item.quantity}
-                        amount={item.amount}
                       />
                     ))
                   ) : (
                     <Text style={styles.summaryEmptyText}>
-                      No sold items today.
+                      No products sold for this date.
                     </Text>
                   )}
-                </View>
-              </SummarySection>
-
-              <SummarySection title="Bottles & Assets">
-                <View style={styles.summaryPanel}>
-                  <SummaryMovementRow
-                    label="Bottles left with customers"
-                    count={todaySummary.bottlesLeft}
-                    amount={todaySummary.bottlesLeftValue}
-                  />
-                  <SummaryMovementRow
-                    label="Bottles collected"
-                    count={todaySummary.bottlesCollected}
-                  />
-                  <SummaryMovementRow
-                    label="Assets left with customers"
-                    count={todaySummary.assetsLeft}
-                    amount={todaySummary.assetsLeftValue}
-                  />
-                  <SummaryMovementRow
-                    label="Assets collected"
-                    count={todaySummary.assetsCollected}
-                  />
                 </View>
               </SummarySection>
 
@@ -1736,7 +1861,7 @@ const HistoryScreen = () => {
                         Most common failure
                       </Text>
                       <Text style={styles.summaryIssueValue}>
-                        {todaySummary.topFailureReason}
+                        {dailySummary.topFailureReason}
                       </Text>
                     </View>
                   </View>
@@ -1751,7 +1876,7 @@ const HistoryScreen = () => {
                     <View style={styles.summaryIssueCopy}>
                       <Text style={styles.summaryIssueLabel}>Driver notes</Text>
                       <Text style={styles.summaryIssueValue}>
-                        {todaySummary.notesCount}
+                        {dailySummary.notesCount}
                       </Text>
                     </View>
                   </View>
@@ -1771,7 +1896,9 @@ const HistoryScreen = () => {
         <View style={styles.calendarModalOverlay}>
           <View style={styles.calendarModalCard}>
             <View style={styles.calendarModalHeader}>
-              <Text style={styles.calendarModalTitle}>Date</Text>
+              <Text style={styles.calendarModalTitle}>
+                {calendarTarget === "summary" ? "Summary Date" : "Date"}
+              </Text>
               <TouchableOpacity
                 style={styles.calendarCloseButton}
                 onPress={closeCalendar}
@@ -1860,18 +1987,19 @@ const HistoryScreen = () => {
             </View>
 
             <Text style={styles.calendarSelectionText}>
-              {`From ${formatCalendarDateLabel(draftFromDate)}  •  To ${formatCalendarDateLabel(draftToDate || draftFromDate)}`}
+              {calendarTarget === "summary"
+                ? `Date ${formatCalendarDateLabel(draftFromDate)}`
+                : `From ${formatCalendarDateLabel(draftFromDate)}  •  To ${formatCalendarDateLabel(draftToDate || draftFromDate)}`}
             </Text>
 
             <View style={styles.calendarActionRow}>
               <TouchableOpacity
                 style={styles.clearButton}
-                onPress={() => {
-                  setDraftFromDate(null);
-                  setDraftToDate(null);
-                }}
+                onPress={clearCalendarDraft}
               >
-                <Text style={styles.clearButtonText}>Clear</Text>
+                <Text style={styles.clearButtonText}>
+                  {calendarTarget === "summary" ? "Today" : "Clear"}
+                </Text>
               </TouchableOpacity>
               <TouchableOpacity
                 style={[
@@ -2321,6 +2449,9 @@ const styles = StyleSheet.create({
     justifyContent: "space-between",
     gap: 16,
   },
+  summaryHeaderCopy: {
+    flex: 1,
+  },
   summaryEyebrow: {
     color: "#1E40AF",
     fontSize: 11,
@@ -2339,6 +2470,24 @@ const styles = StyleSheet.create({
     color: "#64748B",
     fontSize: 13,
     fontWeight: "600",
+  },
+  summaryDateTrigger: {
+    alignSelf: "flex-start",
+    marginTop: 8,
+    minHeight: 34,
+    borderRadius: 999,
+    paddingHorizontal: 10,
+    borderWidth: 1,
+    borderColor: "#BFDBFE",
+    backgroundColor: "#EFF6FF",
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
+  },
+  summaryDateTriggerText: {
+    color: "#1E40AF",
+    fontSize: 12,
+    fontWeight: "800",
   },
   summaryRecordBadge: {
     minWidth: 72,
@@ -2377,36 +2526,45 @@ const styles = StyleSheet.create({
   },
   summaryMetricCard: {
     width: "48%",
-    minHeight: 118,
+    minHeight: 66,
     backgroundColor: "#FFFFFF",
     borderWidth: 1,
     borderColor: "#E2E8F0",
-    borderRadius: 14,
-    padding: 12,
+    borderRadius: 12,
+    paddingHorizontal: 10,
+    paddingVertical: 9,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 9,
   },
   summaryMetricIcon: {
-    width: 34,
-    height: 34,
-    borderRadius: 12,
+    width: 28,
+    height: 28,
+    borderRadius: 9,
     alignItems: "center",
     justifyContent: "center",
-    marginBottom: 10,
+  },
+  summaryMetricBody: {
+    flex: 1,
+    minWidth: 0,
   },
   summaryMetricLabel: {
     color: "#64748B",
-    fontSize: 12,
+    fontSize: 10,
     fontWeight: "700",
+    textTransform: "uppercase",
+    letterSpacing: 0.25,
   },
   summaryMetricValue: {
-    marginTop: 4,
+    marginTop: 2,
     color: "#0F172A",
-    fontSize: 24,
+    fontSize: 18,
     fontWeight: "800",
   },
   summaryMetricHelper: {
-    marginTop: 2,
+    marginTop: 1,
     color: "#64748B",
-    fontSize: 11,
+    fontSize: 10,
     fontWeight: "600",
   },
   summaryPanel: {

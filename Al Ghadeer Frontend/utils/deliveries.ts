@@ -815,6 +815,168 @@ export const buildDeliveryTaskOutcomes = (
   return outcomes;
 };
 
+export type ActualDeliverySaleItem = {
+  itemId: string;
+  itemType: DeliverySaleItemType;
+  quantity: number;
+};
+
+export type ActualDeliveryDepositReturn = {
+  type: "deposit" | "deposit_return";
+  depositKind: "asset" | "bottle";
+  itemId: string;
+  quantity: number;
+};
+
+const getTaskLineActualKey = (line: ParsedDeliveryTaskLine): string | null => {
+  if (line.quantity <= 0) return null;
+
+  if (line.kind === "sale") {
+    return `sale:${line.itemType}:${line.itemId}`;
+  }
+
+  if (line.kind === "deposit" || line.kind === "return") {
+    const action = line.kind === "return" ? "deposit_return" : "deposit";
+    return `${action}:${toTaskDepositKind(line)}:${line.itemId}`;
+  }
+
+  return null;
+};
+
+const addActualQuantity = (
+  quantities: Map<string, number>,
+  key: string,
+  quantity: number,
+) => {
+  const safeQuantity = Number.isFinite(quantity) ? Math.max(0, quantity) : 0;
+  if (safeQuantity <= 0) return;
+  quantities.set(key, (quantities.get(key) || 0) + safeQuantity);
+};
+
+const buildPlannedTaskQuantityMap = (
+  tasks: ParsedDeliveryTask[],
+): Map<string, number> => {
+  const quantities = new Map<string, number>();
+
+  tasks.forEach((task) => {
+    task.lines.forEach((line) => {
+      const key = getTaskLineActualKey(line);
+      if (!key) return;
+      addActualQuantity(quantities, key, line.quantity);
+    });
+  });
+
+  return quantities;
+};
+
+const buildActualDeliveryQuantityMap = (
+  saleItems: ActualDeliverySaleItem[],
+  depositsReturns: ActualDeliveryDepositReturn[],
+): Map<string, number> => {
+  const quantities = new Map<string, number>();
+
+  saleItems.forEach((item) => {
+    const itemId = toText(item.itemId);
+    if (!itemId) return;
+    addActualQuantity(
+      quantities,
+      `sale:${normalizeItemType(item.itemType)}:${itemId}`,
+      item.quantity,
+    );
+  });
+
+  depositsReturns.forEach((entry) => {
+    const itemId = toText(entry.itemId);
+    if (!itemId) return;
+    addActualQuantity(
+      quantities,
+      `${entry.type}:${entry.depositKind}:${itemId}`,
+      entry.quantity,
+    );
+  });
+
+  return quantities;
+};
+
+const quantityMapsMatch = (
+  planned: Map<string, number>,
+  actual: Map<string, number>,
+): boolean => {
+  if (planned.size !== actual.size) return false;
+
+  for (const [key, plannedQuantity] of planned.entries()) {
+    const actualQuantity = actual.get(key);
+    if (actualQuantity === undefined) return false;
+    if (Math.abs(plannedQuantity - actualQuantity) > 0.0001) return false;
+  }
+
+  return true;
+};
+
+const getAdjustedSuccessOutcome = (
+  bucket: DeliveryTaskBucket,
+):
+  | DeliveryTaskSuccessOutcome
+  | DeliveryTaskFailureOutcome
+  | DeliveryTaskNotDoneOutcome => {
+  if (bucket === "prepaid_orders" || bucket === "subscriptions") {
+    return "not_done";
+  }
+
+  return "failure";
+};
+
+export const buildDeliveryTaskOutcomesForActualDelivery = (
+  tasks: unknown[],
+  saleItems: ActualDeliverySaleItem[],
+  depositsReturns: ActualDeliveryDepositReturn[],
+): DeliveryTaskOutcomes => {
+  const parsedTasks = parseDeliveryTasks(tasks);
+  const plannedQuantities = buildPlannedTaskQuantityMap(parsedTasks);
+  const actualQuantities = buildActualDeliveryQuantityMap(
+    saleItems,
+    depositsReturns,
+  );
+  const matchesOriginalPlan = quantityMapsMatch(
+    plannedQuantities,
+    actualQuantities,
+  );
+
+  if (matchesOriginalPlan) {
+    return buildDeliveryTaskOutcomes(tasks, "success");
+  }
+
+  const outcomes = emptyTaskOutcomes();
+
+  parsedTasks.forEach((task) => {
+    const outcome = getAdjustedSuccessOutcome(task.bucket);
+
+    if (task.bucket === "pay_on_delivery_orders") {
+      outcomes.pay_on_delivery_orders[task.id] =
+        outcome === "not_done" ? "failure" : outcome;
+      return;
+    }
+
+    if (task.bucket === "staff_orders") {
+      outcomes.staff_orders[task.id] =
+        outcome === "not_done" ? "failure" : outcome;
+      return;
+    }
+
+    if (task.bucket === "prepaid_orders") {
+      outcomes.prepaid_orders[task.id] =
+        outcome === "failure" ? "not_done" : outcome;
+      return;
+    }
+
+    const subscriptionOutcomeId = task.referenceId || task.id;
+    outcomes.subscriptions[subscriptionOutcomeId] =
+      outcome === "failure" ? "not_done" : outcome;
+  });
+
+  return outcomes;
+};
+
 export const getDeliveryEarlierAttemptsTodayCount = (
   order?: Pick<Order, "earlier_visits_today_count"> | null,
 ): number => {

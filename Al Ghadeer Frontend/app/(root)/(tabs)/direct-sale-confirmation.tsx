@@ -465,25 +465,34 @@ const DirectSaleConfirmation = () => {
   );
   const selectedMovementCount =
     selectedAssetEntries.length + bottleReturnCount + bottleDepositCount;
-  const depositValue =
-    selectedAssetEntries.reduce(
-      (sum, asset) => (Number.isFinite(asset.price) ? sum + asset.price : sum),
-      0,
-    ) +
-    selectedBottleReturnEntries.reduce(
-      (sum, bottle) =>
-        Number.isFinite(bottle.unitPrice)
-          ? sum + bottle.unitPrice * bottle.quantity
-          : sum,
-      0,
-    ) +
-    selectedBottleDepositEntries.reduce(
-      (sum, bottle) =>
-        Number.isFinite(bottle.unitPrice)
-          ? sum + bottle.unitPrice * bottle.quantity
-          : sum,
-      0,
-    );
+  const assetDepositValue = selectedAssetEntries.reduce((sum, asset) => {
+    if (asset.action !== "deposit" || !Number.isFinite(asset.price)) {
+      return sum;
+    }
+    return sum + asset.price;
+  }, 0);
+  const assetReturnValue = selectedAssetEntries.reduce((sum, asset) => {
+    if (asset.action !== "deposit_return" || !Number.isFinite(asset.price)) {
+      return sum;
+    }
+    return sum + asset.price;
+  }, 0);
+  const bottleDepositValue = selectedBottleDepositEntries.reduce(
+    (sum, bottle) =>
+      Number.isFinite(bottle.unitPrice)
+        ? sum + bottle.unitPrice * bottle.quantity
+        : sum,
+    0,
+  );
+  const bottleReturnValue = selectedBottleReturnEntries.reduce(
+    (sum, bottle) =>
+      Number.isFinite(bottle.unitPrice)
+        ? sum + bottle.unitPrice * bottle.quantity
+        : sum,
+    0,
+  );
+  const depositValue = assetDepositValue + bottleDepositValue;
+  const returnValue = assetReturnValue + bottleReturnValue;
   const parsedCreditCollectionAmount = useMemo(
     () => parseMoneyDraft(creditCollectionAmount),
     [creditCollectionAmount],
@@ -494,6 +503,11 @@ const DirectSaleConfirmation = () => {
     normalizedCreditCollectionRemark.length > 0;
   const hasCreditCollectionDraft =
     parsedCreditCollectionAmount !== null && parsedCreditCollectionAmount > 0;
+  const creditCollectionTotal = hasCreditCollectionDraft
+    ? parsedCreditCollectionAmount || 0
+    : 0;
+  const receiptTotal =
+    totalAmount + depositValue - returnValue + creditCollectionTotal;
   const hasIncompleteCreditCollection =
     hasCreditCollectionInput && !hasCreditCollectionDraft;
   const hasAnythingToConfirm =
@@ -891,6 +905,8 @@ const DirectSaleConfirmation = () => {
       const responsePaymentMethod =
         saleDetail?.payment?.method || directSaleDraft.paymentMethod;
       const saleTotal = saleDetail?.totals.total ?? totalAmount;
+      const receiptTotalForOrder =
+        saleTotal + depositValue - returnValue + creditCollectionTotal;
       const orderAddress =
         (formattedServerAddress !== "No address"
           ? formattedServerAddress
@@ -918,7 +934,7 @@ const DirectSaleConfirmation = () => {
         requires_immediate_invoice: Boolean(
           data.customer.requires_immediate_invoice,
         ),
-        total_amount: saleTotal,
+        total_amount: receiptTotalForOrder,
         payment_method: responsePaymentMethod,
         rent_items: selectedRentItems,
         ...(selectedCreditCollections.length > 0
@@ -997,6 +1013,9 @@ const DirectSaleConfirmation = () => {
     selectedProducts,
     setLastConfirmPaymentResponse,
     setPaymentMethod,
+    creditCollectionTotal,
+    depositValue,
+    returnValue,
     totalAmount,
   ]);
 
@@ -1177,7 +1196,7 @@ const DirectSaleConfirmation = () => {
                   key={bottle.key}
                   label={bottle.label}
                   meta={`Bottle Return - Qty: ${bottle.quantity}`}
-                  price={`AED ${(bottle.unitPrice * bottle.quantity).toFixed(2)}`}
+                  price={`- AED ${(bottle.unitPrice * bottle.quantity).toFixed(2)}`}
                   icon="return-up-back-outline"
                   tone="return"
                   showDivider={
@@ -1211,7 +1230,7 @@ const DirectSaleConfirmation = () => {
                   key={asset.key}
                   label={asset.label}
                   meta={`${asset.action === "deposit_return" ? "Asset Return" : "Asset Deposit"}${asset.serial ? ` - S/N ${asset.serial}` : ""}`}
-                  price={`AED ${asset.price.toFixed(2)}`}
+                  price={`${asset.action === "deposit_return" ? "- " : ""}AED ${asset.price.toFixed(2)}`}
                   icon={
                     asset.action === "deposit_return"
                       ? "return-up-back-outline"
@@ -1295,7 +1314,7 @@ const DirectSaleConfirmation = () => {
         <View style={styles.card}>
           <Text style={styles.cardTitle}>Summary</Text>
           <View style={styles.summaryRow}>
-            <Text style={styles.summaryLabel}>Subtotal</Text>
+            <Text style={styles.summaryLabel}>Subtotal (Excluding VAT)</Text>
             <Text style={styles.summaryValue}>AED {subtotal.toFixed(2)}</Text>
           </View>
           <View style={styles.summaryRow}>
@@ -1304,23 +1323,41 @@ const DirectSaleConfirmation = () => {
           </View>
           {depositValue > 0 ? (
             <View style={styles.summaryRow}>
-              <Text style={styles.summaryLabel}>Bottles & Assets</Text>
+              <Text style={styles.summaryLabel}>Bottle/Asset Deposits</Text>
               <Text style={styles.summaryValue}>
                 AED {depositValue.toFixed(2)}
               </Text>
             </View>
           ) : null}
+          {returnValue > 0 ? (
+            <View style={styles.summaryRow}>
+              <Text style={styles.summaryLabel}>Bottle/Asset Returns</Text>
+              <Text style={styles.summaryValue}>
+                - AED {returnValue.toFixed(2)}
+              </Text>
+            </View>
+          ) : null}
+          {creditCollectionTotal > 0 ? (
+            <View style={styles.summaryRow}>
+              <Text style={styles.summaryLabel}>Cash Collection</Text>
+              <Text style={styles.summaryValue}>
+                AED {creditCollectionTotal.toFixed(2)}
+              </Text>
+            </View>
+          ) : null}
           <View style={styles.summaryDivider} />
           <View style={styles.summaryRow}>
-            <Text style={styles.totalLabel}>Sale Total</Text>
-            <Text style={styles.totalValue}>AED {totalAmount.toFixed(2)}</Text>
+            <Text style={styles.totalLabel}>Receipt Total</Text>
+            <Text style={styles.totalValue}>AED {receiptTotal.toFixed(2)}</Text>
           </View>
         </View>
 
         <View style={styles.actionSection}>
           <View style={styles.actionSummary}>
-            <Text style={styles.actionLabel}>Sale Total</Text>
-            <Text style={styles.actionTotal}>AED {totalAmount.toFixed(2)}</Text>
+            <Text style={styles.actionLabel}>Receipt Total</Text>
+            <Text style={styles.actionTotal}>
+              AED {receiptTotal.toFixed(2)}
+            </Text>
           </View>
           <TouchableOpacity
             style={[

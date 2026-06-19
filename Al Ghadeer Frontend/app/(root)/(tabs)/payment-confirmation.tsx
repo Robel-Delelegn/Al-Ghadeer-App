@@ -20,11 +20,14 @@ import { showErrorAlert } from "@/store/utils/alert";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { parseApiResponseOrRawWithSoftError } from "@/utils/api";
 import {
-  buildDeliveryTaskOutcomes,
+  buildDeliveryTaskOutcomesForActualDelivery,
   getDeliveryEarlierAttemptsTodayCount,
-  toDeliverySaleItemType,
   toMoney,
 } from "@/utils/deliveries";
+import {
+  buildDeliverySaleCartRows,
+  toDeliverySaleRequestItems,
+} from "@/utils/deliverySaleCart";
 import {
   getOrderSelectedDeliveryActions,
   getRentItemDepositAction,
@@ -75,6 +78,10 @@ const PaymentConfirmation: React.FC = () => {
   const [rentItemQuantities, setRentItemQuantities] = useState<
     Record<string, number>
   >({});
+  const { rows: saleRows, invalidItems: invalidSaleItems } = useMemo(
+    () => buildDeliverySaleCartRows(cartItems),
+    [cartItems],
+  );
 
   useEffect(() => {
     const initial: Record<string, number> = {};
@@ -113,30 +120,32 @@ const PaymentConfirmation: React.FC = () => {
     vat,
     totalWithVat,
     itemCount,
-    rentItemsTotal,
+    rentDepositTotal,
+    rentReturnTotal,
     hasRentItemsSelected,
   } = useMemo(() => {
     // Calculate regular products subtotal (with VAT)
-    const sub = cartItems.reduce((sum, item) => {
-      if (
-        !item ||
-        typeof item.price !== "number" ||
-        typeof item.quantity !== "number"
-      ) {
-        return sum;
-      }
-      return sum + item.price * item.quantity;
-    }, 0);
+    const sub = saleRows.reduce(
+      (sum, item) => sum + item.unitPrice * item.quantity,
+      0,
+    );
     const vatAmount = sub * VAT_RATE;
 
-    // Calculate bottle/asset movement total (no VAT) from editable quantities.
-    const rentTotal = editableRentItems.reduce((sum, item) => {
+    // Calculate bottle/asset movement totals (no VAT) from editable quantities.
+    let rentDepositAmount = 0;
+    let rentReturnAmount = 0;
+    editableRentItems.forEach((item) => {
       const quantity = Math.max(
         0,
         rentItemQuantities[item.id] ?? item.quantity ?? 0,
       );
-      return sum + (item.price || 0) * quantity;
-    }, 0);
+      const amount = (item.price || 0) * quantity;
+      if (getRentItemDepositAction(item) === "deposit_return") {
+        rentReturnAmount += amount;
+        return;
+      }
+      rentDepositAmount += amount;
+    });
 
     // Check if any bottle/asset actions have a positive quantity.
     const hasRentItems = editableRentItems.some((item) => {
@@ -147,23 +156,19 @@ const PaymentConfirmation: React.FC = () => {
       return quantity > 0;
     });
 
-    // Sale total excludes bottle/asset deposits and returns. Those movements are
-    // recorded separately and must not affect sale totals or payment amount.
     const total = sub + vatAmount;
-    const count = cartItems.reduce(
-      (sum, item) => sum + (item?.quantity || 0),
-      0,
-    );
+    const count = saleRows.reduce((sum, item) => sum + item.quantity, 0);
 
     return {
       subtotal: sub.toFixed(2),
       vat: vatAmount.toFixed(2),
       totalWithVat: total.toFixed(2),
       itemCount: count,
-      rentItemsTotal: rentTotal.toFixed(2),
+      rentDepositTotal: rentDepositAmount.toFixed(2),
+      rentReturnTotal: rentReturnAmount.toFixed(2),
       hasRentItemsSelected: hasRentItems,
     };
-  }, [cartItems, editableRentItems, rentItemQuantities]);
+  }, [editableRentItems, rentItemQuantities, saleRows]);
   const creditCollections = useMemo(
     () =>
       (orderDetail?.draft_credit_collections ?? []).flatMap((entry) => {
@@ -189,6 +194,25 @@ const PaymentConfirmation: React.FC = () => {
     [orderDetail?.draft_credit_collections],
   );
   const hasDraftCreditCollections = creditCollections.length > 0;
+  const creditCollectionTotal = useMemo(
+    () =>
+      creditCollections.reduce((sum, entry) => {
+        return sum + entry.amount;
+      }, 0),
+    [creditCollections],
+  );
+  const receiptTotal = useMemo(() => {
+    const saleTotal = Number(totalWithVat);
+    const depositTotal = Number(rentDepositTotal);
+    const returnTotal = Number(rentReturnTotal);
+    const nextTotal =
+      (Number.isFinite(saleTotal) ? saleTotal : 0) +
+      (Number.isFinite(depositTotal) ? depositTotal : 0) -
+      (Number.isFinite(returnTotal) ? returnTotal : 0) +
+      creditCollectionTotal;
+    return nextTotal;
+  }, [creditCollectionTotal, rentDepositTotal, rentReturnTotal, totalWithVat]);
+  const receiptTotalLabel = receiptTotal.toFixed(2);
 
   const paymentIcon = useMemo(() => {
     switch (selectedPaymentMethod) {
@@ -218,9 +242,15 @@ const PaymentConfirmation: React.FC = () => {
       return;
     }
 
+    if (invalidSaleItems.length > 0) {
+      const firstInvalid = invalidSaleItems[0];
+      setApiError(`${firstInvalid.name}: ${firstInvalid.reason}`);
+      return;
+    }
+
     // Allow confirmation if products, bottle/asset movement, or credit collection exists.
     if (
-      cartItems.length === 0 &&
+      saleRows.length === 0 &&
       !hasRentItemsSelected &&
       !hasDraftCreditCollections
     ) {
@@ -244,14 +274,7 @@ const PaymentConfirmation: React.FC = () => {
         }))
         .filter((item) => item.quantity > 0);
 
-      const saleItems = cartItems
-        .filter((item) => item?.name && item.quantity > 0)
-        .map((item) => ({
-          itemId: item.item_id || item.id,
-          itemType: toDeliverySaleItemType(item.item_type || item.category),
-          quantity: item.quantity,
-          unitPrice: toMoney(item.price),
-        }));
+      const saleItems = toDeliverySaleRequestItems(saleRows);
       const saleSubtotal = saleItems.reduce(
         (sum, item) => sum + item.unitPrice * item.quantity,
         0,
@@ -284,7 +307,11 @@ const PaymentConfirmation: React.FC = () => {
           orderDetail.display_id || orderDetail.order_number || orderDetail.id,
         earlierAttemptsTodayCount:
           getDeliveryEarlierAttemptsTodayCount(orderDetail),
-        tasks: buildDeliveryTaskOutcomes(orderDetail.tasks || [], "success"),
+        tasks: buildDeliveryTaskOutcomesForActualDelivery(
+          orderDetail.tasks || [],
+          saleItems,
+          depositsReturns,
+        ),
         ...(saleItems.length > 0
           ? {
               sale: {
@@ -394,7 +421,7 @@ const PaymentConfirmation: React.FC = () => {
     }
   }, [
     orderDetail,
-    cartItems,
+    saleRows,
     selectedPaymentMethod,
     router,
     updateOrderStatus,
@@ -407,6 +434,7 @@ const PaymentConfirmation: React.FC = () => {
     hasDraftCreditCollections,
     creditCollections,
     editableRentItems,
+    invalidSaleItems,
     rentItemQuantities,
   ]);
 
@@ -465,7 +493,7 @@ const PaymentConfirmation: React.FC = () => {
             </View>
           </View>
 
-          {cartItems.length === 0 ? (
+          {saleRows.length === 0 ? (
             <View style={styles.emptyItems}>
               <Ionicons name="cart-outline" size={28} color="#D1D5DB" />
               <Text style={styles.emptyItemsText}>No items</Text>
@@ -488,67 +516,57 @@ const PaymentConfirmation: React.FC = () => {
                   Total
                 </Text>
               </View>
-              {cartItems
-                .filter((item) => item?.name)
-                .map((item, index) => {
-                  const priceExVat = item.price;
-                  const vatAmount = priceExVat * VAT_RATE;
-                  const priceWithVat = priceExVat + vatAmount;
-                  const itemVatTotal = vatAmount * item.quantity;
-                  const itemTotal = priceWithVat * item.quantity;
+              {saleRows.map((item, index) => {
+                const priceExVat = item.unitPrice;
+                const vatAmount = priceExVat * VAT_RATE;
+                const priceWithVat = priceExVat + vatAmount;
+                const itemVatTotal = vatAmount * item.quantity;
+                const itemTotal = priceWithVat * item.quantity;
 
-                  return (
-                    <View key={item.id}>
-                      <View style={styles.itemsTableRow}>
-                        <View style={styles.itemProductInfo}>
-                          {item.image?.uri ? (
-                            <Image
-                              source={item.image}
-                              style={styles.itemTableImage}
-                              resizeMode="cover"
-                            />
-                          ) : (
-                            <View style={styles.itemTableIconBox}>
-                              <Ionicons
-                                name="water"
-                                size={12}
-                                color="#0EA5E9"
-                              />
-                            </View>
-                          )}
-                          <Text style={styles.itemTableName} numberOfLines={2}>
-                            {item.name}
-                          </Text>
-                        </View>
-                        <Text style={[styles.itemTableValue, styles.tableQty]}>
-                          {item.quantity}
-                        </Text>
-                        <Text
-                          style={[styles.itemTableValue, styles.tablePrice]}
-                        >
-                          AED {priceExVat.toFixed(2)}
-                        </Text>
-                        <Text
-                          style={[styles.itemTableValue, styles.tablePrice]}
-                        >
-                          AED {itemVatTotal.toFixed(2)}
-                        </Text>
-                        <Text
-                          style={[
-                            styles.itemTableValue,
-                            styles.tablePrice,
-                            styles.itemTableTotal,
-                          ]}
-                        >
-                          AED {itemTotal.toFixed(2)}
+                return (
+                  <View key={item.key}>
+                    <View style={styles.itemsTableRow}>
+                      <View style={styles.itemProductInfo}>
+                        {item.image?.uri ? (
+                          <Image
+                            source={item.image}
+                            style={styles.itemTableImage}
+                            resizeMode="cover"
+                          />
+                        ) : (
+                          <View style={styles.itemTableIconBox}>
+                            <Ionicons name="water" size={12} color="#0EA5E9" />
+                          </View>
+                        )}
+                        <Text style={styles.itemTableName} numberOfLines={2}>
+                          {item.name}
                         </Text>
                       </View>
-                      {index < cartItems.length - 1 && (
-                        <View style={styles.itemDivider} />
-                      )}
+                      <Text style={[styles.itemTableValue, styles.tableQty]}>
+                        {item.quantity}
+                      </Text>
+                      <Text style={[styles.itemTableValue, styles.tablePrice]}>
+                        AED {priceExVat.toFixed(2)}
+                      </Text>
+                      <Text style={[styles.itemTableValue, styles.tablePrice]}>
+                        AED {itemVatTotal.toFixed(2)}
+                      </Text>
+                      <Text
+                        style={[
+                          styles.itemTableValue,
+                          styles.tablePrice,
+                          styles.itemTableTotal,
+                        ]}
+                      >
+                        AED {itemTotal.toFixed(2)}
+                      </Text>
                     </View>
-                  );
-                })}
+                    {index < saleRows.length - 1 && (
+                      <View style={styles.itemDivider} />
+                    )}
+                  </View>
+                );
+              })}
             </>
           )}
         </View>
@@ -642,7 +660,8 @@ const PaymentConfirmation: React.FC = () => {
                         styles.itemTableTotal,
                       ]}
                     >
-                      AED {(item.price * quantity).toFixed(2)}
+                      {isReturnAction ? "- " : ""}AED{" "}
+                      {(item.price * quantity).toFixed(2)}
                     </Text>
                   </View>
                   {index < editableRentItems.length - 1 && (
@@ -750,17 +769,29 @@ const PaymentConfirmation: React.FC = () => {
             <Text style={styles.totalLabel}>VAT (5%)</Text>
             <Text style={styles.totalValue}>AED {vat}</Text>
           </View>
-          {parseFloat(rentItemsTotal) > 0 && (
+          {parseFloat(rentDepositTotal) > 0 && (
             <View style={styles.totalRow}>
-              <Text style={styles.totalLabel}>Bottles & Assets</Text>
-              <Text style={styles.totalValue}>AED {rentItemsTotal}</Text>
+              <Text style={styles.totalLabel}>Bottle/Asset Deposits</Text>
+              <Text style={styles.totalValue}>AED {rentDepositTotal}</Text>
+            </View>
+          )}
+          {parseFloat(rentReturnTotal) > 0 && (
+            <View style={styles.totalRow}>
+              <Text style={styles.totalLabel}>Bottle/Asset Returns</Text>
+              <Text style={styles.totalValue}>- AED {rentReturnTotal}</Text>
+            </View>
+          )}
+          {creditCollectionTotal > 0 && (
+            <View style={styles.totalRow}>
+              <Text style={styles.totalLabel}>Cash Collection</Text>
+              <Text style={styles.totalValue}>
+                AED {creditCollectionTotal.toFixed(2)}
+              </Text>
             </View>
           )}
           <View style={styles.totalRow}>
-            <Text style={styles.grandTotalLabel}>
-              Sale Total (Including VAT)
-            </Text>
-            <Text style={styles.grandTotalValue}>AED {totalWithVat}</Text>
+            <Text style={styles.grandTotalLabel}>Receipt Total</Text>
+            <Text style={styles.grandTotalValue}>AED {receiptTotalLabel}</Text>
           </View>
         </View>
 
@@ -784,7 +815,7 @@ const PaymentConfirmation: React.FC = () => {
             onPress={handleConfirmPayment}
             disabled={
               isProcessing ||
-              (cartItems.length === 0 &&
+              (saleRows.length === 0 &&
                 !hasRentItemsSelected &&
                 !hasDraftCreditCollections)
             }
@@ -798,7 +829,9 @@ const PaymentConfirmation: React.FC = () => {
             ) : (
               <>
                 <Text style={styles.confirmButtonText}>
-                  {cartItems.length > 0 ? `Pay AED ${totalWithVat}` : "Confirm"}
+                  {receiptTotal > 0
+                    ? `Pay AED ${receiptTotalLabel}`
+                    : "Confirm"}
                 </Text>
                 <View style={styles.confirmArrow}>
                   <Ionicons name="checkmark" size={16} color="#059669" />

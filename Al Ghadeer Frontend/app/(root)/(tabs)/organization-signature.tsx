@@ -28,11 +28,14 @@ import {
 import { showWarningAlert, showErrorAlert } from "@/store/utils/alert";
 import { parseApiResponseOrRawWithSoftError } from "@/utils/api";
 import {
-  buildDeliveryTaskOutcomes,
+  buildDeliveryTaskOutcomesForActualDelivery,
   getDeliveryEarlierAttemptsTodayCount,
-  toDeliverySaleItemType,
   toMoney,
 } from "@/utils/deliveries";
+import {
+  buildDeliverySaleCartRows,
+  toDeliverySaleRequestItems,
+} from "@/utils/deliverySaleCart";
 import {
   getOrderSelectedDeliveryActions,
   getRentItemDepositAction,
@@ -139,6 +142,10 @@ const OrganizationSignature: React.FC = () => {
   const [rentItemQuantities, setRentItemQuantities] = useState<
     Record<string, number>
   >({});
+  const { rows: saleRows, invalidItems: invalidSaleItems } = useMemo(
+    () => buildDeliverySaleCartRows(cartItems),
+    [cartItems],
+  );
 
   useEffect(() => {
     const initial: Record<string, number> = {};
@@ -160,22 +167,13 @@ const OrganizationSignature: React.FC = () => {
   );
 
   const { totalWithVat, itemCount } = useMemo(() => {
-    const sub = cartItems.reduce((sum, item) => {
-      if (
-        !item ||
-        typeof item.price !== "number" ||
-        typeof item.quantity !== "number"
-      ) {
-        return sum;
-      }
-      return sum + item.price * item.quantity;
-    }, 0);
-    const vatAmount = sub * VAT_RATE;
-    const total = sub + vatAmount;
-    const count = cartItems.reduce(
-      (sum, item) => sum + (item?.quantity || 0),
+    const sub = saleRows.reduce(
+      (sum, item) => sum + item.unitPrice * item.quantity,
       0,
     );
+    const vatAmount = sub * VAT_RATE;
+    const total = sub + vatAmount;
+    const count = saleRows.reduce((sum, item) => sum + item.quantity, 0);
 
     return {
       subtotal: sub.toFixed(2),
@@ -183,7 +181,7 @@ const OrganizationSignature: React.FC = () => {
       totalWithVat: total.toFixed(2),
       itemCount: count,
     };
-  }, [cartItems]);
+  }, [saleRows]);
   const creditCollections = useMemo(
     () =>
       (orderDetail?.draft_credit_collections ?? []).flatMap((entry) => {
@@ -320,8 +318,14 @@ const OrganizationSignature: React.FC = () => {
       return quantity > 0;
     });
 
+    if (invalidSaleItems.length > 0) {
+      const firstInvalid = invalidSaleItems[0];
+      setApiError(`${firstInvalid.name}: ${firstInvalid.reason}`);
+      return;
+    }
+
     if (
-      cartItems.length === 0 &&
+      saleRows.length === 0 &&
       !hasRentItemsSelected &&
       !hasDraftCreditCollections
     ) {
@@ -351,16 +355,10 @@ const OrganizationSignature: React.FC = () => {
     setApiError(null);
     try {
       // Calculate subtotal, VAT, and total
-      const sub = cartItems.reduce((sum, item) => {
-        if (
-          !item ||
-          typeof item.price !== "number" ||
-          typeof item.quantity !== "number"
-        ) {
-          return sum;
-        }
-        return sum + item.price * item.quantity;
-      }, 0);
+      const sub = saleRows.reduce(
+        (sum, item) => sum + item.unitPrice * item.quantity,
+        0,
+      );
       const vatAmount = sub * VAT_RATE;
       const total = sub + vatAmount;
 
@@ -374,14 +372,7 @@ const OrganizationSignature: React.FC = () => {
         }))
         .filter((item) => item.quantity > 0);
 
-      const saleItems = cartItems
-        .filter((item) => item?.name && item.quantity > 0)
-        .map((item) => ({
-          itemId: item.item_id || item.id,
-          itemType: toDeliverySaleItemType(item.item_type || item.category),
-          quantity: item.quantity,
-          unitPrice: toMoney(item.price),
-        }));
+      const saleItems = toDeliverySaleRequestItems(saleRows);
 
       const depositsReturns = rentItems.map((item) => ({
         type: getRentItemDepositAction(item),
@@ -397,7 +388,11 @@ const OrganizationSignature: React.FC = () => {
           orderDetail.display_id || orderDetail.order_number || orderDetail.id,
         earlierAttemptsTodayCount:
           getDeliveryEarlierAttemptsTodayCount(orderDetail),
-        tasks: buildDeliveryTaskOutcomes(orderDetail.tasks || [], "success"),
+        tasks: buildDeliveryTaskOutcomesForActualDelivery(
+          orderDetail.tasks || [],
+          saleItems,
+          depositsReturns,
+        ),
         ...(saleItems.length > 0
           ? {
               sale: {
@@ -519,7 +514,7 @@ const OrganizationSignature: React.FC = () => {
   }, [
     editableRentItems,
     rentItemQuantities,
-    cartItems,
+    saleRows,
     receiverName,
     hasSignature,
     signatureData,
@@ -529,6 +524,7 @@ const OrganizationSignature: React.FC = () => {
     selectedPaymentMethod,
     hasDraftCreditCollections,
     creditCollections,
+    invalidSaleItems,
     setLastConfirmPaymentResponse,
     updateOrderStatus,
     router,
@@ -664,17 +660,15 @@ const OrganizationSignature: React.FC = () => {
                 <Text style={styles.itemBadgeText}>{itemCount}</Text>
               </View>
             </View>
-            {cartItems
-              .filter((item) => item?.name)
-              .map((item, index) => (
-                <View key={item.id} style={styles.itemRow}>
-                  <Text style={styles.itemName}>{item.name}</Text>
-                  <Text style={styles.itemQty}>×{item.quantity}</Text>
-                  <Text style={styles.itemPrice}>
-                    AED {(item.price * item.quantity).toFixed(2)}
-                  </Text>
-                </View>
-              ))}
+            {saleRows.map((item) => (
+              <View key={item.key} style={styles.itemRow}>
+                <Text style={styles.itemName}>{item.name}</Text>
+                <Text style={styles.itemQty}>×{item.quantity}</Text>
+                <Text style={styles.itemPrice}>
+                  AED {(item.unitPrice * item.quantity).toFixed(2)}
+                </Text>
+              </View>
+            ))}
           </View>
 
           {/* Bottle and Asset Movement */}

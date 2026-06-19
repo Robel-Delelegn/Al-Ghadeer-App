@@ -81,6 +81,15 @@ type CreditCollectionRow = {
   remark: string | null;
 };
 
+type InvoiceAdjustmentRow = {
+  id: string;
+  label: string;
+  detail: string | null;
+  quantity: number;
+  unitPrice: number;
+  total: number;
+};
+
 const getPrintModule = (): PrintModule | null => {
   if (printModule !== undefined) {
     return printModule;
@@ -163,14 +172,6 @@ const formatQuantity = (value: number): string => {
 
 const formatCurrency = (value: number): string => {
   return `AED ${value.toFixed(2)}`;
-};
-
-const hasLinePrice = (value: number): boolean => {
-  return Number.isFinite(value) && value > 0;
-};
-
-const formatOptionalLinePrice = (value: number): string => {
-  return hasLinePrice(value) ? formatCurrency(value) : "";
 };
 
 const normalizeItemKind = (value: unknown): string => {
@@ -372,12 +373,36 @@ const ReceiptItemLabel: React.FC<{
   );
 };
 
+const InvoiceAdjustmentLabel: React.FC<{
+  row: InvoiceAdjustmentRow;
+  style: React.ComponentProps<typeof Text>["style"];
+}> = ({ row, style }) => {
+  return (
+    <Text style={style}>
+      <Text>{row.label}</Text>
+      {row.detail ? (
+        <>
+          <Text style={styles.invoiceItemMetaText}>{"\n"}</Text>
+          <Text style={styles.invoiceItemMetaText}>{row.detail}</Text>
+        </>
+      ) : null}
+    </Text>
+  );
+};
+
+const buildInvoiceAdjustmentLabelHtml = (row: InvoiceAdjustmentRow): string => {
+  const detailHtml = row.detail
+    ? `<div style="margin-top:2px;font-size:10px;color:#64748b;">${escapeHtml(row.detail)}</div>`
+    : "";
+
+  return `${escapeHtml(row.label)}${detailHtml}`;
+};
+
 const buildActionSectionHtml = (rows: DeliveryActionRow[]): string => {
   if (rows.length === 0) {
     return "";
   }
 
-  const hasPricedRows = rows.some((row) => hasLinePrice(row.unitPrice));
   const rowsHtml = rows
     .map(
       (row) => `
@@ -385,11 +410,6 @@ const buildActionSectionHtml = (rows: DeliveryActionRow[]): string => {
           <td>${escapeHtml(getDeliveryActionTypeLabel(row))}</td>
           <td>${buildItemLabelHtml(row)}</td>
           <td class="qty-cell">${escapeHtml(formatQuantity(row.quantity))}</td>
-          ${
-            hasPricedRows
-              ? `<td class="amount-cell">${escapeHtml(formatOptionalLinePrice(row.unitPrice))}</td>`
-              : ""
-          }
         </tr>
       `,
     )
@@ -404,51 +424,9 @@ const buildActionSectionHtml = (rows: DeliveryActionRow[]): string => {
             <th>Type</th>
             <th>Item</th>
             <th class="qty-head">Qty</th>
-            ${hasPricedRows ? `<th class="amount-head">Price (No VAT)</th>` : ""}
           </tr>
         </thead>
         <tbody>${rowsHtml}</tbody>
-      </table>
-    </section>
-  `;
-};
-
-const buildCashCollectionSectionHtml = (
-  rows: CreditCollectionRow[],
-): string => {
-  if (rows.length === 0) {
-    return "";
-  }
-
-  const rowsHtml = rows
-    .map(
-      (row) => `
-        <tr>
-          <td>${escapeHtml(row.remark || "Cash Collection")}</td>
-          <td class="amount-cell">${escapeHtml(formatCurrency(row.amount))}</td>
-        </tr>
-      `,
-    )
-    .join("");
-  const totalAmount = rows.reduce((sum, row) => sum + row.amount, 0);
-
-  return `
-    <section class="section">
-      <div class="section-title">Cash Collection</div>
-      <table class="table">
-        <thead>
-          <tr>
-            <th>Remark</th>
-            <th class="amount-head">Amount (No VAT)</th>
-          </tr>
-        </thead>
-        <tbody>${rowsHtml}</tbody>
-        <tfoot>
-          <tr>
-            <td>Total Cash Collection</td>
-            <td class="amount-cell">${escapeHtml(formatCurrency(totalAmount))}</td>
-          </tr>
-        </tfoot>
       </table>
     </section>
   `;
@@ -474,8 +452,6 @@ const DeliveryNoteTableSection: React.FC<{
     return null;
   }
 
-  const hasPricedRows = rows.some((row) => hasLinePrice(row.unitPrice));
-
   return (
     <View style={styles.invoiceItemsSection}>
       <Text style={styles.deliveryNoteSectionTitle}>{title}</Text>
@@ -488,16 +464,6 @@ const DeliveryNoteTableSection: React.FC<{
         <Text style={[styles.invoiceItemsHeaderText, styles.invoiceQtyCell]}>
           Qty
         </Text>
-        {hasPricedRows ? (
-          <Text
-            style={[
-              styles.invoiceItemsHeaderText,
-              styles.deliveryNotePriceCell,
-            ]}
-          >
-            Price (No VAT)
-          </Text>
-        ) : null}
       </View>
       {rows.map((row, index) => (
         <View
@@ -514,13 +480,6 @@ const DeliveryNoteTableSection: React.FC<{
           <Text style={[styles.invoiceItemText, styles.invoiceQtyCell]}>
             {formatQuantity(row.quantity)}
           </Text>
-          {hasPricedRows ? (
-            <Text
-              style={[styles.invoiceItemText, styles.deliveryNotePriceCell]}
-            >
-              {formatOptionalLinePrice(row.unitPrice)}
-            </Text>
-          ) : null}
         </View>
       ))}
     </View>
@@ -533,8 +492,6 @@ const DeliveryNoteActionSection: React.FC<{
   if (rows.length === 0) {
     return null;
   }
-
-  const hasPricedRows = rows.some((row) => hasLinePrice(row.unitPrice));
 
   return (
     <View style={styles.invoiceItemsSection}>
@@ -553,16 +510,6 @@ const DeliveryNoteActionSection: React.FC<{
         <Text style={[styles.invoiceItemsHeaderText, styles.invoiceQtyCell]}>
           Qty
         </Text>
-        {hasPricedRows ? (
-          <Text
-            style={[
-              styles.invoiceItemsHeaderText,
-              styles.deliveryNotePriceCell,
-            ]}
-          >
-            Price (No VAT)
-          </Text>
-        ) : null}
       </View>
       {rows.map((row, index) => (
         <View
@@ -582,91 +529,8 @@ const DeliveryNoteActionSection: React.FC<{
           <Text style={[styles.invoiceItemText, styles.invoiceQtyCell]}>
             {formatQuantity(row.quantity)}
           </Text>
-          {hasPricedRows ? (
-            <Text
-              style={[styles.invoiceItemText, styles.deliveryNotePriceCell]}
-            >
-              {formatOptionalLinePrice(row.unitPrice)}
-            </Text>
-          ) : null}
         </View>
       ))}
-    </View>
-  );
-};
-
-const DeliveryNoteCashCollectionSection: React.FC<{
-  rows: CreditCollectionRow[];
-}> = ({ rows }) => {
-  if (rows.length === 0) {
-    return null;
-  }
-
-  const totalAmount = rows.reduce((sum, row) => sum + row.amount, 0);
-
-  return (
-    <View style={styles.invoiceItemsSection}>
-      <Text style={styles.deliveryNoteSectionTitle}>Cash Collection</Text>
-      <View style={styles.invoiceItemsHeaderRow}>
-        <Text
-          style={[
-            styles.invoiceItemsHeaderText,
-            styles.invoiceCollectionNoteCell,
-          ]}
-        >
-          Remark
-        </Text>
-        <Text
-          style={[
-            styles.invoiceItemsHeaderText,
-            styles.invoiceCollectionAmountCell,
-          ]}
-        >
-          Amount
-        </Text>
-      </View>
-      {rows.map((row, index) => (
-        <View
-          key={row.id}
-          style={[
-            styles.invoiceItemRow,
-            index !== rows.length - 1 && styles.invoiceItemRowBorder,
-          ]}
-        >
-          <Text
-            style={[styles.invoiceItemText, styles.invoiceCollectionNoteCell]}
-          >
-            {row.remark || "Cash Collection"}
-          </Text>
-          <Text
-            style={[
-              styles.invoiceItemText,
-              styles.invoiceItemTotalText,
-              styles.invoiceCollectionAmountCell,
-            ]}
-          >
-            {formatCurrency(row.amount)}
-          </Text>
-        </View>
-      ))}
-      <View style={styles.invoiceCollectionTotalRow}>
-        <Text
-          style={[
-            styles.invoiceCollectionTotalText,
-            styles.invoiceCollectionNoteCell,
-          ]}
-        >
-          Total (No VAT)
-        </Text>
-        <Text
-          style={[
-            styles.invoiceCollectionTotalText,
-            styles.invoiceCollectionAmountCell,
-          ]}
-        >
-          {formatCurrency(totalAmount)}
-        </Text>
-      </View>
     </View>
   );
 };
@@ -864,7 +728,7 @@ const PaymentReceipt: React.FC = () => {
   ]);
 
   const deliveryActionRows = useMemo<DeliveryActionRow[]>(() => {
-    if (confirmationDetail?.depositReturns?.length) {
+    if (confirmationDetail) {
       return confirmationDetail.depositReturns.map((entry) => {
         const assetDisplay = getAssetDisplayLookup(
           deliveryActionAssetDisplayLookup,
@@ -960,6 +824,48 @@ const PaymentReceipt: React.FC = () => {
     orderDetail?.draft_credit_collections,
   ]);
 
+  const invoiceAdjustmentRows = useMemo<InvoiceAdjustmentRow[]>(() => {
+    const depositReturnRows = deliveryActionRows
+      .filter((row) => (row.quantity || 0) > 0)
+      .flatMap((row) => {
+        const itemDisplay = getItemDisplayParts(row);
+        const detail = [itemDisplay.label, itemDisplay.detail]
+          .filter((value): value is string => Boolean(value))
+          .join(" · ");
+        const absoluteUnitPrice = Math.abs(Number(row.unitPrice) || 0);
+        if (absoluteUnitPrice <= 0) {
+          return [];
+        }
+
+        const signedUnitPrice =
+          row.type === "deposit_return"
+            ? -absoluteUnitPrice
+            : absoluteUnitPrice;
+
+        return [
+          {
+            id: `deposit-return:${row.id}`,
+            label: getDeliveryActionTypeLabel(row),
+            detail: detail || null,
+            quantity: row.quantity,
+            unitPrice: signedUnitPrice,
+            total: signedUnitPrice * row.quantity,
+          },
+        ];
+      });
+
+    const cashCollectionRows = creditCollectionRows.map((row) => ({
+      id: `cash-collection:${row.id}`,
+      label: "Cash Collection",
+      detail: row.remark,
+      quantity: 1,
+      unitPrice: row.amount,
+      total: row.amount,
+    }));
+
+    return [...depositReturnRows, ...cashCollectionRows];
+  }, [creditCollectionRows, deliveryActionRows]);
+
   const computedSubtotal = useMemo(
     () =>
       saleRows.reduce((sum, row) => {
@@ -974,6 +880,12 @@ const PaymentReceipt: React.FC = () => {
     confirmationDetail?.sale?.totals.vat ?? computedSubtotal * VAT_RATE;
   const totalAmount =
     confirmationDetail?.sale?.totals.total ?? subtotalAmount + vatAmount;
+  const nonVatAdjustmentTotal = useMemo(
+    () => invoiceAdjustmentRows.reduce((sum, row) => sum + row.total, 0),
+    [invoiceAdjustmentRows],
+  );
+  const receiptSubtotalWithoutVat = subtotalAmount + nonVatAdjustmentTotal;
+  const receiptTotalAmount = totalAmount + nonVatAdjustmentTotal;
 
   const invoiceNumber =
     generatedInvoice?.displayId ||
@@ -1186,10 +1098,6 @@ const PaymentReceipt: React.FC = () => {
         ? escapeHtml(documentRemark.trim())
         : "";
 
-    const hasPricedSaleRows = saleRows.some((row) =>
-      hasLinePrice(row.unitPrice),
-    );
-    const saleItemColumnCount = hasPricedSaleRows ? 3 : 2;
     const itemsHtml =
       saleRows.length > 0
         ? saleRows
@@ -1198,18 +1106,13 @@ const PaymentReceipt: React.FC = () => {
                 <tr>
                   <td>${buildItemLabelHtml(row)}</td>
                   <td class="qty-cell">${escapeHtml(formatQuantity(row.quantity))}</td>
-                  ${
-                    hasPricedSaleRows
-                      ? `<td class="amount-cell">${escapeHtml(formatOptionalLinePrice(row.unitPrice))}</td>`
-                      : ""
-                  }
                 </tr>
               `,
             )
             .join("")
         : `
             <tr>
-              <td colspan="${saleItemColumnCount}" class="empty-cell">No sale items recorded.</td>
+              <td colspan="2" class="empty-cell">No sale items recorded.</td>
             </tr>
           `;
 
@@ -1360,15 +1263,6 @@ const PaymentReceipt: React.FC = () => {
               width: 90px;
               text-align: center;
             }
-            .amount-head,
-            .amount-cell {
-              width: 130px;
-              text-align: right;
-            }
-            tfoot td {
-              font-weight: 700;
-              background: #f8fafc;
-            }
             .empty-cell {
               text-align: center;
               color: #64748b;
@@ -1456,11 +1350,6 @@ const PaymentReceipt: React.FC = () => {
                     <tr>
                       <th>Item</th>
                       <th class="qty-head">Qty</th>
-                      ${
-                        hasPricedSaleRows
-                          ? `<th class="amount-head">Price (No VAT)</th>`
-                          : ""
-                      }
                     </tr>
                   </thead>
                   <tbody>${itemsHtml}</tbody>
@@ -1468,7 +1357,6 @@ const PaymentReceipt: React.FC = () => {
               </section>
 
               ${buildActionSectionHtml(deliveryActionRows)}
-              ${buildCashCollectionSectionHtml(creditCollectionRows)}
               ${
                 remarkHtml
                   ? `
@@ -1485,7 +1373,6 @@ const PaymentReceipt: React.FC = () => {
       </html>
     `;
   }, [
-    creditCollectionRows,
     deliveryKindLabel,
     documentRemark,
     documentTimestamp,
@@ -1503,9 +1390,22 @@ const PaymentReceipt: React.FC = () => {
   ]);
 
   const generateInvoiceHTML = useCallback(() => {
+    const adjustmentItemsHtml = invoiceAdjustmentRows
+      .map(
+        (row) => `
+          <tr style="border-bottom: 1px solid #e5e7eb;">
+            <td style="padding: 6px; text-align: left; font-size: 11px;">${buildInvoiceAdjustmentLabelHtml(row)}</td>
+            <td style="padding: 6px; text-align: center; font-size: 11px;">${escapeHtml(formatQuantity(row.quantity))}</td>
+            <td style="padding: 6px; text-align: right; font-size: 11px;">${row.unitPrice.toFixed(2)}</td>
+            <td style="padding: 6px; text-align: right; font-size: 11px;">0.00</td>
+            <td style="padding: 6px; text-align: right; font-size: 11px; font-weight: bold;">${row.total.toFixed(2)}</td>
+          </tr>
+        `,
+      )
+      .join("");
     const itemsHtml =
-      saleRows.length > 0
-        ? saleRows
+      saleRows.length > 0 || invoiceAdjustmentRows.length > 0
+        ? `${saleRows
             .map((row) => {
               const priceExVat = row.unitPrice;
               const unitVat = priceExVat * VAT_RATE;
@@ -1521,7 +1421,7 @@ const PaymentReceipt: React.FC = () => {
                 </tr>
               `;
             })
-            .join("")
+            .join("")}${adjustmentItemsHtml}`
         : `
             <tr>
               <td colspan="5" style="padding: 12px; text-align:center; color:#64748b;">No sale items recorded.</td>
@@ -1680,7 +1580,7 @@ const PaymentReceipt: React.FC = () => {
             <table class="items-table">
                 <thead>
                   <tr>
-                    <th style="text-align: left;">Products</th>
+                    <th style="text-align: left;">Items</th>
                     <th style="text-align: center;">Quantity</th>
                     <th style="text-align: right;">Unit Price</th>
                     <th style="text-align:right;">Unit VAT</th>
@@ -1693,7 +1593,7 @@ const PaymentReceipt: React.FC = () => {
             <div class="total-section">
               <div class="total-row">
                 <span>Subtotal Without VAT:</span>
-                <span>${subtotalAmount.toFixed(2)}</span>
+                <span>${receiptSubtotalWithoutVat.toFixed(2)}</span>
               </div>
               <div class="total-row">
                 <span>Total VAT:</span>
@@ -1701,7 +1601,7 @@ const PaymentReceipt: React.FC = () => {
               </div>
               <div class="total-row final-total">
                 <span>Total Including VAT:</span>
-                <span>${totalAmount.toFixed(2)}</span>
+                <span>${receiptTotalAmount.toFixed(2)}</span>
               </div>
             </div>
 
@@ -1718,12 +1618,13 @@ const PaymentReceipt: React.FC = () => {
     invoiceNumber,
     invoiceDateLabel,
     invoiceTimeLabel,
+    invoiceAdjustmentRows,
     paymentMethodDisplay,
+    receiptSubtotalWithoutVat,
+    receiptTotalAmount,
     referenceNumber,
     saleRows,
     shippingDetails.name,
-    subtotalAmount,
-    totalAmount,
     vatAmount,
   ]);
 
@@ -1955,11 +1856,8 @@ const PaymentReceipt: React.FC = () => {
 
             <DeliveryNoteTableSection title="Delivered Items" rows={saleRows} />
             <DeliveryNoteActionSection rows={deliveryActionRows} />
-            <DeliveryNoteCashCollectionSection rows={creditCollectionRows} />
 
-            {saleRows.length === 0 &&
-            deliveryActionRows.length === 0 &&
-            creditCollectionRows.length === 0 ? (
+            {saleRows.length === 0 && deliveryActionRows.length === 0 ? (
               <Text style={styles.placeholderText}>
                 No delivery items were recorded in the confirmation response.
               </Text>
@@ -2039,7 +1937,7 @@ const PaymentReceipt: React.FC = () => {
                     styles.invoiceProductCell,
                   ]}
                 >
-                  Products
+                  Items
                 </Text>
                 <Text
                   style={[styles.invoiceItemsHeaderText, styles.invoiceQtyCell]}
@@ -2069,58 +1967,126 @@ const PaymentReceipt: React.FC = () => {
                 </Text>
               </View>
 
-              {saleRows.length > 0 ? (
-                saleRows.map((row, index) => {
-                  const priceExVat = row.unitPrice;
-                  const unitVat = priceExVat * VAT_RATE;
-                  const itemTotal = (priceExVat + unitVat) * row.quantity;
+              {saleRows.length > 0 || invoiceAdjustmentRows.length > 0 ? (
+                <>
+                  {saleRows.map((row, index) => {
+                    const priceExVat = row.unitPrice;
+                    const unitVat = priceExVat * VAT_RATE;
+                    const itemTotal = (priceExVat + unitVat) * row.quantity;
+                    const rowPosition = index;
+                    const totalRowCount =
+                      saleRows.length + invoiceAdjustmentRows.length;
 
-                  return (
-                    <View
-                      key={row.id}
-                      style={[
-                        styles.invoiceItemRow,
-                        index !== saleRows.length - 1 &&
-                          styles.invoiceItemRowBorder,
-                      ]}
-                    >
-                      <ReceiptItemLabel
-                        item={row}
+                    return (
+                      <View
+                        key={row.id}
                         style={[
-                          styles.invoiceItemText,
-                          styles.invoiceProductCell,
-                        ]}
-                      />
-                      <Text
-                        style={[styles.invoiceItemText, styles.invoiceQtyCell]}
-                      >
-                        {formatQuantity(row.quantity)}
-                      </Text>
-                      <Text
-                        style={[
-                          styles.invoiceItemText,
-                          styles.invoiceAmountCell,
+                          styles.invoiceItemRow,
+                          rowPosition !== totalRowCount - 1 &&
+                            styles.invoiceItemRowBorder,
                         ]}
                       >
-                        AED {priceExVat.toFixed(2)}
-                      </Text>
-                      <Text
-                        style={[styles.invoiceItemText, styles.invoiceVatCell]}
-                      >
-                        AED {unitVat.toFixed(2)}
-                      </Text>
-                      <Text
+                        <ReceiptItemLabel
+                          item={row}
+                          style={[
+                            styles.invoiceItemText,
+                            styles.invoiceProductCell,
+                          ]}
+                        />
+                        <Text
+                          style={[
+                            styles.invoiceItemText,
+                            styles.invoiceQtyCell,
+                          ]}
+                        >
+                          {formatQuantity(row.quantity)}
+                        </Text>
+                        <Text
+                          style={[
+                            styles.invoiceItemText,
+                            styles.invoiceAmountCell,
+                          ]}
+                        >
+                          AED {priceExVat.toFixed(2)}
+                        </Text>
+                        <Text
+                          style={[
+                            styles.invoiceItemText,
+                            styles.invoiceVatCell,
+                          ]}
+                        >
+                          AED {unitVat.toFixed(2)}
+                        </Text>
+                        <Text
+                          style={[
+                            styles.invoiceItemText,
+                            styles.invoiceItemTotalText,
+                            styles.invoiceAmountCell,
+                          ]}
+                        >
+                          AED {itemTotal.toFixed(2)}
+                        </Text>
+                      </View>
+                    );
+                  })}
+                  {invoiceAdjustmentRows.map((row, index) => {
+                    const rowPosition = saleRows.length + index;
+                    const totalRowCount =
+                      saleRows.length + invoiceAdjustmentRows.length;
+
+                    return (
+                      <View
+                        key={row.id}
                         style={[
-                          styles.invoiceItemText,
-                          styles.invoiceItemTotalText,
-                          styles.invoiceAmountCell,
+                          styles.invoiceItemRow,
+                          rowPosition !== totalRowCount - 1 &&
+                            styles.invoiceItemRowBorder,
                         ]}
                       >
-                        AED {itemTotal.toFixed(2)}
-                      </Text>
-                    </View>
-                  );
-                })
+                        <InvoiceAdjustmentLabel
+                          row={row}
+                          style={[
+                            styles.invoiceItemText,
+                            styles.invoiceProductCell,
+                          ]}
+                        />
+                        <Text
+                          style={[
+                            styles.invoiceItemText,
+                            styles.invoiceQtyCell,
+                          ]}
+                        >
+                          {formatQuantity(row.quantity)}
+                        </Text>
+                        <Text
+                          style={[
+                            styles.invoiceItemText,
+                            styles.invoiceAmountCell,
+                          ]}
+                        >
+                          {formatCurrency(row.unitPrice)}
+                        </Text>
+                        <Text
+                          style={[
+                            styles.invoiceItemText,
+                            styles.invoiceVatCell,
+                          ]}
+                        >
+                          AED 0.00
+                        </Text>
+                        <Text
+                          style={[
+                            styles.invoiceItemText,
+                            styles.invoiceItemTotalText,
+                            styles.invoiceAmountCell,
+                          ]}
+                        >
+                          {formatCurrency(row.total)}
+                        </Text>
+                      </View>
+                    );
+                  })}
+                </>
               ) : (
                 <Text style={styles.placeholderText}>
                   No sale items were recorded for this invoice.
@@ -2134,7 +2100,7 @@ const PaymentReceipt: React.FC = () => {
                   Subtotal Without VAT
                 </Text>
                 <Text style={styles.invoiceDetailValue}>
-                  {formatCurrency(subtotalAmount)}
+                  {formatCurrency(receiptSubtotalWithoutVat)}
                 </Text>
               </View>
               <View style={styles.invoiceDetailRow}>
@@ -2150,7 +2116,7 @@ const PaymentReceipt: React.FC = () => {
                   Total Including VAT
                 </Text>
                 <Text style={styles.invoiceFinalValue}>
-                  {formatCurrency(totalAmount)}
+                  {formatCurrency(receiptTotalAmount)}
                 </Text>
               </View>
             </View>
@@ -2722,29 +2688,6 @@ const styles = StyleSheet.create({
   invoiceAmountCell: {
     width: 65,
     textAlign: "right",
-  },
-  deliveryNotePriceCell: {
-    width: 82,
-    textAlign: "right",
-  },
-  invoiceCollectionNoteCell: {
-    flex: 1,
-    paddingRight: 12,
-  },
-  invoiceCollectionAmountCell: {
-    width: 96,
-    textAlign: "right",
-  },
-  invoiceCollectionTotalRow: {
-    flexDirection: "row",
-    paddingTop: 8,
-    borderTopWidth: 1,
-    borderTopColor: "#E9ECEF",
-  },
-  invoiceCollectionTotalText: {
-    color: "#212529",
-    fontSize: 11,
-    fontFamily: "Jakarta-Bold",
   },
   deliveryNoteTypeCell: {
     width: 110,

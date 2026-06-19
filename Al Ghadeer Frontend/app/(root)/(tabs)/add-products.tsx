@@ -176,22 +176,24 @@ const getProductStockGroupKey = (
 };
 
 const getProductItemType = (
-  product: Pick<ServerProduct, "type">,
+  product: Pick<ServerProduct, "type" | "category" | "assetCategory">,
 ): Product["item_type"] => {
-  if (product.type === "assets") return "asset";
-  if (product.type === "refill") return "refill";
+  if (getProductGroup(product) === "assets") return "asset";
+  if (getProductGroup(product) === "refill") return "refill";
   return "retail";
 };
 
 const getProductGroup = (
-  product: Pick<ServerProduct, "type" | "category">,
+  product: Pick<ServerProduct, "type" | "category" | "assetCategory">,
 ): ProductGroup => {
   const normalizedType = normalizeCategory(product.type);
   const normalizedCategory = normalizeCategory(product.category);
+  const assetCategory = product.assetCategory?.trim();
 
   if (
     normalizedType.includes("asset") ||
-    normalizedCategory.includes("asset")
+    normalizedCategory.includes("asset") ||
+    Boolean(assetCategory)
   ) {
     return "assets";
   }
