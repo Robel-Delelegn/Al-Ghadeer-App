@@ -8,7 +8,7 @@ import {
 } from "@/store/index";
 import { Order } from "@/types/order";
 import { parseApiResponseWithSoftError } from "@/utils/api";
-import { toTransferableAssetProduct } from "@/utils/assetTransfers";
+import { toTransferableUniqueItemProduct } from "@/utils/uniqueItemTransfers";
 import { formatDeliveryAddress } from "@/utils/deliveries";
 import {
   DriverHistoryDetail,
@@ -19,6 +19,15 @@ import {
 } from "@/utils/driverHistory";
 import { resolveResourceUrl } from "@/utils/resources";
 import { getTruckBulkItemMatchKeys } from "@/utils/truckLoad";
+import {
+  isUniqueItemSaleId,
+  isUniqueItemSignal,
+  LEGACY_ASSET_SALE_PREFIX,
+  UNIQUE_ITEM_KIND,
+  UNIQUE_ITEM_MOVEMENT_TO_CUSTOMER,
+  UNIQUE_ITEM_SALE_PREFIX,
+  UNIQUE_ITEMS_GROUP,
+} from "@/utils/uniqueItems";
 import { Ionicons } from "@expo/vector-icons";
 import { useRouter } from "expo-router";
 import React, { useCallback, useMemo, useState } from "react";
@@ -61,7 +70,7 @@ interface SaleRequestBody {
     quantity: number;
     price: number;
   }[];
-  assets?: {
+  uniqueItems?: {
     id: string;
     price: number;
   }[];
@@ -79,7 +88,7 @@ interface SaleRequestBody {
   depositsReturns?: {
     type: "deposit" | "deposit_return";
     itemId: string;
-    depositKind: "asset" | "bottle";
+    depositKind: "unique-item" | "bottle";
     quantity: number;
     unitPrice: number;
   }[];
@@ -113,9 +122,12 @@ interface BottleDepositOption {
   key: string;
   itemId: string;
   label: string;
+  description: string | null;
+  category: string | null;
   unit: string | null;
   imageUrl: string | null;
   availableQuantity: number;
+  kind: "bottle" | "item";
 }
 
 const EMPTY_PRODUCTS: DirectSaleDraftProduct[] = [];
@@ -127,8 +139,6 @@ const EMPTY_TRUCK_BULK_ITEMS: NonNullable<
   ReturnType<typeof useOrderStore.getState>["directSaleDraft"]
 >["truckBulkItems"] = [];
 const EMPTY_QUANTITIES: Record<string, number> = {};
-const TRUCK_ASSET_PRODUCT_PREFIX = "sale-asset:";
-
 const normalizeCategory = (category?: string | null) =>
   (category || "")
     .trim()
@@ -137,12 +147,15 @@ const normalizeCategory = (category?: string | null) =>
 
 const getSaleLineType = (
   product: Pick<DirectSaleDraftProduct, "type" | "category">,
-): "retail" | "asset" | "refill" => {
+): "retail" | "unique-item" | "refill" => {
   const normalized = normalizeCategory(product.type);
   const normalizedCategory = normalizeCategory(product.category);
   if (normalized.includes("refill")) return "refill";
-  if (normalized.includes("asset") || normalizedCategory.includes("asset")) {
-    return "asset";
+  if (
+    isUniqueItemSignal(normalized) ||
+    isUniqueItemSignal(normalizedCategory)
+  ) {
+    return UNIQUE_ITEM_KIND;
   }
   return "retail";
 };
@@ -151,11 +164,11 @@ const getDirectSaleAssetId = (
   product: Pick<DirectSaleDraftProduct, "id" | "itemId" | "assetId">,
 ) => {
   if (product.assetId?.trim()) return product.assetId.trim();
-  if (product.id.startsWith(TRUCK_ASSET_PRODUCT_PREFIX)) {
-    const assetId = product.id
-      .slice(TRUCK_ASSET_PRODUCT_PREFIX.length)
-      .split(":")[0]
-      ?.trim();
+  if (isUniqueItemSaleId(product.id)) {
+    const prefix = product.id.startsWith(UNIQUE_ITEM_SALE_PREFIX)
+      ? UNIQUE_ITEM_SALE_PREFIX
+      : LEGACY_ASSET_SALE_PREFIX;
+    const assetId = product.id.slice(prefix.length).split(":")[0]?.trim();
     if (assetId) return assetId;
   }
   return product.itemId;
@@ -260,13 +273,14 @@ const DirectSaleConfirmation = () => {
 
   const assetOptions = useMemo<AssetOption[]>(() => {
     const transferableAssetProducts = products
-      .filter((product) => product.type === "assets")
+      .filter((product) => isUniqueItemSignal(product.type))
       .map((product) =>
-        toTransferableAssetProduct({
+        toTransferableUniqueItemProduct({
           id: product.id,
           itemId: product.itemId,
           label: product.label,
-          assetCategory: product.assetCategory,
+          uniqueItemCategory: product.uniqueItemCategory,
+          assetCategory: product.uniqueItemCategory ?? product.assetCategory,
           image_url: product.image_url,
           description: product.description,
           unit: product.unit,
@@ -283,9 +297,13 @@ const DirectSaleConfirmation = () => {
       return {
         key: `product:${asset.id}:${asset.serial || asset.itemId}`,
         itemId: asset.itemId,
-        label: asset.label || metadata?.label || "Truck Asset",
+        label: asset.label || metadata?.label || "Truck Unique Item",
         serial: asset.serial ?? metadata?.serial ?? null,
-        category: asset.category ?? metadata?.assetCategory ?? null,
+        category:
+          asset.category ??
+          metadata?.uniqueItemCategory ??
+          metadata?.assetCategory ??
+          null,
         imageUrl:
           resolveResourceUrl(asset.image_url) || metadata?.imageUrl || null,
         source: "product" as const,
@@ -320,7 +338,12 @@ const DirectSaleConfirmation = () => {
   );
 
   const bottleDepositOptions = useMemo<BottleDepositOption[]>(() => {
+    const productsById = new Map<string, DirectSaleDraftProduct>();
     const refillProductsById = new Map<string, DirectSaleDraftProduct>();
+    products.forEach((product) => {
+      productsById.set(product.itemId, product);
+      productsById.set(product.id, product);
+    });
     products
       .filter((product) => product.type === "refill")
       .forEach((product) => {
@@ -330,24 +353,51 @@ const DirectSaleConfirmation = () => {
 
     return truckBulkItems.reduce<BottleDepositOption[]>((options, bulkItem) => {
       const matchKeys = getTruckBulkItemMatchKeys(bulkItem);
+      const matchedProduct = matchKeys
+        .map((key) => productsById.get(key))
+        .find((product): product is DirectSaleDraftProduct => Boolean(product));
       const refillProduct = matchKeys
         .map((key) => refillProductsById.get(key))
         .find((product): product is DirectSaleDraftProduct => Boolean(product));
-      const availableQuantity = Math.max(0, bulkItem.quantity);
-      if (
-        availableQuantity <= 0 ||
-        (!bulkItem.isRefillableBottle && !refillProduct)
-      ) {
+      const availableQuantity = Math.max(0, Math.floor(bulkItem.quantity));
+      if (availableQuantity <= 0) {
         return options;
       }
+
+      const isBottleDeposit =
+        bulkItem.isRefillableBottle || Boolean(refillProduct);
+      const matchedProductCategory = normalizeCategory(
+        matchedProduct?.category,
+      );
+      const matchedProductType = normalizeCategory(matchedProduct?.type);
+      const bulkCategory = normalizeCategory(bulkItem.category);
+      const isAssetBulkItem =
+        matchedProduct?.type === UNIQUE_ITEMS_GROUP ||
+        isUniqueItemSignal(matchedProductType) ||
+        isUniqueItemSignal(matchedProductCategory) ||
+        isUniqueItemSignal(bulkCategory);
+
+      if (!isBottleDeposit && isAssetBulkItem) {
+        return options;
+      }
+
       options.push({
-        key: `truck:bottle:${bulkItem.id}`,
-        itemId: bulkItem.emptyBottleId || bulkItem.itemId || bulkItem.id,
-        label: toEmptyRefillLabel(refillProduct?.label || bulkItem.label),
-        unit: refillProduct?.unit ?? bulkItem.unit,
+        key: `truck:${isBottleDeposit ? "bottle" : "item"}:${bulkItem.id}`,
+        itemId: isBottleDeposit
+          ? bulkItem.emptyBottleId || bulkItem.itemId || bulkItem.id
+          : bulkItem.itemId || bulkItem.id,
+        label: isBottleDeposit
+          ? toEmptyRefillLabel(refillProduct?.label || bulkItem.label)
+          : matchedProduct?.label || bulkItem.label,
+        description: matchedProduct?.description ?? bulkItem.description,
+        category: matchedProduct?.category ?? bulkItem.category,
+        unit: matchedProduct?.unit ?? refillProduct?.unit ?? bulkItem.unit,
         imageUrl:
-          refillProduct?.image_url || resolveResourceUrl(bulkItem.image_url),
+          matchedProduct?.image_url ||
+          refillProduct?.image_url ||
+          resolveResourceUrl(bulkItem.image_url),
         availableQuantity,
+        kind: isBottleDeposit ? "bottle" : "item",
       });
       return options;
     }, []);
@@ -459,12 +509,17 @@ const DirectSaleConfirmation = () => {
     (sum, bottle) => sum + bottle.quantity,
     0,
   );
-  const bottleDepositCount = selectedBottleDepositEntries.reduce(
-    (sum, bottle) => sum + bottle.quantity,
-    0,
-  );
+  const bottleDepositCount = selectedBottleDepositEntries
+    .filter((item) => item.kind === "bottle")
+    .reduce((sum, bottle) => sum + bottle.quantity, 0);
+  const itemDepositCount = selectedBottleDepositEntries
+    .filter((item) => item.kind === "item")
+    .reduce((sum, item) => sum + item.quantity, 0);
   const selectedMovementCount =
-    selectedAssetEntries.length + bottleReturnCount + bottleDepositCount;
+    selectedAssetEntries.length +
+    bottleReturnCount +
+    bottleDepositCount +
+    itemDepositCount;
   const assetDepositValue = selectedAssetEntries.reduce((sum, asset) => {
     if (asset.action !== "deposit" || !Number.isFinite(asset.price)) {
       return sum;
@@ -535,7 +590,7 @@ const DirectSaleConfirmation = () => {
 
   const handleBack = useCallback(() => {
     persistCreditCollection();
-    router.replace("/(root)/(tabs)/direct-sale-bottles-assets");
+    router.replace("/(root)/(tabs)/direct-sale-bottles-unique-items");
   }, [persistCreditCollection, router]);
 
   const handleEditProducts = useCallback(() => {
@@ -549,7 +604,7 @@ const DirectSaleConfirmation = () => {
   const handleEditBottlesAssets = useCallback(() => {
     persistCreditCollection();
     router.push({
-      pathname: "/(root)/(tabs)/direct-sale-bottles-assets",
+      pathname: "/(root)/(tabs)/direct-sale-bottles-unique-items",
       params: { backTo: "direct-sale-confirmation" },
     });
   }, [persistCreditCollection, router]);
@@ -562,7 +617,7 @@ const DirectSaleConfirmation = () => {
     if (!hasAnythingToConfirm) {
       showWarningAlert(
         "No Items",
-        "Please select at least one product, bottle or asset movement, or credit collection.",
+        "Please select at least one product, deposit/return movement, or credit collection.",
       );
       return;
     }
@@ -583,7 +638,7 @@ const DirectSaleConfirmation = () => {
     );
     if (invalidAsset) {
       showWarningAlert(
-        "Invalid Asset Price",
+        "Invalid Unique Item Price",
         `Enter a valid price for ${invalidAsset.label}.`,
       );
       return;
@@ -594,7 +649,7 @@ const DirectSaleConfirmation = () => {
     );
     if (invalidBottleDeposit) {
       showWarningAlert(
-        "Invalid Bottle Deposit Price",
+        "Invalid Deposit Price",
         `Enter a valid price for ${invalidBottleDeposit.label}.`,
       );
       return;
@@ -614,20 +669,21 @@ const DirectSaleConfirmation = () => {
     setApiError(null);
     try {
       const retails: NonNullable<SaleRequestBody["retails"]> = [];
-      const assets: NonNullable<SaleRequestBody["assets"]> = [];
+      const uniqueItems: NonNullable<SaleRequestBody["uniqueItems"]> = [];
       const refills: NonNullable<SaleRequestBody["refills"]> = [];
       const depositsReturns: NonNullable<SaleRequestBody["depositsReturns"]> = [
         ...selectedAssetEntries.map((asset) => ({
           type: asset.action,
           itemId: asset.itemId,
-          depositKind: "asset" as const,
+          depositKind: UNIQUE_ITEM_KIND,
           quantity: 1,
           unitPrice: Number(asset.price.toFixed(2)),
         })),
         ...selectedBottleDepositEntries.map((bottle) => ({
           type: "deposit" as const,
           itemId: bottle.itemId,
-          depositKind: "bottle" as const,
+          depositKind:
+            bottle.kind === "bottle" ? ("bottle" as const) : UNIQUE_ITEM_KIND,
           quantity: bottle.quantity,
           unitPrice: Number(bottle.unitPrice.toFixed(2)),
         })),
@@ -656,10 +712,10 @@ const DirectSaleConfirmation = () => {
           return;
         }
 
-        if (lineType === "asset") {
+        if (lineType === UNIQUE_ITEM_KIND) {
           const assetQuantity = Math.max(0, Math.floor(quantity));
           for (let index = 0; index < assetQuantity; index += 1) {
-            assets.push({
+            uniqueItems.push({
               id: getDirectSaleAssetId(product),
               price: unitPrice,
             });
@@ -688,7 +744,7 @@ const DirectSaleConfirmation = () => {
 
       const saleSubtotal =
         retails.reduce((sum, item) => sum + item.price * item.quantity, 0) +
-        assets.reduce((sum, item) => sum + item.price, 0) +
+        uniqueItems.reduce((sum, item) => sum + item.price, 0) +
         refills.reduce(
           (sum, item) => sum + item.price * item.filledQuantity,
           0,
@@ -718,8 +774,8 @@ const DirectSaleConfirmation = () => {
       if (retails.length > 0) {
         saleData.retails = retails;
       }
-      if (assets.length > 0) {
-        saleData.assets = assets;
+      if (uniqueItems.length > 0) {
+        saleData.uniqueItems = uniqueItems;
       }
       if (refills.length > 0) {
         saleData.refills = refills;
@@ -782,7 +838,7 @@ const DirectSaleConfirmation = () => {
           product.id,
           product.itemId,
           product.assetId,
-          lineType === "asset" ? getDirectSaleAssetId(product) : null,
+          lineType === UNIQUE_ITEM_KIND ? getDirectSaleAssetId(product) : null,
         ];
 
         keys.forEach((key) => {
@@ -801,7 +857,10 @@ const DirectSaleConfirmation = () => {
       const getSaleItemDisplayLabel = (item: (typeof saleItems)[number]) => {
         const selectedProduct = getSelectedProductForSaleItem(item);
         return (
-          selectedProduct?.label || item.label || item.assetCategory || "Asset"
+          selectedProduct?.label ||
+          item.label ||
+          item.assetCategory ||
+          "Unique Item"
         );
       };
       const cartItemsFromSale =
@@ -823,7 +882,10 @@ const DirectSaleConfirmation = () => {
                 currency: "AED" as const,
                 category: selectedProduct?.type || item.itemType,
                 assetCategory:
-                  selectedProduct?.assetCategory ?? item.assetCategory ?? null,
+                  selectedProduct?.uniqueItemCategory ??
+                  selectedProduct?.assetCategory ??
+                  item.assetCategory ??
+                  null,
               };
             })
           : selectedProducts.map((product) => {
@@ -831,7 +893,7 @@ const DirectSaleConfirmation = () => {
               return {
                 id: product.id,
                 item_id:
-                  lineType === "asset"
+                  lineType === UNIQUE_ITEM_KIND
                     ? getDirectSaleAssetId(product)
                     : product.itemId,
                 item_type: lineType,
@@ -843,7 +905,8 @@ const DirectSaleConfirmation = () => {
                 quantity: quantities[product.id],
                 currency: "AED" as const,
                 category: product.type || "",
-                assetCategory: product.assetCategory ?? null,
+                assetCategory:
+                  product.uniqueItemCategory ?? product.assetCategory ?? null,
               };
             });
       const selectedRentItems: NonNullable<Order["rent_items"]> = [
@@ -858,12 +921,13 @@ const DirectSaleConfirmation = () => {
           serial: asset.serial,
           in_truck: true,
           deposit_action: asset.action,
-          deposit_kind: "asset" as const,
+          deposit_kind: UNIQUE_ITEM_KIND,
           action_source:
             asset.source === "held"
               ? ("held_item" as const)
-              : ("product_asset" as const),
+              : ("product_unique_item" as const),
           asset_category: asset.category,
+          unique_item_category: asset.category,
         })),
         ...selectedBottleDepositEntries.map((bottle) => ({
           id: bottle.key,
@@ -873,13 +937,22 @@ const DirectSaleConfirmation = () => {
           price: Number(bottle.unitPrice.toFixed(2)),
           quantity: bottle.quantity,
           image_url: bottle.imageUrl || "",
+          description: bottle.description,
           in_truck: true,
           deposit_action: "deposit" as const,
-          deposit_kind: "bottle" as const,
-          action_source: "product_asset" as const,
+          deposit_kind:
+            bottle.kind === "bottle" ? ("bottle" as const) : UNIQUE_ITEM_KIND,
+          action_source:
+            bottle.kind === "bottle"
+              ? ("product_asset" as const)
+              : ("product_unique_item" as const),
           unit: bottle.unit,
-          other_action_type: "item-movement-to-customer" as const,
-          other_action_item_type: "bottle" as const,
+          other_action_type:
+            bottle.kind === "bottle"
+              ? ("item-movement-to-customer" as const)
+              : UNIQUE_ITEM_MOVEMENT_TO_CUSTOMER,
+          other_action_item_type:
+            bottle.kind === "bottle" ? ("bottle" as const) : UNIQUE_ITEM_KIND,
         })),
         ...selectedBottleReturnEntries.map((bottle) => ({
           id: bottle.key,
@@ -927,6 +1000,8 @@ const DirectSaleConfirmation = () => {
         customer_name: data.customer.name,
         customer_phone: data.customer.phone,
         customer_email: data.customer.email ?? undefined,
+        customer_trn:
+          data.customer.trn ?? directSaleDraft.customerData.trn ?? undefined,
         customer_address: orderAddress,
         latitude: data.address.latitude ?? undefined,
         longitude: data.address.longitude ?? undefined,
@@ -953,7 +1028,13 @@ const DirectSaleConfirmation = () => {
                   type: item.itemType,
                   category: selectedProduct?.type || item.itemType,
                   asset_category:
-                    selectedProduct?.assetCategory ?? item.assetCategory,
+                    selectedProduct?.uniqueItemCategory ??
+                    selectedProduct?.assetCategory ??
+                    item.assetCategory,
+                  unique_item_category:
+                    selectedProduct?.uniqueItemCategory ??
+                    selectedProduct?.assetCategory ??
+                    item.assetCategory,
                 };
               })
             : selectedProducts.map((product) => ({
@@ -964,7 +1045,10 @@ const DirectSaleConfirmation = () => {
                 price: product.pricePerUnit,
                 type: product.type,
                 category: product.type,
-                asset_category: product.assetCategory,
+                asset_category:
+                  product.uniqueItemCategory ?? product.assetCategory,
+                unique_item_category:
+                  product.uniqueItemCategory ?? product.assetCategory,
               })),
       };
 
@@ -1176,7 +1260,7 @@ const DirectSaleConfirmation = () => {
 
         <View style={styles.card}>
           <View style={styles.cardHeader}>
-            <Text style={styles.cardTitle}>Bottles & Assets</Text>
+            <Text style={styles.cardTitle}>Deposits & Returns</Text>
             <TouchableOpacity
               onPress={handleEditBottlesAssets}
               activeOpacity={0.7}
@@ -1187,7 +1271,9 @@ const DirectSaleConfirmation = () => {
           {selectedMovementCount === 0 ? (
             <View style={styles.emptyState}>
               <Ionicons name="cube-outline" size={24} color="#D1D5DB" />
-              <Text style={styles.emptyText}>No bottle or asset movement</Text>
+              <Text style={styles.emptyText}>
+                No deposit or return movement
+              </Text>
             </View>
           ) : (
             <View style={styles.itemsList}>
@@ -1212,7 +1298,7 @@ const DirectSaleConfirmation = () => {
                 <MovementRow
                   key={bottle.key}
                   label={bottle.label}
-                  meta={`Bottle Deposit - Qty: ${bottle.quantity}`}
+                  meta={`${bottle.kind === "bottle" ? "Bottle Deposit" : "Item Deposit"} - Qty: ${bottle.quantity}`}
                   price={`AED ${(bottle.unitPrice * bottle.quantity).toFixed(2)}`}
                   icon="arrow-redo-outline"
                   tone="leave"
@@ -1229,7 +1315,7 @@ const DirectSaleConfirmation = () => {
                 <MovementRow
                   key={asset.key}
                   label={asset.label}
-                  meta={`${asset.action === "deposit_return" ? "Asset Return" : "Asset Deposit"}${asset.serial ? ` - S/N ${asset.serial}` : ""}`}
+                  meta={`${asset.action === "deposit_return" ? "Unique Item Return" : "Unique Item Deposit"}${asset.serial ? ` - S/N ${asset.serial}` : ""}`}
                   price={`${asset.action === "deposit_return" ? "- " : ""}AED ${asset.price.toFixed(2)}`}
                   icon={
                     asset.action === "deposit_return"
@@ -1323,7 +1409,9 @@ const DirectSaleConfirmation = () => {
           </View>
           {depositValue > 0 ? (
             <View style={styles.summaryRow}>
-              <Text style={styles.summaryLabel}>Bottle/Asset Deposits</Text>
+              <Text style={styles.summaryLabel}>
+                Bottle/Item/Unique Item Deposits
+              </Text>
               <Text style={styles.summaryValue}>
                 AED {depositValue.toFixed(2)}
               </Text>
@@ -1331,7 +1419,9 @@ const DirectSaleConfirmation = () => {
           ) : null}
           {returnValue > 0 ? (
             <View style={styles.summaryRow}>
-              <Text style={styles.summaryLabel}>Bottle/Asset Returns</Text>
+              <Text style={styles.summaryLabel}>
+                Bottle/Unique Item Returns
+              </Text>
               <Text style={styles.summaryValue}>
                 - AED {returnValue.toFixed(2)}
               </Text>

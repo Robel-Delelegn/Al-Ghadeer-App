@@ -1,29 +1,37 @@
 import type { Order } from "@/types/order";
+import {
+  UNIQUE_ITEM_KIND,
+  UNIQUE_ITEM_MOVEMENT_TO_CUSTOMER,
+} from "@/utils/uniqueItems";
 
-export interface AssetProductSource {
+export interface UniqueItemProductSource {
   id: string;
   itemId: string;
   label: string;
+  uniqueItemCategory?: string | null;
   assetCategory?: string | null;
   image_url?: string | null;
   description?: string | null;
   unit?: string | null;
 }
 
-export interface TransferableAssetProduct {
+export interface TransferableUniqueItemProduct {
   id: string;
   itemId: string;
   label: string;
   serial: string | null;
+  uniqueItemCategory: string | null;
   assetCategory: string | null;
   imageUrl: string | null;
   description: string | null;
   unit: string | null;
 }
 
-export type TransferAssetRentItem = NonNullable<Order["rent_items"]>[number];
+export type TransferUniqueItemRentItem = NonNullable<
+  Order["rent_items"]
+>[number];
 
-const parseAssetLabel = (value: string) => {
+const parseUniqueItemLabel = (value: string) => {
   const normalized = value.trim();
   const serialMatch = normalized.match(/^(.*)\(([^()]+)\)\s*$/);
 
@@ -43,26 +51,33 @@ const parseAssetLabel = (value: string) => {
   };
 };
 
-export const toTransferableAssetProduct = (
-  product: AssetProductSource,
-): TransferableAssetProduct => {
-  const parsed = parseAssetLabel(product.label);
+export const toTransferableUniqueItemProduct = (
+  product: UniqueItemProductSource,
+): TransferableUniqueItemProduct => {
+  const parsed = parseUniqueItemLabel(product.label);
 
   return {
     id: product.id,
     itemId: product.itemId,
     label: parsed.label,
     serial: parsed.serial,
-    assetCategory: product.assetCategory?.trim() || null,
+    uniqueItemCategory:
+      product.uniqueItemCategory?.trim() ||
+      product.assetCategory?.trim() ||
+      null,
+    assetCategory:
+      product.uniqueItemCategory?.trim() ||
+      product.assetCategory?.trim() ||
+      null,
     imageUrl: product.image_url?.trim() || null,
     description: product.description?.trim() || null,
     unit: product.unit?.trim() || null,
   };
 };
 
-export const toTransferAssetRentItem = (
-  asset: TransferableAssetProduct,
-): TransferAssetRentItem => {
+export const toTransferUniqueItemRentItem = (
+  asset: TransferableUniqueItemProduct,
+): TransferUniqueItemRentItem => {
   return {
     id: asset.itemId,
     item_id: asset.itemId,
@@ -77,19 +92,20 @@ export const toTransferAssetRentItem = (
     in_truck: false,
     max_quantity: asset.serial ? 1 : undefined,
     deposit_action: "deposit",
-    deposit_kind: "asset",
-    action_source: "product_asset",
+    deposit_kind: UNIQUE_ITEM_KIND,
+    action_source: "product_unique_item",
     asset_category: asset.assetCategory,
-    other_action_type: "asset-movement-to-customer",
-    other_action_item_type: "asset",
+    unique_item_category: asset.assetCategory,
+    other_action_type: UNIQUE_ITEM_MOVEMENT_TO_CUSTOMER,
+    other_action_item_type: UNIQUE_ITEM_KIND,
   };
 };
 
-export const mergeAssetProductsIntoRentItems = (
+export const mergeUniqueItemProductsIntoRentItems = (
   rentItems: Order["rent_items"] | undefined,
-  assets: TransferableAssetProduct[],
-): TransferAssetRentItem[] => {
-  const merged = new Map<string, TransferAssetRentItem>();
+  assets: TransferableUniqueItemProduct[],
+): TransferUniqueItemRentItem[] => {
+  const merged = new Map<string, TransferUniqueItemRentItem>();
 
   (rentItems || []).forEach((item) => {
     merged.set(item.id, {
@@ -101,7 +117,7 @@ export const mergeAssetProductsIntoRentItems = (
   assets.forEach((asset) => {
     const existing = merged.get(asset.itemId);
     if (!existing) {
-      merged.set(asset.itemId, toTransferAssetRentItem(asset));
+      merged.set(asset.itemId, toTransferUniqueItemRentItem(asset));
       return;
     }
 
@@ -122,14 +138,28 @@ export const mergeAssetProductsIntoRentItems = (
             ? 1
             : undefined,
       deposit_action: existing.deposit_action || "deposit",
-      deposit_kind: existing.deposit_kind || "asset",
-      action_source: existing.action_source || "product_asset",
+      deposit_kind: existing.deposit_kind || UNIQUE_ITEM_KIND,
+      action_source: existing.action_source || "product_unique_item",
       asset_category: existing.asset_category ?? asset.assetCategory ?? null,
+      unique_item_category:
+        existing.unique_item_category ??
+        existing.asset_category ??
+        asset.assetCategory ??
+        null,
       other_action_type:
-        existing.other_action_type || "asset-movement-to-customer",
-      other_action_item_type: existing.other_action_item_type || "asset",
+        existing.other_action_type || UNIQUE_ITEM_MOVEMENT_TO_CUSTOMER,
+      other_action_item_type:
+        existing.other_action_item_type || UNIQUE_ITEM_KIND,
     });
   });
 
   return Array.from(merged.values());
 };
+
+export type AssetProductSource = UniqueItemProductSource;
+export type TransferableAssetProduct = TransferableUniqueItemProduct;
+export type TransferAssetRentItem = TransferUniqueItemRentItem;
+export const toTransferableAssetProduct = toTransferableUniqueItemProduct;
+export const toTransferAssetRentItem = toTransferUniqueItemRentItem;
+export const mergeAssetProductsIntoRentItems =
+  mergeUniqueItemProductsIntoRentItems;

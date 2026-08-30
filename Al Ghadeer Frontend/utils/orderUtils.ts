@@ -12,6 +12,7 @@ export interface OrderProduct {
   type?: string;
   category?: string;
   asset_category?: string | null;
+  unique_item_category?: string | null;
 }
 
 /**

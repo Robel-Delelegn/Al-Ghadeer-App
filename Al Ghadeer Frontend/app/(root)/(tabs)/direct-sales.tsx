@@ -3,7 +3,7 @@ import { VAT_RATE } from "@/constants/tax";
 import { authenticatedFetch, useAuthStore } from "@/store/auth";
 import { DirectSaleDraft, useOrderStore } from "@/store/index";
 import { parseApiResponseWithSoftError } from "@/utils/api";
-import { toTransferableAssetProduct } from "@/utils/assetTransfers";
+import { toTransferableUniqueItemProduct } from "@/utils/uniqueItemTransfers";
 import { AssignmentRoute, AssignmentsPayload } from "@/utils/assignments";
 import {
   CustomerHeldItems,
@@ -13,11 +13,18 @@ import { getDriverRequestId } from "@/utils/driverIdentity";
 import { resolveResourceUrl } from "@/utils/resources";
 import {
   extractTruckBulkItems,
-  extractTruckAssets,
+  extractTruckUniqueItems,
   getTruckBulkItemMatchKeys,
   TruckBulkItem,
-  TruckAsset,
+  TruckUniqueItem,
 } from "@/utils/truckLoad";
+import {
+  getSpecificUniqueItemCategory,
+  isUniqueItemSaleId,
+  isUniqueItemSignal,
+  UNIQUE_ITEM_SALE_PREFIX,
+  UNIQUE_ITEMS_GROUP,
+} from "@/utils/uniqueItems";
 import { Ionicons } from "@expo/vector-icons";
 import { useFocusEffect, useRouter } from "expo-router";
 import * as Location from "expo-location";
@@ -54,7 +61,7 @@ const API_BASE_URL = (
 // Unified product structure used by direct-sale UI.
 interface ServerProduct {
   id: string;
-  type: "retail" | "refill" | "assets" | "other";
+  type: "retail" | "refill" | "unique-items" | "assets" | "other";
   itemId: string;
   assetId?: string;
   assetDisplayId?: string | null;
@@ -65,6 +72,7 @@ interface ServerProduct {
   image_url: string | null;
   description: string | null;
   category?: string | null;
+  uniqueItemCategory?: string | null;
   assetCategory?: string | null;
   originalPrice?: number;
   badge?: string;
@@ -85,10 +93,9 @@ const PAYMENT_METHODS: {
   { id: "credit", label: "Credit", icon: "receipt-outline" as const },
 ];
 
-type ProductGroup = "wholesale" | "refill" | "assets" | "other";
+type ProductGroup = "wholesale" | "refill" | "unique-items" | "other";
 
 const EMPTY_BOTTLE_PRODUCT_PREFIX = "sale-empty-bottle:";
-const TRUCK_ASSET_PRODUCT_PREFIX = "sale-asset:";
 const EMPTY_BOTTLE_CATEGORY = "empty_bottle";
 
 const normalizeCategory = (category?: string | null) =>
@@ -105,30 +112,11 @@ const isEmptyBottleSaleProduct = (
     normalizeCategory(EMPTY_BOTTLE_CATEGORY);
 
 const isTruckAssetSaleProduct = (product: Pick<ServerProduct, "id">) =>
-  product.id.startsWith(TRUCK_ASSET_PRODUCT_PREFIX);
+  isUniqueItemSaleId(product.id);
 
 const isSyntheticSaleProduct = (
   product: Pick<ServerProduct, "id" | "category">,
 ) => isEmptyBottleSaleProduct(product) || isTruckAssetSaleProduct(product);
-
-const isGenericAssetCategory = (value?: string | null) => {
-  const normalized = normalizeCategory(value);
-  return (
-    !normalized ||
-    normalized === "asset" ||
-    normalized === "assets" ||
-    normalized === "assetitem" ||
-    normalized === "assetproduct"
-  );
-};
-
-const getSpecificAssetCategory = (...values: (string | null | undefined)[]) => {
-  for (const value of values) {
-    const label = (value || "").trim();
-    if (label && !isGenericAssetCategory(label)) return label;
-  }
-  return "";
-};
 
 const appendUniqueDisplayPart = (parts: string[], value?: string | null) => {
   const label = (value || "").trim();
@@ -140,18 +128,23 @@ const appendUniqueDisplayPart = (parts: string[], value?: string | null) => {
 
 const getAssetProductLabel = (
   metadata: ServerProduct | undefined,
-  asset: TruckAsset,
+  asset: TruckUniqueItem,
 ) =>
   metadata?.label ||
+  metadata?.uniqueItemCategory ||
   metadata?.assetCategory ||
   asset.category ||
   asset.label ||
-  "Asset";
+  "Unique Item";
 
 const getAssetProductTitle = (product: ServerProduct) =>
-  getSpecificAssetCategory(product.assetCategory, product.category) ||
+  getSpecificUniqueItemCategory(
+    product.uniqueItemCategory,
+    product.assetCategory,
+    product.category,
+  ) ||
   product.label ||
-  "Asset";
+  "Unique Item";
 
 const getAssetProductDetail = (product: ServerProduct) => {
   const title = getAssetProductTitle(product);
@@ -189,8 +182,11 @@ const getProductGroup = (
   const normalizedCategory = normalizeCategory(product.category || undefined);
 
   if (normalized.includes("refill")) return "refill";
-  if (normalized.includes("asset") || normalizedCategory.includes("asset")) {
-    return "assets";
+  if (
+    isUniqueItemSignal(normalized) ||
+    isUniqueItemSignal(normalizedCategory)
+  ) {
+    return UNIQUE_ITEMS_GROUP;
   }
   if (normalized.includes("retail")) {
     return "wholesale";
@@ -231,9 +227,12 @@ interface DirectSaleBottleDepositOption {
   key: string;
   itemId: string;
   label: string;
+  description: string | null;
+  category: string | null;
   unit: string | null;
   imageUrl: string | null;
   availableQuantity: number;
+  kind: "bottle" | "item";
 }
 
 interface SiteSubscription {
@@ -500,7 +499,7 @@ const normalizeProductType = (value: unknown): ServerProduct["type"] => {
   const normalized = normalizeCategory(toStringValue(value));
   if (normalized.includes("refill")) return "refill";
   if (normalized.includes("retail")) return "retail";
-  if (normalized.includes("asset")) return "assets";
+  if (isUniqueItemSignal(normalized)) return UNIQUE_ITEMS_GROUP;
   return "other";
 };
 
@@ -543,8 +542,14 @@ const normalizeProductRecord = (
     image_url: resolveResourceUrl(toNullableStringValue(source.image_url)),
     description: toNullableStringValue(source.description),
     category: toNullableStringValue(source.category),
+    uniqueItemCategory: toNullableStringValue(
+      source.uniqueItemCategory ?? source.unique_item_category,
+    ),
     assetCategory: toNullableStringValue(
-      source.assetCategory ?? source.asset_category,
+      source.uniqueItemCategory ??
+        source.unique_item_category ??
+        source.assetCategory ??
+        source.asset_category,
     ),
     originalPrice: originalPrice ?? undefined,
     badge: badge || undefined,
@@ -581,7 +586,7 @@ const normalizeProductsPayload = (payload: unknown): ServerProduct[] => {
 
 const buildSellableProducts = (
   baseProducts: ServerProduct[],
-  truckAssets: TruckAsset[],
+  truckAssets: TruckUniqueItem[],
 ): ServerProduct[] => {
   const cleanBaseProducts = baseProducts.filter(
     (product) => !isSyntheticSaleProduct(product),
@@ -589,7 +594,7 @@ const buildSellableProducts = (
 
   const assetProductsById = new Map<string, ServerProduct>();
   cleanBaseProducts
-    .filter((product) => product.type === "assets")
+    .filter((product) => product.type === UNIQUE_ITEMS_GROUP)
     .forEach((product) => {
       assetProductsById.set(product.itemId, product);
       assetProductsById.set(product.id, product);
@@ -605,8 +610,8 @@ const buildSellableProducts = (
 
     return [
       {
-        id: `${TRUCK_ASSET_PRODUCT_PREFIX}${asset.id}:${asset.serial || asset.itemId}`,
-        type: "assets" as const,
+        id: `${UNIQUE_ITEM_SALE_PREFIX}${asset.id}:${asset.serial || asset.itemId}`,
+        type: UNIQUE_ITEMS_GROUP,
         itemId: asset.itemId,
         assetId: asset.id,
         assetDisplayId,
@@ -617,10 +622,12 @@ const buildSellableProducts = (
         image_url:
           resolveResourceUrl(asset.image_url) || metadata?.image_url || null,
         description: metadata?.description ?? asset.description ?? null,
-        category: asset.category || metadata?.category || "Assets",
+        category: asset.category || metadata?.category || "Unique Items",
+        uniqueItemCategory:
+          asset.category || metadata?.uniqueItemCategory || null,
         assetCategory: asset.category || metadata?.assetCategory || null,
         originalPrice: metadata?.originalPrice,
-        badge: "Asset",
+        badge: "Unique Item",
         loaded_quantity: 1,
         available_stock: 1,
       },
@@ -629,7 +636,8 @@ const buildSellableProducts = (
 
   const visibleBaseProducts = cleanBaseProducts.filter(
     (product) =>
-      product.type !== "assets" || !truckAssetItemIds.has(product.itemId),
+      product.type !== UNIQUE_ITEMS_GROUP ||
+      !truckAssetItemIds.has(product.itemId),
   );
 
   const deduped = new Map<string, ServerProduct>();
@@ -669,19 +677,53 @@ interface CustomerData {
   id: string;
   name: string;
   phone: string;
+  trn: string | null;
   walletBalance: number;
   sites: CustomerSite[];
 }
+
+const buildCustomerDisplayName = (source: Record<string, unknown>): string => {
+  const explicitName = toStringValue(source.name);
+  if (explicitName) return explicitName;
+
+  return [
+    toStringValue(source.firstName ?? source.first_name),
+    toStringValue(source.lastName ?? source.last_name),
+  ]
+    .filter(Boolean)
+    .join(" ")
+    .trim();
+};
+
+const getCustomerTrnValue = (source: Record<string, unknown>): string | null =>
+  toNullableStringValue(
+    source.trn ??
+      source.customerTrn ??
+      source.customer_trn ??
+      source.taxRegistrationNumber ??
+      source.tax_registration_number,
+  );
+
+const splitCustomerNameForPayload = (name: string) => {
+  const [firstName = name, ...lastNameParts] = name.split(/\s+/);
+  const lastName = lastNameParts.join(" ").trim();
+
+  return {
+    firstName: firstName.trim() || name,
+    ...(lastName ? { lastName } : {}),
+  };
+};
 
 const normalizeCustomerData = (raw: unknown): CustomerData | null => {
   if (!raw || typeof raw !== "object") return null;
   const source = raw as Record<string, unknown>;
   const id = toStringValue(source.id);
-  const name = toStringValue(source.name);
+  const name = buildCustomerDisplayName(source);
   const phone = toStringValue(source.phone);
 
   if (!id || !name) return null;
 
+  const trn = getCustomerTrnValue(source);
   const walletBalance =
     toPriceValue(source.walletBalance ?? source.wallet_balance) ?? 0;
   const sites = Array.isArray(source.sites)
@@ -697,6 +739,7 @@ const normalizeCustomerData = (raw: unknown): CustomerData | null => {
     id,
     name,
     phone,
+    trn,
     walletBalance,
     sites,
   };
@@ -978,7 +1021,7 @@ const isReturnOnlyAsset = (asset: DirectSaleAssetOption) => {
 };
 
 const getAssetOptionTitle = (asset: DirectSaleAssetOption) =>
-  getSpecificAssetCategory(asset.category) || asset.label || "Asset";
+  getSpecificUniqueItemCategory(asset.category) || asset.label || "Unique Item";
 
 const getAssetOptionDetail = (asset: DirectSaleAssetOption) => {
   const title = getAssetOptionTitle(asset);
@@ -1056,7 +1099,7 @@ const DirectSales: React.FC = () => {
   } = useOrderStore();
   const [products, setProducts] = useState<ServerProduct[]>([]);
   const [truckBulkItems, setTruckBulkItems] = useState<TruckBulkItem[]>([]);
-  const [truckAssets, setTruckAssets] = useState<TruckAsset[]>([]);
+  const [truckAssets, setTruckAssets] = useState<TruckUniqueItem[]>([]);
   const [heldItems, setHeldItems] =
     useState<CustomerHeldItems>(EMPTY_HELD_ITEMS);
   const [assetDrafts, setAssetDrafts] = useState<
@@ -1089,6 +1132,7 @@ const DirectSales: React.FC = () => {
   const [customerCreatedInModal, setCustomerCreatedInModal] = useState(false);
   const [createCustomerName, setCreateCustomerName] = useState("");
   const [createCustomerPhone, setCreateCustomerPhone] = useState("");
+  const [createCustomerTrn, setCreateCustomerTrn] = useState("");
   const [paymentMethod, setPaymentMethod] =
     useState<DirectSalePaymentMethod>("cash");
   const [checkDetails, setCheckDetails] =
@@ -1180,6 +1224,9 @@ const DirectSales: React.FC = () => {
     setHasSearchedCustomers(false);
     setCustomerCreatedInModal(false);
     setCustomerModalMode("create");
+    setCreateCustomerName("");
+    setCreateCustomerPhone("");
+    setCreateCustomerTrn("");
     setSiteFormMode(null);
     setSiteDraft(EMPTY_SITE_DRAFT);
     resetDirectSaleMovementState();
@@ -1334,13 +1381,15 @@ const DirectSales: React.FC = () => {
       }
 
       setTruckBulkItems(extractTruckBulkItems(result.data));
-      setTruckAssets(extractTruckAssets(result.data));
+      setTruckAssets(extractTruckUniqueItems(result.data));
     } catch (error) {
-      console.error("Error fetching truck assets:", error);
+      console.error("Error fetching truck unique items:", error);
       setTruckBulkItems([]);
       setTruckAssets([]);
       setTruckAssetsError(
-        error instanceof Error ? error.message : "Failed to load truck assets.",
+        error instanceof Error
+          ? error.message
+          : "Failed to load truck unique items.",
       );
     }
   }, [driverId]);
@@ -1505,6 +1554,9 @@ const DirectSales: React.FC = () => {
     setCustomerModalVisible(false);
     setCustomerModalMode("create");
     setCustomerCreatedInModal(false);
+    setCreateCustomerName("");
+    setCreateCustomerPhone("");
+    setCreateCustomerTrn("");
     setSiteFormMode(null);
     setSiteDraft(EMPTY_SITE_DRAFT);
   }, []);
@@ -1515,6 +1567,7 @@ const DirectSales: React.FC = () => {
     setCustomerCreatedInModal(false);
     setCreateCustomerName("");
     setCreateCustomerPhone("");
+    setCreateCustomerTrn("");
     setSiteFormMode(null);
     setSiteDraft(EMPTY_SITE_DRAFT);
     setCustomerModalVisible(true);
@@ -1705,7 +1758,7 @@ const DirectSales: React.FC = () => {
     try {
       setApiError(null);
       const params = new URLSearchParams();
-      params.set("search", query);
+      params.set("q", query);
 
       const response = await authenticatedFetch(
         `${API_BASE_URL}/customers?${params.toString()}`,
@@ -1749,6 +1802,7 @@ const DirectSales: React.FC = () => {
   const handleCreateCustomer = useCallback(async () => {
     const trimmedName = createCustomerName.trim();
     const trimmedPhone = createCustomerPhone.trim();
+    const trimmedTrn = createCustomerTrn.trim();
 
     if (!trimmedName) {
       showWarningAlert("Name Required", "Enter customer name to create.");
@@ -1762,11 +1816,13 @@ const DirectSales: React.FC = () => {
     setIsCreatingCustomer(true);
     try {
       setApiError(null);
+      const namePayload = splitCustomerNameForPayload(trimmedName);
       const response = await authenticatedFetch(`${API_BASE_URL}/customers`, {
         method: "POST",
         body: JSON.stringify({
-          name: trimmedName,
+          ...namePayload,
           phone: trimmedPhone,
+          ...(trimmedTrn ? { trn: trimmedTrn } : {}),
         }),
       });
       const result = await parseApiResponseWithSoftError<unknown>(response);
@@ -1783,6 +1839,9 @@ const DirectSales: React.FC = () => {
 
       setCustomerSearchResults([createdCustomer]);
       applyCustomerSelection(createdCustomer);
+      setCreateCustomerName("");
+      setCreateCustomerPhone("");
+      setCreateCustomerTrn("");
       setCustomerCreatedInModal(true);
       setCustomerModalMode("manage");
       showSuccessAlert(
@@ -1797,7 +1856,12 @@ const DirectSales: React.FC = () => {
     } finally {
       setIsCreatingCustomer(false);
     }
-  }, [applyCustomerSelection, createCustomerName, createCustomerPhone]);
+  }, [
+    applyCustomerSelection,
+    createCustomerName,
+    createCustomerPhone,
+    createCustomerTrn,
+  ]);
 
   const openCreateSiteForm = useCallback(() => {
     setSiteFormMode("create");
@@ -2204,14 +2268,17 @@ const DirectSales: React.FC = () => {
       products
         .filter(
           (product) =>
-            product.type === "assets" && !isTruckAssetSaleProduct(product),
+            product.type === UNIQUE_ITEMS_GROUP &&
+            !isTruckAssetSaleProduct(product),
         )
         .map((product) =>
-          toTransferableAssetProduct({
+          toTransferableUniqueItemProduct({
             id: product.id,
             itemId: product.itemId,
             label: product.label,
-            assetCategory: product.assetCategory,
+            uniqueItemCategory: product.uniqueItemCategory,
+            assetCategory:
+              product.uniqueItemCategory ?? product.assetCategory ?? null,
             image_url: product.image_url,
             description: product.description,
             unit: product.unit,
@@ -2232,9 +2299,13 @@ const DirectSales: React.FC = () => {
       return {
         key: `product:${asset.id}:${asset.serial || asset.itemId}`,
         itemId: asset.itemId,
-        label: asset.label || metadata?.label || "Truck Asset",
+        label: asset.label || metadata?.label || "Truck Unique Item",
         serial: asset.serial ?? metadata?.serial ?? null,
-        category: asset.category ?? metadata?.assetCategory ?? null,
+        category:
+          asset.category ??
+          metadata?.uniqueItemCategory ??
+          metadata?.assetCategory ??
+          null,
         imageUrl:
           resolveResourceUrl(asset.image_url) || metadata?.imageUrl || null,
         source: "product" as const,
@@ -2314,7 +2385,12 @@ const DirectSales: React.FC = () => {
   const directSaleBottleDepositOptions = useMemo<
     DirectSaleBottleDepositOption[]
   >(() => {
+    const productsById = new Map<string, ServerProduct>();
     const refillProductsById = new Map<string, ServerProduct>();
+    products.forEach((product) => {
+      productsById.set(product.itemId, product);
+      productsById.set(product.id, product);
+    });
     products
       .filter((product) => product.type === "refill")
       .forEach((product) => {
@@ -2325,27 +2401,53 @@ const DirectSales: React.FC = () => {
     return truckBulkItems.reduce<DirectSaleBottleDepositOption[]>(
       (options, bulkItem) => {
         const matchKeys = getTruckBulkItemMatchKeys(bulkItem);
+        const matchedProduct = matchKeys
+          .map((key) => productsById.get(key))
+          .find((product): product is ServerProduct => Boolean(product));
         const refillProduct = matchKeys
           .map((key) => refillProductsById.get(key))
           .find((product): product is ServerProduct => Boolean(product));
 
-        const availableQuantity = Math.max(0, bulkItem.quantity);
+        const availableQuantity = Math.max(0, Math.floor(bulkItem.quantity));
 
-        if (
-          availableQuantity <= 0 ||
-          (!bulkItem.isRefillableBottle && !refillProduct)
-        ) {
+        if (availableQuantity <= 0) {
+          return options;
+        }
+
+        const isBottleDeposit =
+          bulkItem.isRefillableBottle || Boolean(refillProduct);
+        const matchedProductCategory = normalizeCategory(
+          matchedProduct?.category,
+        );
+        const matchedProductType = normalizeCategory(matchedProduct?.type);
+        const bulkCategory = normalizeCategory(bulkItem.category);
+        const isAssetBulkItem =
+          matchedProduct?.type === UNIQUE_ITEMS_GROUP ||
+          isUniqueItemSignal(matchedProductType) ||
+          isUniqueItemSignal(matchedProductCategory) ||
+          isUniqueItemSignal(bulkCategory);
+
+        if (!isBottleDeposit && isAssetBulkItem) {
           return options;
         }
 
         options.push({
-          key: `truck:bottle:${bulkItem.id}`,
-          itemId: bulkItem.emptyBottleId || bulkItem.itemId || bulkItem.id,
-          label: toEmptyRefillLabel(refillProduct?.label || bulkItem.label),
-          unit: refillProduct?.unit ?? bulkItem.unit,
+          key: `truck:${isBottleDeposit ? "bottle" : "item"}:${bulkItem.id}`,
+          itemId: isBottleDeposit
+            ? bulkItem.emptyBottleId || bulkItem.itemId || bulkItem.id
+            : bulkItem.itemId || bulkItem.id,
+          label: isBottleDeposit
+            ? toEmptyRefillLabel(refillProduct?.label || bulkItem.label)
+            : matchedProduct?.label || bulkItem.label,
+          description: matchedProduct?.description ?? bulkItem.description,
+          category: matchedProduct?.category ?? bulkItem.category,
+          unit: matchedProduct?.unit ?? refillProduct?.unit ?? bulkItem.unit,
           imageUrl:
-            refillProduct?.image_url || resolveResourceUrl(bulkItem.image_url),
+            matchedProduct?.image_url ||
+            refillProduct?.image_url ||
+            resolveResourceUrl(bulkItem.image_url),
           availableQuantity,
+          kind: isBottleDeposit ? "bottle" : "item",
         });
 
         return options;
@@ -2353,6 +2455,17 @@ const DirectSales: React.FC = () => {
       [],
     );
   }, [products, truckBulkItems]);
+
+  const directSaleRefillBottleDepositOptions = useMemo(
+    () =>
+      directSaleBottleDepositOptions.filter((item) => item.kind === "bottle"),
+    [directSaleBottleDepositOptions],
+  );
+
+  const directSaleTruckItemDepositOptions = useMemo(
+    () => directSaleBottleDepositOptions.filter((item) => item.kind === "item"),
+    [directSaleBottleDepositOptions],
+  );
   const heldAssetOptions = useMemo(
     () => directSaleAssetOptions.filter((asset) => asset.source === "held"),
     [directSaleAssetOptions],
@@ -2485,9 +2598,9 @@ const DirectSales: React.FC = () => {
       {
         wholesale: [] as ServerProduct[],
         refill: [] as ServerProduct[],
-        assets: [] as ServerProduct[],
+        [UNIQUE_ITEMS_GROUP]: [] as ServerProduct[],
         other: [] as ServerProduct[],
-      },
+      } satisfies Record<ProductGroup, ServerProduct[]>,
     );
   }, [products]);
 
@@ -2558,20 +2671,30 @@ const DirectSales: React.FC = () => {
   );
   const totalBottleDepositCount = useMemo(
     () =>
-      selectedBottleDepositEntries.reduce(
-        (sum, bottle) => sum + bottle.quantity,
-        0,
-      ),
+      selectedBottleDepositEntries
+        .filter((item) => item.kind === "bottle")
+        .reduce((sum, bottle) => sum + bottle.quantity, 0),
     [selectedBottleDepositEntries],
+  );
+  const totalItemDepositCount = useMemo(
+    () =>
+      selectedBottleDepositEntries
+        .filter((item) => item.kind === "item")
+        .reduce((sum, item) => sum + item.quantity, 0),
+    [selectedBottleDepositEntries],
+  );
+  const totalTruckDepositCount = useMemo(
+    () => totalBottleDepositCount + totalItemDepositCount,
+    [totalBottleDepositCount, totalItemDepositCount],
   );
   const totalActionSelections = useMemo(
     () =>
       selectedAssetEntries.length +
-      totalBottleDepositCount +
+      totalTruckDepositCount +
       totalBottleReturnCount,
     [
       selectedAssetEntries.length,
-      totalBottleDepositCount,
+      totalTruckDepositCount,
       totalBottleReturnCount,
     ],
   );
@@ -2590,13 +2713,19 @@ const DirectSales: React.FC = () => {
 
     if (selectedAssetEntries.length > 0) {
       parts.push(
-        `${selectedAssetEntries.length} asset action${selectedAssetEntries.length === 1 ? "" : "s"}`,
+        `${selectedAssetEntries.length} unique item action${selectedAssetEntries.length === 1 ? "" : "s"}`,
       );
     }
 
     if (totalBottleDepositCount > 0) {
       parts.push(
         `${totalBottleDepositCount} bottle deposit${totalBottleDepositCount === 1 ? "" : "s"}`,
+      );
+    }
+
+    if (totalItemDepositCount > 0) {
+      parts.push(
+        `${totalItemDepositCount} item deposit${totalItemDepositCount === 1 ? "" : "s"}`,
       );
     }
 
@@ -2636,13 +2765,14 @@ const DirectSales: React.FC = () => {
     totalBottleDepositValue,
     totalBottleReturnValue,
     totalBottleDepositCount,
+    totalItemDepositCount,
     totalBottleReturnCount,
   ]);
   const hasSaleProducts = useMemo(() => {
     return (
       groupedProducts.refill.length > 0 ||
       groupedProducts.wholesale.length > 0 ||
-      groupedProducts.assets.length > 0 ||
+      groupedProducts[UNIQUE_ITEMS_GROUP].length > 0 ||
       groupedProducts.other.length > 0
     );
   }, [groupedProducts]);
@@ -3183,7 +3313,7 @@ const DirectSales: React.FC = () => {
 
     setDirectSaleDraft(buildDirectSaleDraft());
     router.push({
-      pathname: "/(root)/(tabs)/direct-sale-bottles-assets",
+      pathname: "/(root)/(tabs)/direct-sale-bottles-unique-items",
       params: { backTo: "direct-sales" },
     });
   }, [buildDirectSaleDraft, customerData?.id, router, setDirectSaleDraft]);
@@ -3195,9 +3325,10 @@ const DirectSales: React.FC = () => {
     index: number,
     group: ProductGroup,
   ) => {
-    const assetTitle = group === "assets" ? getAssetProductTitle(product) : "";
+    const assetTitle =
+      group === UNIQUE_ITEMS_GROUP ? getAssetProductTitle(product) : "";
     const assetDetail =
-      group === "assets" ? getAssetProductDetail(product) : "";
+      group === UNIQUE_ITEMS_GROUP ? getAssetProductDetail(product) : "";
     const quantity = quantities[product.id] || 0;
     const isSelected = quantity > 0;
     const stockLimit = getSelectableProductStock(product);
@@ -3208,7 +3339,7 @@ const DirectSales: React.FC = () => {
         ? styles.productCardRefill
         : group === "wholesale"
           ? styles.productCardWholesale
-          : group === "assets"
+          : group === UNIQUE_ITEMS_GROUP
             ? styles.productCardAssets
             : styles.productCardOther;
     const unitPrice = product.pricePerUnit;
@@ -3266,7 +3397,7 @@ const DirectSales: React.FC = () => {
                 </View>
               )}
             </View>
-            {group === "assets" && assetDetail ? (
+            {group === UNIQUE_ITEMS_GROUP && assetDetail ? (
               <Text style={styles.productAssetIdText} numberOfLines={1}>
                 {assetDetail}
               </Text>
@@ -3278,8 +3409,8 @@ const DirectSales: React.FC = () => {
                   ? isEmptyBottleSaleProduct(product)
                     ? "Empty bottle"
                     : "Retail item"
-                  : group === "assets"
-                    ? "Asset item"
+                  : group === UNIQUE_ITEMS_GROUP
+                    ? "Unique item"
                     : "Other product"}
               {product.unit ? ` - ${product.unit}` : ""}
             </Text>
@@ -3487,6 +3618,11 @@ const DirectSales: React.FC = () => {
     const price = bottleDepositPrices[bottle.key] ?? "0.00";
     const isSelected = quantity > 0;
     const isMaxQuantity = quantity >= bottle.availableQuantity;
+    const isBottle = bottle.kind === "bottle";
+    const detailParts: string[] = [];
+    appendUniqueDisplayPart(detailParts, bottle.category);
+    appendUniqueDisplayPart(detailParts, bottle.description);
+    const detail = detailParts.join(" · ");
 
     return (
       <View
@@ -3515,7 +3651,7 @@ const DirectSales: React.FC = () => {
               />
             ) : (
               <Ionicons
-                name="water-outline"
+                name={isBottle ? "water-outline" : "cube-outline"}
                 size={18}
                 color={isSelected ? "#FFFFFF" : "#0286FF"}
               />
@@ -3532,9 +3668,17 @@ const DirectSales: React.FC = () => {
               </View>
             </View>
 
+            {detail ? (
+              <Text style={styles.assetActionDetail} numberOfLines={1}>
+                {detail}
+              </Text>
+            ) : null}
+
             <View style={styles.modalActionMetaRow}>
               <View style={styles.modalActionMetaPill}>
-                <Text style={styles.modalActionMetaPillText}>On truck</Text>
+                <Text style={styles.modalActionMetaPillText}>
+                  {isBottle ? "Left empty bottle" : "Left item"}
+                </Text>
               </View>
               {bottle.unit ? (
                 <View style={styles.modalActionMetaPill}>
@@ -3871,6 +4015,14 @@ const DirectSales: React.FC = () => {
                     <Text style={styles.selectedCustomerMeta}>
                       {customerData.phone}
                     </Text>
+                    {customerData.trn ? (
+                      <Text
+                        style={styles.selectedCustomerMeta}
+                        numberOfLines={1}
+                      >
+                        TRN: {customerData.trn}
+                      </Text>
+                    ) : null}
                     <View style={styles.customerBalanceRow}>
                       <Ionicons
                         name={
@@ -4386,7 +4538,7 @@ const DirectSales: React.FC = () => {
                   </View>
                 ) : null}
 
-                {groupedProducts.assets.length > 0 ? (
+                {groupedProducts[UNIQUE_ITEMS_GROUP].length > 0 ? (
                   <View style={styles.productCategorySection}>
                     <View style={styles.productCategoryHeader}>
                       <View
@@ -4400,17 +4552,20 @@ const DirectSales: React.FC = () => {
                           size={14}
                           color="#6D28D9"
                         />
-                        <Text style={styles.productCategoryTitle}>Assets</Text>
+                        <Text style={styles.productCategoryTitle}>
+                          Unique Items
+                        </Text>
                       </View>
                       <View style={styles.productCategoryCountBadge}>
                         <Text style={styles.productCategoryCount}>
-                          {groupedProducts.assets.length}
+                          {groupedProducts[UNIQUE_ITEMS_GROUP].length}
                         </Text>
                       </View>
                     </View>
                     <View style={styles.productGrid}>
-                      {groupedProducts.assets.map((product, index) =>
-                        renderProductCard(product, index, "assets"),
+                      {groupedProducts[UNIQUE_ITEMS_GROUP].map(
+                        (product, index) =>
+                          renderProductCard(product, index, UNIQUE_ITEMS_GROUP),
                       )}
                     </View>
                   </View>
@@ -4486,7 +4641,7 @@ const DirectSales: React.FC = () => {
               disabled={!customerData?.id}
               activeOpacity={0.8}
             >
-              <Text style={styles.confirmText}>Bottles & Assets</Text>
+              <Text style={styles.confirmText}>Deposits & Returns</Text>
               <View style={styles.confirmArrow}>
                 <Ionicons name="arrow-forward" size={18} color="#1E40AF" />
               </View>
@@ -4499,7 +4654,7 @@ const DirectSales: React.FC = () => {
 
       <ActionModal
         visible={assetActionsModalVisible}
-        title="Bottles & Assets"
+        title="Deposits & Returns"
         onClose={() => setAssetActionsModalVisible(false)}
         topInset={insets.top}
         bottomInset={insets.bottom}
@@ -4531,13 +4686,19 @@ const DirectSales: React.FC = () => {
             </View>
             <View style={styles.assetLauncherChip}>
               <Text style={styles.assetLauncherChipText}>
-                {directSaleBottleDepositOptions.length} bottle deposit
-                {directSaleBottleDepositOptions.length === 1 ? "" : "s"}
+                {directSaleRefillBottleDepositOptions.length} bottle deposit
+                {directSaleRefillBottleDepositOptions.length === 1 ? "" : "s"}
               </Text>
             </View>
             <View style={styles.assetLauncherChip}>
               <Text style={styles.assetLauncherChipText}>
-                {depositAssetOptions.length} asset deposit
+                {directSaleTruckItemDepositOptions.length} item deposit
+                {directSaleTruckItemDepositOptions.length === 1 ? "" : "s"}
+              </Text>
+            </View>
+            <View style={styles.assetLauncherChip}>
+              <Text style={styles.assetLauncherChipText}>
+                {depositAssetOptions.length} unique item deposit
                 {depositAssetOptions.length === 1 ? "" : "s"}
               </Text>
             </View>
@@ -4682,7 +4843,7 @@ const DirectSales: React.FC = () => {
             <View style={styles.assetActionSubsection}>
               <View style={styles.assetActionsSectionHeader}>
                 <Text style={styles.assetActionSubsectionTitle}>
-                  Asset Returns
+                  Unique Item Returns
                 </Text>
                 <View style={styles.productCategoryCountBadge}>
                   <Text style={styles.productCategoryCount}>
@@ -4691,7 +4852,7 @@ const DirectSales: React.FC = () => {
                 </View>
               </View>
               <Text style={styles.assetActionSubsectionText}>
-                Customer-held assets. Set unit value.
+                Customer-held unique items. Set unit value.
               </Text>
 
               {!customerData ? (
@@ -4702,7 +4863,7 @@ const DirectSales: React.FC = () => {
                     color="#64748B"
                   />
                   <Text style={styles.heldItemsInfoText}>
-                    Choose a customer to load asset returns.
+                    Choose a customer to load unique item returns.
                   </Text>
                 </View>
               ) : heldItemsError ? (
@@ -4726,7 +4887,7 @@ const DirectSales: React.FC = () => {
                 <View style={styles.assetSectionEmptyCard}>
                   <Ionicons name="cube-outline" size={18} color="#94A3B8" />
                   <Text style={styles.assetSectionEmptyText}>
-                    No held assets registered.
+                    No held unique items registered.
                   </Text>
                 </View>
               )}
@@ -4749,7 +4910,7 @@ const DirectSales: React.FC = () => {
                 </View>
                 <View style={styles.productCategoryCountBadge}>
                   <Text style={styles.productCategoryCount}>
-                    {directSaleBottleDepositOptions.length}
+                    {directSaleRefillBottleDepositOptions.length}
                   </Text>
                 </View>
               </View>
@@ -4758,7 +4919,7 @@ const DirectSales: React.FC = () => {
                 From current truck load.
               </Text>
 
-              {directSaleBottleDepositOptions.length === 0 ? (
+              {directSaleRefillBottleDepositOptions.length === 0 ? (
                 <View style={styles.assetSectionEmptyCard}>
                   <Ionicons name="water-outline" size={18} color="#94A3B8" />
                   <Text style={styles.assetSectionEmptyText}>
@@ -4767,8 +4928,46 @@ const DirectSales: React.FC = () => {
                 </View>
               ) : (
                 <View style={styles.productGrid}>
-                  {directSaleBottleDepositOptions.map((bottle) =>
+                  {directSaleRefillBottleDepositOptions.map((bottle) =>
                     renderBottleDepositCard(bottle),
+                  )}
+                </View>
+              )}
+            </View>
+
+            <View style={styles.assetActionSubsection}>
+              <View style={styles.assetActionsSectionHeader}>
+                <View
+                  style={[
+                    styles.productCategoryBadge,
+                    styles.productCategoryBadgeWholesale,
+                  ]}
+                >
+                  <Ionicons name="cube-outline" size={14} color="#0369A1" />
+                  <Text style={styles.productCategoryTitle}>Item Deposits</Text>
+                </View>
+                <View style={styles.productCategoryCountBadge}>
+                  <Text style={styles.productCategoryCount}>
+                    {directSaleTruckItemDepositOptions.length}
+                  </Text>
+                </View>
+              </View>
+
+              <Text style={styles.assetSectionHelperText}>
+                Retail and bulk items from current truck load.
+              </Text>
+
+              {directSaleTruckItemDepositOptions.length === 0 ? (
+                <View style={styles.assetSectionEmptyCard}>
+                  <Ionicons name="cube-outline" size={18} color="#94A3B8" />
+                  <Text style={styles.assetSectionEmptyText}>
+                    No item deposits available.
+                  </Text>
+                </View>
+              ) : (
+                <View style={styles.productGrid}>
+                  {directSaleTruckItemDepositOptions.map((item) =>
+                    renderBottleDepositCard(item),
                   )}
                 </View>
               )}
@@ -4782,7 +4981,9 @@ const DirectSales: React.FC = () => {
                 ]}
               >
                 <Ionicons name="cube-outline" size={14} color="#581C87" />
-                <Text style={styles.productCategoryTitle}>Asset Deposits</Text>
+                <Text style={styles.productCategoryTitle}>
+                  Unique Item Deposits
+                </Text>
               </View>
               <View style={styles.productCategoryCountBadge}>
                 <Text style={styles.productCategoryCount}>
@@ -4810,7 +5011,7 @@ const DirectSales: React.FC = () => {
               <View style={styles.assetSectionEmptyCard}>
                 <Ionicons name="cube-outline" size={18} color="#94A3B8" />
                 <Text style={styles.assetSectionEmptyText}>
-                  No asset deposits available.
+                  No unique item deposits available.
                 </Text>
               </View>
             ) : (
@@ -4896,6 +5097,11 @@ const DirectSales: React.FC = () => {
                     <Text style={styles.customerMatchMeta} numberOfLines={1}>
                       {customer.phone}
                     </Text>
+                    {customer.trn ? (
+                      <Text style={styles.customerMatchMeta} numberOfLines={1}>
+                        TRN: {customer.trn}
+                      </Text>
+                    ) : null}
                     <Text
                       style={[
                         styles.customerMatchBalance,
@@ -5131,6 +5337,22 @@ const DirectSales: React.FC = () => {
               />
             </View>
 
+            <View style={styles.inputWrapper}>
+              <Ionicons
+                name="document-text-outline"
+                size={18}
+                color="#94A3B8"
+                style={styles.inputIcon}
+              />
+              <TextInput
+                style={styles.input}
+                placeholder="TRN (optional)"
+                placeholderTextColor="#CBD5E1"
+                value={createCustomerTrn}
+                onChangeText={setCreateCustomerTrn}
+              />
+            </View>
+
             <TouchableOpacity
               style={styles.modalPrimaryButton}
               onPress={() => void handleCreateCustomer()}
@@ -5173,6 +5395,11 @@ const DirectSales: React.FC = () => {
               <Text style={styles.selectedCustomerMeta}>
                 {customerData.phone}
               </Text>
+              {customerData.trn ? (
+                <Text style={styles.selectedCustomerMeta} numberOfLines={1}>
+                  TRN: {customerData.trn}
+                </Text>
+              ) : null}
               <View style={styles.customerBalanceRow}>
                 <Ionicons
                   name={

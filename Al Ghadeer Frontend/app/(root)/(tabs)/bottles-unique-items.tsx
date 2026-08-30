@@ -5,9 +5,9 @@ import { showWarningAlert } from "@/store/utils/alert";
 import type { Order } from "@/types/order";
 import { parseApiResponseWithSoftError } from "@/utils/api";
 import {
-  mergeAssetProductsIntoRentItems,
-  toTransferableAssetProduct,
-} from "@/utils/assetTransfers";
+  mergeUniqueItemProductsIntoRentItems,
+  toTransferableUniqueItemProduct,
+} from "@/utils/uniqueItemTransfers";
 import {
   mergeHeldItemsIntoRentItems,
   normalizeCustomerHeldItems,
@@ -21,15 +21,23 @@ import {
   getRentItemDepositKind,
   getRentItemDisplayLabel,
   getRentItemQuantityLimit,
+  isGenericItemDeposit,
 } from "@/utils/rentItems";
 import {
-  extractTruckAssets,
+  extractTruckUniqueItems,
   extractTruckBulkItems,
   getTruckBulkItemMatchKeys,
-  mergeTruckAssetsIntoRentItems,
-  type TruckAsset,
+  mergeTruckUniqueItemsIntoRentItems,
+  type TruckUniqueItem,
   type TruckBulkItem,
 } from "@/utils/truckLoad";
+import {
+  getSpecificUniqueItemCategory,
+  isUniqueItemSignal,
+  UNIQUE_ITEM_KIND,
+  UNIQUE_ITEM_MOVEMENT_TO_CUSTOMER,
+  UNIQUE_ITEMS_GROUP,
+} from "@/utils/uniqueItems";
 import { Ionicons } from "@expo/vector-icons";
 import { useFocusEffect, useLocalSearchParams, useRouter } from "expo-router";
 import React, { useCallback, useEffect, useMemo, useState } from "react";
@@ -51,7 +59,7 @@ const IP_ADDRESS = getApiBaseUrl();
 interface ServerProduct {
   id: string;
   itemId: string;
-  type: "retail" | "refill" | "assets" | "other";
+  type: "retail" | "refill" | "unique-items" | "assets" | "other";
   name: string;
   price: number;
   unit: string | null;
@@ -66,9 +74,12 @@ interface BottleDepositOption {
   key: string;
   itemId: string;
   label: string;
+  description: string | null;
+  category: string | null;
   unit: string | null;
   imageUrl: string | null;
   availableQuantity: number;
+  kind: "bottle" | "item";
 }
 
 type RentItem = NonNullable<Order["rent_items"]>[number];
@@ -83,7 +94,7 @@ const normalizeProductType = (value: unknown): ServerProduct["type"] => {
   const raw = normalizeCategory(typeof value === "string" ? value : "");
   if (raw.includes("refill")) return "refill";
   if (raw.includes("retail") || raw.includes("bulk")) return "retail";
-  if (raw.includes("asset")) return "assets";
+  if (isUniqueItemSignal(raw)) return UNIQUE_ITEMS_GROUP;
   return "other";
 };
 
@@ -126,25 +137,6 @@ const toDepositPriceValue = (value?: string) => {
   return Number.isFinite(parsed) && parsed >= 0 ? Number(parsed.toFixed(2)) : 0;
 };
 
-const isGenericAssetCategory = (value?: string | null) => {
-  const normalized = normalizeCategory(value);
-  return (
-    !normalized ||
-    normalized === "asset" ||
-    normalized === "assets" ||
-    normalized === "assetitem" ||
-    normalized === "assetproduct"
-  );
-};
-
-const getSpecificAssetCategory = (...values: (string | null | undefined)[]) => {
-  for (const value of values) {
-    const label = (value || "").trim();
-    if (label && !isGenericAssetCategory(label)) return label;
-  }
-  return "";
-};
-
 const appendUniqueDisplayPart = (parts: string[], value?: string | null) => {
   const label = (value || "").trim();
   if (!label) return;
@@ -154,7 +146,10 @@ const appendUniqueDisplayPart = (parts: string[], value?: string | null) => {
 };
 
 const getAssetMovementTitle = (item: RentItem) =>
-  getSpecificAssetCategory(item.asset_category) ||
+  getSpecificUniqueItemCategory(
+    item.unique_item_category,
+    item.asset_category,
+  ) ||
   item.name ||
   getRentItemDisplayLabel(item);
 
@@ -203,12 +198,19 @@ const normalizeProductRecord = (
     image_url: toNullableStringValue(source.image_url),
     description: toNullableStringValue(source.description),
     category:
-      type === "assets"
-        ? toStringValue(source.assetCategory ?? source.asset_category) ||
-          "Assets"
+      type === UNIQUE_ITEMS_GROUP
+        ? toStringValue(
+            source.uniqueItemCategory ??
+              source.unique_item_category ??
+              source.assetCategory ??
+              source.asset_category,
+          ) || "Unique Items"
         : type,
     assetCategory: toNullableStringValue(
-      source.assetCategory ?? source.asset_category,
+      source.uniqueItemCategory ??
+        source.unique_item_category ??
+        source.assetCategory ??
+        source.asset_category,
     ),
     loaded_quantity:
       toNumberValue(source.loaded_quantity ?? source.available_stock) ??
@@ -259,7 +261,7 @@ const toEmptyRefillLabel = (label: string) => {
 };
 
 const getInventoryIconName = (
-  kind: "bottle" | "asset",
+  kind: "bottle" | "unique-item",
   category?: string | null,
 ) => {
   if (kind === "bottle") return "water-outline" as const;
@@ -278,15 +280,18 @@ const getMovementCopy = (item: RentItem) => {
   const action = getRentItemDepositAction(item);
   const kind = getRentItemDepositKind(item);
   const isReturn = action === "deposit_return";
+  const isGenericItem = isGenericItemDeposit(item);
 
   return {
-    label: isReturn
-      ? kind === "asset"
-        ? "Collected asset"
-        : "Collected empty bottle"
-      : kind === "asset"
-        ? "Left asset"
-        : "Left empty bottle",
+    label: isGenericItem
+      ? "Left item"
+      : isReturn
+        ? kind === UNIQUE_ITEM_KIND
+          ? "Collected unique item"
+          : "Collected empty bottle"
+        : kind === UNIQUE_ITEM_KIND
+          ? "Left unique item"
+          : "Left empty bottle",
     verb: isReturn ? "Collect" : "Leave",
     tone: isReturn ? "return" : "leave",
   };
@@ -363,11 +368,16 @@ const MovementItem = ({
   const isReturn = getRentItemDepositAction(item) === "deposit_return";
   const accentColor = isReturn ? "#047857" : "#1D4ED8";
   const accentBackground = isReturn ? "#ECFDF5" : "#EFF6FF";
-  const isAsset = depositKind === "asset";
+  const isAsset = depositKind === UNIQUE_ITEM_KIND;
+  const isGenericItem = isGenericItemDeposit(item);
   const movementTitle = isAsset
     ? getAssetMovementTitle(item)
     : item.name || getRentItemDisplayLabel(item);
-  const movementDetail = isAsset ? getAssetMovementDetail(item) : "";
+  const movementDetail = isAsset
+    ? getAssetMovementDetail(item)
+    : isGenericItem
+      ? item.description || ""
+      : "";
 
   return (
     <View
@@ -505,6 +515,12 @@ const BottleDepositItem = ({
   priceDraft: string;
   onChangePrice: (bottleKey: string, value: string) => void;
 }) => {
+  const isBottle = bottle.kind === "bottle";
+  const detailParts: string[] = [];
+  appendUniqueDisplayPart(detailParts, bottle.category);
+  appendUniqueDisplayPart(detailParts, bottle.description);
+  const detail = detailParts.join(" · ");
+
   return (
     <View
       style={[
@@ -527,7 +543,11 @@ const BottleDepositItem = ({
               resizeMode="cover"
             />
           ) : (
-            <Ionicons name="water-outline" size={22} color="#1D4ED8" />
+            <Ionicons
+              name={isBottle ? "water-outline" : "cube-outline"}
+              size={22}
+              color="#1D4ED8"
+            />
           )}
         </View>
 
@@ -545,9 +565,16 @@ const BottleDepositItem = ({
               </View>
             ) : null}
           </View>
+          {detail ? (
+            <Text style={styles.movementDetail} numberOfLines={1}>
+              {detail}
+            </Text>
+          ) : null}
           <View style={styles.metaRow}>
             <View style={styles.metaPill}>
-              <Text style={styles.metaPillText}>Left empty bottle</Text>
+              <Text style={styles.metaPillText}>
+                {isBottle ? "Left empty bottle" : "Left item"}
+              </Text>
             </View>
             <View style={styles.metaPill}>
               <Text style={styles.metaPillText}>
@@ -577,7 +604,9 @@ const BottleDepositItem = ({
       <View style={styles.depositPriceRow}>
         <View style={styles.depositPriceCopy}>
           <Text style={styles.depositPriceLabel}>Deposit Price</Text>
-          <Text style={styles.depositPriceHelper}>Price per empty bottle</Text>
+          <Text style={styles.depositPriceHelper}>
+            {isBottle ? "Price per empty bottle" : "Price per item left"}
+          </Text>
         </View>
         <View style={styles.depositPriceInputRow}>
           <Text style={styles.depositPricePrefix}>AED</Text>
@@ -608,7 +637,7 @@ const EmptySection = ({
   </View>
 );
 
-const BottlesAssets = () => {
+const BottlesUniqueItems = () => {
   const insets = useSafeAreaInsets();
   const router = useRouter();
   const params = useLocalSearchParams<{ backTo?: string }>();
@@ -618,7 +647,7 @@ const BottlesAssets = () => {
 
   const [products, setProducts] = useState<ServerProduct[]>([]);
   const [truckBulkItems, setTruckBulkItems] = useState<TruckBulkItem[]>([]);
-  const [truckAssets, setTruckAssets] = useState<TruckAsset[]>([]);
+  const [truckAssets, setTruckAssets] = useState<TruckUniqueItem[]>([]);
   const [heldItems, setHeldItems] = useState<CustomerHeldItems>({
     bottles: [],
     assets: [],
@@ -709,7 +738,7 @@ const BottlesAssets = () => {
         setTruckLoadError(truckResult.error);
       } else {
         setTruckBulkItems(extractTruckBulkItems(truckResult.data));
-        setTruckAssets(extractTruckAssets(truckResult.data));
+        setTruckAssets(extractTruckUniqueItems(truckResult.data));
       }
 
       if (!heldItemsResponse) {
@@ -725,7 +754,7 @@ const BottlesAssets = () => {
         }
       }
     } catch (error) {
-      console.error("Error fetching bottle and asset data:", error);
+      console.error("Error fetching bottle and unique item data:", error);
       setProducts([]);
       setTruckBulkItems([]);
       setTruckAssets([]);
@@ -733,7 +762,7 @@ const BottlesAssets = () => {
       setApiError(
         error instanceof Error
           ? error.message
-          : "Failed to load bottle and asset data.",
+          : "Failed to load bottle and unique item data.",
       );
     } finally {
       setLoading(false);
@@ -754,9 +783,9 @@ const BottlesAssets = () => {
   const transferableAssetProducts = useMemo(
     () =>
       products
-        .filter((product) => product.type === "assets")
+        .filter((product) => product.type === UNIQUE_ITEMS_GROUP)
         .map((product) =>
-          toTransferableAssetProduct({
+          toTransferableUniqueItemProduct({
             id: product.id,
             itemId: product.itemId,
             label: product.name,
@@ -772,8 +801,8 @@ const BottlesAssets = () => {
   const selectableRentItems = useMemo(
     () =>
       mergeHeldItemsIntoRentItems(
-        mergeTruckAssetsIntoRentItems(
-          mergeAssetProductsIntoRentItems(
+        mergeTruckUniqueItemsIntoRentItems(
+          mergeUniqueItemProductsIntoRentItems(
             currentOrder?.rent_items,
             truckAssets.length > 0 ? [] : transferableAssetProducts,
           ),
@@ -884,7 +913,12 @@ const BottlesAssets = () => {
   );
 
   const bottleDepositOptions = useMemo<BottleDepositOption[]>(() => {
+    const productsById = new Map<string, ServerProduct>();
     const refillProductsById = new Map<string, ServerProduct>();
+    products.forEach((product) => {
+      productsById.set(product.itemId, product);
+      productsById.set(product.id, product);
+    });
     refillProducts.forEach((product) => {
       refillProductsById.set(product.itemId, product);
       refillProductsById.set(product.id, product);
@@ -892,33 +926,68 @@ const BottlesAssets = () => {
 
     return truckBulkItems.reduce<BottleDepositOption[]>((options, bulkItem) => {
       const matchKeys = getTruckBulkItemMatchKeys(bulkItem);
+      const matchedProduct = matchKeys
+        .map((key) => productsById.get(key))
+        .find((product): product is ServerProduct => Boolean(product));
       const refillProduct = matchKeys
         .map((key) => refillProductsById.get(key))
         .find((product): product is ServerProduct => Boolean(product));
 
-      const availableQuantity = Math.max(0, bulkItem.quantity);
+      const availableQuantity = Math.max(0, Math.floor(bulkItem.quantity));
 
-      if (
-        availableQuantity <= 0 ||
-        (!bulkItem.isRefillableBottle && !refillProduct)
-      ) {
+      if (availableQuantity <= 0) {
+        return options;
+      }
+
+      const isBottleDeposit =
+        bulkItem.isRefillableBottle || Boolean(refillProduct);
+      const matchedProductCategory = normalizeCategory(
+        matchedProduct?.category,
+      );
+      const matchedProductType = normalizeCategory(matchedProduct?.type);
+      const bulkCategory = normalizeCategory(bulkItem.category);
+      const isAssetBulkItem =
+        matchedProduct?.type === UNIQUE_ITEMS_GROUP ||
+        isUniqueItemSignal(matchedProductType) ||
+        isUniqueItemSignal(matchedProductCategory) ||
+        isUniqueItemSignal(bulkCategory);
+
+      if (!isBottleDeposit && isAssetBulkItem) {
         return options;
       }
 
       options.push({
-        key: `truck:bottle:${bulkItem.id}`,
-        itemId: bulkItem.emptyBottleId || bulkItem.itemId || bulkItem.id,
-        label: toEmptyRefillLabel(refillProduct?.name || bulkItem.label),
-        unit: refillProduct?.unit ?? bulkItem.unit,
+        key: `truck:${isBottleDeposit ? "bottle" : "item"}:${bulkItem.id}`,
+        itemId: isBottleDeposit
+          ? bulkItem.emptyBottleId || bulkItem.itemId || bulkItem.id
+          : bulkItem.itemId || bulkItem.id,
+        label: isBottleDeposit
+          ? toEmptyRefillLabel(refillProduct?.name || bulkItem.label)
+          : matchedProduct?.name || bulkItem.label,
+        description: matchedProduct?.description ?? bulkItem.description,
+        category: matchedProduct?.category ?? bulkItem.category,
+        unit: matchedProduct?.unit ?? refillProduct?.unit ?? bulkItem.unit,
         imageUrl:
+          resolveResourceUrl(matchedProduct?.image_url) ||
           resolveResourceUrl(refillProduct?.image_url) ||
           resolveResourceUrl(bulkItem.image_url),
         availableQuantity,
+        kind: isBottleDeposit ? "bottle" : "item",
       });
 
       return options;
     }, []);
-  }, [refillProducts, truckBulkItems]);
+  }, [products, refillProducts, truckBulkItems]);
+
+  const refillBottleDepositOptions = useMemo(
+    () => bottleDepositOptions.filter((item) => item.kind === "bottle"),
+    [bottleDepositOptions],
+  );
+
+  const truckItemDepositOptions = useMemo(
+    () => bottleDepositOptions.filter((item) => item.kind === "item"),
+    [bottleDepositOptions],
+  );
 
   const currentBottleDepositMap = useMemo(() => {
     const currentBottleDeposits = new Map<string, RentItem>();
@@ -1015,7 +1084,7 @@ const BottlesAssets = () => {
       selectableRentItems.filter(
         (item) =>
           getRentItemDepositAction(item) === "deposit_return" &&
-          getRentItemDepositKind(item) === "asset",
+          getRentItemDepositKind(item) === UNIQUE_ITEM_KIND,
       ),
     [selectableRentItems],
   );
@@ -1025,7 +1094,7 @@ const BottlesAssets = () => {
       selectableRentItems.filter(
         (item) =>
           getRentItemDepositAction(item) === "deposit" &&
-          getRentItemDepositKind(item) === "asset",
+          getRentItemDepositKind(item) === UNIQUE_ITEM_KIND,
       ),
     [selectableRentItems],
   );
@@ -1065,14 +1134,23 @@ const BottlesAssets = () => {
             price: toDepositPriceValue(bottleDepositPrices[bottle.key]),
             quantity,
             image_url: bottle.imageUrl || "",
+            description: bottle.description,
             in_truck: true,
             max_quantity: bottle.availableQuantity,
             deposit_action: "deposit" as const,
-            deposit_kind: "bottle" as const,
-            action_source: "product_asset" as const,
+            deposit_kind:
+              bottle.kind === "bottle" ? ("bottle" as const) : UNIQUE_ITEM_KIND,
+            action_source:
+              bottle.kind === "bottle"
+                ? ("product_asset" as const)
+                : ("product_unique_item" as const),
             unit: bottle.unit,
-            other_action_type: "item-movement-to-customer" as const,
-            other_action_item_type: "bottle" as const,
+            other_action_type:
+              bottle.kind === "bottle"
+                ? ("item-movement-to-customer" as const)
+                : UNIQUE_ITEM_MOVEMENT_TO_CUSTOMER,
+            other_action_item_type:
+              bottle.kind === "bottle" ? ("bottle" as const) : UNIQUE_ITEM_KIND,
           },
         ];
       }),
@@ -1088,18 +1166,25 @@ const BottlesAssets = () => {
 
     const collectedBottles = countSelected(bottleReturnItems);
     const collectedAssets = countSelected(heldAssetReturnItems);
-    const leftBottles = selectedBottleDepositItems.reduce(
-      (sum, item) => sum + item.quantity,
-      0,
-    );
+    const leftBottles = selectedBottleDepositItems
+      .filter((item) => !isGenericItemDeposit(item))
+      .reduce((sum, item) => sum + item.quantity, 0);
+    const leftItems = selectedBottleDepositItems
+      .filter((item) => isGenericItemDeposit(item))
+      .reduce((sum, item) => sum + item.quantity, 0);
     const leftAssets = countSelected(depositAssetItems);
     return {
       collectedBottles,
       collectedAssets,
       leftBottles,
+      leftItems,
       leftAssets,
       totalSelected:
-        collectedBottles + collectedAssets + leftBottles + leftAssets,
+        collectedBottles +
+        collectedAssets +
+        leftBottles +
+        leftItems +
+        leftAssets,
     };
   }, [
     bottleReturnItems,
@@ -1144,7 +1229,7 @@ const BottlesAssets = () => {
 
     router.push({
       pathname: "/(root)/(tabs)/checkout",
-      params: { backTo: "bottles-assets" },
+      params: { backTo: "bottles-unique-items" },
     });
   }, [
     assignedOrders,
@@ -1159,7 +1244,7 @@ const BottlesAssets = () => {
     if (params.backTo === "checkout") {
       router.replace({
         pathname: "/(root)/(tabs)/checkout",
-        params: { backTo: "bottles-assets" },
+        params: { backTo: "bottles-unique-items" },
       });
       return;
     }
@@ -1182,7 +1267,9 @@ const BottlesAssets = () => {
         <View style={styles.loadingBox}>
           <ActivityIndicator size="large" color="#1E40AF" />
         </View>
-        <Text style={styles.loadingText}>Loading bottles and assets...</Text>
+        <Text style={styles.loadingText}>
+          Loading bottles and unique items...
+        </Text>
       </View>
     );
   }
@@ -1213,7 +1300,10 @@ const BottlesAssets = () => {
   const footerScrollClearance = bottomNavClearance + 100;
   const collectedCount =
     movementSummary.collectedBottles + movementSummary.collectedAssets;
-  const leftCount = movementSummary.leftBottles + movementSummary.leftAssets;
+  const leftCount =
+    movementSummary.leftBottles +
+    movementSummary.leftItems +
+    movementSummary.leftAssets;
 
   return (
     <View style={[styles.container, { paddingTop: insets.top }]}>
@@ -1226,7 +1316,7 @@ const BottlesAssets = () => {
           <Ionicons name="chevron-back" size={20} color="#1E40AF" />
         </TouchableOpacity>
         <View style={styles.headerCenter}>
-          <Text style={styles.headerTitle}>Bottles & Assets</Text>
+          <Text style={styles.headerTitle}>Deposits & Returns</Text>
           <Text style={styles.headerSubtitle} numberOfLines={1}>
             {currentOrder.customer_name || "Current delivery"}
           </Text>
@@ -1334,7 +1424,7 @@ const BottlesAssets = () => {
           </View>
 
           <View style={styles.subsection}>
-            <Text style={styles.subsectionTitle}>Asset Returns</Text>
+            <Text style={styles.subsectionTitle}>Unique Item Returns</Text>
             {heldAssetReturnItems.length > 0 ? (
               <View style={styles.itemList}>
                 {heldAssetReturnItems.map((item) => (
@@ -1354,7 +1444,7 @@ const BottlesAssets = () => {
             ) : (
               <EmptySection
                 icon="cube-outline"
-                text="No customer-held assets are registered."
+                text="No customer-held unique items are registered."
               />
             )}
           </View>
@@ -1395,9 +1485,9 @@ const BottlesAssets = () => {
 
           <View style={styles.subsection}>
             <Text style={styles.subsectionTitle}>Bottle Deposits</Text>
-            {bottleDepositOptions.length > 0 ? (
+            {refillBottleDepositOptions.length > 0 ? (
               <View style={styles.itemList}>
-                {bottleDepositOptions.map((bottle) => (
+                {refillBottleDepositOptions.map((bottle) => (
                   <BottleDepositItem
                     key={bottle.key}
                     bottle={bottle}
@@ -1420,7 +1510,33 @@ const BottlesAssets = () => {
           </View>
 
           <View style={styles.subsection}>
-            <Text style={styles.subsectionTitle}>Asset Deposits</Text>
+            <Text style={styles.subsectionTitle}>Item Deposits</Text>
+            {truckItemDepositOptions.length > 0 ? (
+              <View style={styles.itemList}>
+                {truckItemDepositOptions.map((item) => (
+                  <BottleDepositItem
+                    key={item.key}
+                    bottle={item}
+                    quantity={Math.max(
+                      0,
+                      bottleDepositQuantities[item.key] ?? 0,
+                    )}
+                    onChangeQuantity={handleChangeBottleDepositQuantity}
+                    priceDraft={bottleDepositPrices[item.key] ?? "0.00"}
+                    onChangePrice={handleChangeBottleDepositPrice}
+                  />
+                ))}
+              </View>
+            ) : (
+              <EmptySection
+                icon="cube-outline"
+                text="No retail item deposits available from the truck."
+              />
+            )}
+          </View>
+
+          <View style={styles.subsection}>
+            <Text style={styles.subsectionTitle}>Unique Item Deposits</Text>
             {depositAssetItems.length > 0 ? (
               <View style={styles.itemList}>
                 {depositAssetItems.map((item) => (
@@ -1440,7 +1556,7 @@ const BottlesAssets = () => {
             ) : (
               <EmptySection
                 icon="cube-outline"
-                text="No truck assets are available to leave with this customer."
+                text="No truck unique items are available to leave with this customer."
               />
             )}
           </View>
@@ -2006,4 +2122,4 @@ const styles = StyleSheet.create({
   },
 });
 
-export default BottlesAssets;
+export default BottlesUniqueItems;

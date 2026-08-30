@@ -1,3 +1,12 @@
+export type UniqueItemWireKind = "unique-item" | "asset";
+export type DeliveryProductItemType = UniqueItemWireKind | "retail" | "refill";
+export type DepositItemKind = UniqueItemWireKind | "bottle";
+export type UniqueItemMovementType =
+  | "unique-item-movement-from-customer"
+  | "unique-item-movement-to-customer"
+  | "asset-movement-from-customer"
+  | "asset-movement-to-customer";
+
 // Confirm payment request/response types
 export interface ConfirmPaymentRequest {
   customer_site_id: string;
@@ -9,7 +18,7 @@ export interface ConfirmPaymentRequest {
     name: string;
     quantity: number;
     price: number;
-    category?: "bulk_item" | "asset" | "refill";
+    category?: "bulk_item" | "unique-item" | "asset" | "refill";
   }[];
   subtotal: number;
   vat: number;
@@ -30,13 +39,12 @@ export interface ConfirmPaymentRequest {
     type:
       | "item-movement-from-customer"
       | "item-movement-to-customer"
-      | "asset-movement-from-customer"
-      | "asset-movement-to-customer"
+      | UniqueItemMovementType
       | "deposit"
       | "deposit-refund";
     price: number;
     quantity?: number;
-    item_type?: "asset" | "bottle";
+    item_type?: DepositItemKind;
   }[];
 }
 
@@ -76,11 +84,17 @@ export interface OrderRentItem {
   description?: string | null;
   serial?: string | null;
   asset_category?: string | null;
+  unique_item_category?: string | null;
   in_truck?: boolean;
   max_quantity?: number;
   deposit_action?: "deposit" | "deposit_return";
-  deposit_kind?: "asset" | "bottle";
-  action_source?: "product_asset" | "held_item" | "task" | "legacy";
+  deposit_kind?: DepositItemKind;
+  action_source?:
+    | "product_unique_item"
+    | "product_asset"
+    | "held_item"
+    | "task"
+    | "legacy";
   other_action_type?: NonNullable<
     ConfirmPaymentRequest["other_actions"]
   >[0]["type"];
@@ -111,17 +125,24 @@ export interface ApiOrderItem {
     id: string;
     name: string;
     quantity: number;
-    category: "retail-item" | "refill" | "assets" | "asset";
+    category:
+      | "retail-item"
+      | "refill"
+      | "unique-items"
+      | "unique-item"
+      | "assets"
+      | "asset";
     price: number;
     in_truck: boolean;
     asset_category?: string | null;
+    unique_item_category?: string | null;
   }[];
   other_actions?: {
     id: string;
     item: {
       id: string;
       label: string;
-      type: "asset" | "bottle";
+      type: DepositItemKind;
       image_url: string | null;
     };
     quantity: number;
@@ -129,8 +150,7 @@ export interface ApiOrderItem {
     type:
       | "item-movement-from-customer"
       | "item-movement-to-customer"
-      | "asset-movement-from-customer"
-      | "asset-movement-to-customer"
+      | UniqueItemMovementType
       | "deposit"
       | "deposit-refund";
     request_id?: string;
@@ -177,13 +197,17 @@ export interface Order {
   customer_name?: string;
   customer_phone?: string;
   customer_email?: string;
+  customer_trn?: string;
   customer_address?: string;
   customer_type?: "individual" | "organization";
   customer?: {
     id?: string;
     name?: string;
+    firstName?: string | null;
+    lastName?: string | null;
     phone?: string;
     email?: string | null;
+    trn?: string | null;
     site_id?: string;
     latitude?: number;
     longitude?: number;
@@ -225,6 +249,7 @@ export interface Order {
         type?: string;
         category?: string;
         asset_category?: string | null;
+        unique_item_category?: string | null;
       }[]
     | Record<string, number>;
   total_amount?: number;
@@ -298,12 +323,13 @@ export interface Product {
   // Basic Info
   id: string;
   item_id?: string;
-  item_type?: "asset" | "retail" | "refill";
+  item_type?: DeliveryProductItemType;
   name: string;
   description?: string | null;
   image_url?: string | null;
   category?: string; // Product category
   assetCategory?: string | null;
+  uniqueItemCategory?: string | null;
   unit?: string | null;
   pricePerUnit?: number;
 

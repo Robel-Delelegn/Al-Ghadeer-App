@@ -53,16 +53,15 @@ const DeliveryCard = ({
       ? `${totalItems} item${totalItems === 1 ? "" : "s"}`
       : "No items";
   const statusConfig: Record<
-    string,
+    "pending" | "delivered",
     { bg: string; text: string; label: string }
   > = {
     pending: { bg: "#FEF3C7", text: "#B45309", label: "Pending" },
-    assigned: { bg: "#DBEAFE", text: "#1D4ED8", label: "Assigned" },
-    in_progress: { bg: "#E0E7FF", text: "#4338CA", label: "Active" },
-    delivered: { bg: "#DCFCE7", text: "#15803D", label: "Done" },
-    failed: { bg: "#FEE2E2", text: "#B91C1C", label: "Failed" },
+    delivered: { bg: "#DCFCE7", text: "#15803D", label: "Delivered" },
   };
-  const status = statusConfig[item.status] || statusConfig.pending;
+  const isDelivered =
+    item.status === "delivered" || item.has_new_items === false;
+  const status = isDelivered ? statusConfig.delivered : statusConfig.pending;
 
   return (
     <TouchableOpacity

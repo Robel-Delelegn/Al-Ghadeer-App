@@ -81,6 +81,20 @@ react {
     autolinkLibrariesWithApp()
 }
 
+def frontendEnvFile = file("${projectRoot}/.env")
+
+afterEvaluate {
+    tasks.matching { task ->
+        task.name.startsWith("createBundle") && task.name.endsWith("JsAndAssets")
+    }.configureEach { task ->
+        inputs.file(frontendEnvFile)
+            .optional()
+            .withPathSensitivity(PathSensitivity.RELATIVE)
+        inputs.property("EXPO_PUBLIC_IP_ADDRESS", readEnvValue("EXPO_PUBLIC_IP_ADDRESS"))
+        inputs.property("EXPO_PUBLIC_GOOGLE_API_KEY", readEnvValue("EXPO_PUBLIC_GOOGLE_API_KEY"))
+    }
+}
+
 /**
  * Set this to true to Run Proguard on Release builds to minify the Java bytecode.
  */

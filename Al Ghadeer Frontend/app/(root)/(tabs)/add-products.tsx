@@ -4,7 +4,15 @@ import { useAuthStore, authenticatedFetch } from "@/store/auth";
 import { parseApiResponseWithSoftError } from "@/utils/api";
 import { getDriverRequestId } from "@/utils/driverIdentity";
 import { getApiBaseUrl, resolveResourceUrl } from "@/utils/resources";
-import { extractTruckAssets, TruckAsset } from "@/utils/truckLoad";
+import { extractTruckUniqueItems, TruckUniqueItem } from "@/utils/truckLoad";
+import {
+  getSpecificUniqueItemCategory,
+  isUniqueItemSaleId,
+  isUniqueItemSignal,
+  UNIQUE_ITEM_KIND,
+  UNIQUE_ITEM_SALE_PREFIX,
+  UNIQUE_ITEMS_GROUP,
+} from "@/utils/uniqueItems";
 import { Product } from "@/types/order";
 import { getProductQuantity, getProductCategory } from "@/utils/orderUtils";
 import { Ionicons } from "@expo/vector-icons";
@@ -29,7 +37,7 @@ interface ServerProduct {
   itemId: string;
   assetDisplayId?: string | null;
   assetDisplayLabel?: string | null;
-  type: "retail" | "refill" | "assets" | "other";
+  type: "retail" | "refill" | "unique-items" | "assets" | "other";
   name: string;
   price: number;
   unit: string | null;
@@ -42,7 +50,7 @@ interface ServerProduct {
   loaded_quantity?: number;
 }
 
-type ProductGroup = "wholesale" | "refill" | "assets" | "other";
+type ProductGroup = "wholesale" | "refill" | "unique-items" | "other";
 
 type ProductSelectionSignatureLine = {
   id: string;
@@ -54,14 +62,13 @@ type ProductSelectionSignatureLine = {
 };
 
 const EMPTY_BOTTLE_PRODUCT_PREFIX = "sale-empty-bottle:";
-const TRUCK_ASSET_PRODUCT_PREFIX = "sale-asset:";
 const EMPTY_BOTTLE_CATEGORY = "empty_bottle";
 
 const normalizeProductType = (value: unknown): ServerProduct["type"] => {
   const raw = typeof value === "string" ? value.trim().toLowerCase() : "";
   if (raw === "refill") return "refill";
   if (raw === "retail") return "retail";
-  if (raw === "assets" || raw === "asset") return "assets";
+  if (isUniqueItemSignal(raw)) return UNIQUE_ITEMS_GROUP;
   return "other";
 };
 
@@ -102,26 +109,7 @@ const isEmptyBottleSaleProduct = (
     normalizeCategory(EMPTY_BOTTLE_CATEGORY);
 
 const isTruckAssetSaleProduct = (product: Pick<ServerProduct, "id">) =>
-  product.id.startsWith(TRUCK_ASSET_PRODUCT_PREFIX);
-
-const isGenericAssetCategory = (value?: string | null) => {
-  const normalized = normalizeCategory(value);
-  return (
-    !normalized ||
-    normalized === "asset" ||
-    normalized === "assets" ||
-    normalized === "assetitem" ||
-    normalized === "assetproduct"
-  );
-};
-
-const getSpecificAssetCategory = (...values: (string | null | undefined)[]) => {
-  for (const value of values) {
-    const label = (value || "").trim();
-    if (label && !isGenericAssetCategory(label)) return label;
-  }
-  return "";
-};
+  isUniqueItemSaleId(product.id);
 
 const appendUniqueDisplayPart = (parts: string[], value?: string | null) => {
   const label = (value || "").trim();
@@ -133,18 +121,18 @@ const appendUniqueDisplayPart = (parts: string[], value?: string | null) => {
 
 const getAssetProductName = (
   metadata: ServerProduct | undefined,
-  asset: TruckAsset,
+  asset: TruckUniqueItem,
 ) =>
   metadata?.name ||
   metadata?.assetCategory ||
   asset.category ||
   asset.label ||
-  "Asset";
+  "Unique Item";
 
 const getAssetProductTitle = (product: ServerProduct) =>
-  getSpecificAssetCategory(product.assetCategory, product.category) ||
+  getSpecificUniqueItemCategory(product.assetCategory, product.category) ||
   product.name ||
-  "Asset";
+  "Unique Item";
 
 const getAssetProductDetail = (product: ServerProduct) => {
   const title = getAssetProductTitle(product);
@@ -178,7 +166,7 @@ const getProductStockGroupKey = (
 const getProductItemType = (
   product: Pick<ServerProduct, "type" | "category" | "assetCategory">,
 ): Product["item_type"] => {
-  if (getProductGroup(product) === "assets") return "asset";
+  if (getProductGroup(product) === UNIQUE_ITEMS_GROUP) return UNIQUE_ITEM_KIND;
   if (getProductGroup(product) === "refill") return "refill";
   return "retail";
 };
@@ -191,11 +179,11 @@ const getProductGroup = (
   const assetCategory = product.assetCategory?.trim();
 
   if (
-    normalizedType.includes("asset") ||
-    normalizedCategory.includes("asset") ||
+    isUniqueItemSignal(normalizedType) ||
+    isUniqueItemSignal(normalizedCategory) ||
     Boolean(assetCategory)
   ) {
-    return "assets";
+    return UNIQUE_ITEMS_GROUP;
   }
 
   if (
@@ -262,12 +250,19 @@ const normalizeProductRecord = (
     image_url: toNullableStringValue(source.image_url),
     description: toNullableStringValue(source.description),
     category:
-      type === "assets"
-        ? toStringValue(source.assetCategory ?? source.asset_category) ||
-          "Assets"
+      type === UNIQUE_ITEMS_GROUP
+        ? toStringValue(
+            source.uniqueItemCategory ??
+              source.unique_item_category ??
+              source.assetCategory ??
+              source.asset_category,
+          ) || "Unique Items"
         : type,
     assetCategory: toNullableStringValue(
-      source.assetCategory ?? source.asset_category,
+      source.uniqueItemCategory ??
+        source.unique_item_category ??
+        source.assetCategory ??
+        source.asset_category,
     ),
     originalPrice: toNumberValue(source.originalPrice) ?? undefined,
     badge: toStringValue(source.badge) || undefined,
@@ -303,7 +298,7 @@ const normalizeProductsPayload = (payload: unknown): ServerProduct[] => {
 
 const buildSellableProducts = (
   baseProducts: ServerProduct[],
-  truckAssets: TruckAsset[],
+  truckAssets: TruckUniqueItem[],
 ): ServerProduct[] => {
   const cleanBaseProducts = baseProducts.filter(
     (product) =>
@@ -312,7 +307,7 @@ const buildSellableProducts = (
 
   const assetProductsById = new Map<string, ServerProduct>();
   cleanBaseProducts
-    .filter((product) => product.type === "assets")
+    .filter((product) => product.type === UNIQUE_ITEMS_GROUP)
     .forEach((product) => {
       assetProductsById.set(product.itemId, product);
       assetProductsById.set(product.id, product);
@@ -329,21 +324,21 @@ const buildSellableProducts = (
 
     return [
       {
-        id: `${TRUCK_ASSET_PRODUCT_PREFIX}${asset.id}:${asset.serial || asset.itemId}`,
+        id: `${UNIQUE_ITEM_SALE_PREFIX}${asset.id}:${asset.serial || asset.itemId}`,
         itemId: asset.itemId,
         assetDisplayId,
         assetDisplayLabel: asset.label || metadata?.name || null,
-        type: "assets" as const,
+        type: UNIQUE_ITEMS_GROUP,
         name: getAssetProductName(metadata, asset),
         price,
         unit: metadata?.unit ?? null,
         image_url:
           resolveResourceUrl(asset.image_url) || metadata?.image_url || null,
         description: metadata?.description ?? asset.description ?? null,
-        category: asset.category || metadata?.category || "Assets",
+        category: asset.category || metadata?.category || "Unique Items",
         assetCategory: asset.category || metadata?.assetCategory || null,
         originalPrice: metadata?.originalPrice,
-        badge: "Asset",
+        badge: "Unique Item",
         loaded_quantity: 1,
       },
     ];
@@ -351,7 +346,8 @@ const buildSellableProducts = (
 
   const visibleBaseProducts = cleanBaseProducts.filter(
     (product) =>
-      product.type !== "assets" || !truckAssetItemIds.has(product.itemId),
+      product.type !== UNIQUE_ITEMS_GROUP ||
+      !truckAssetItemIds.has(product.itemId),
   );
 
   const deduped = new Map<string, ServerProduct>();
@@ -388,8 +384,10 @@ const ProductItem: React.FC<{
   initialQuantity = 0,
   availableStock = Infinity,
 }) => {
-  const assetTitle = group === "assets" ? getAssetProductTitle(product) : "";
-  const assetDetail = group === "assets" ? getAssetProductDetail(product) : "";
+  const assetTitle =
+    group === UNIQUE_ITEMS_GROUP ? getAssetProductTitle(product) : "";
+  const assetDetail =
+    group === UNIQUE_ITEMS_GROUP ? getAssetProductDetail(product) : "";
   const isMinStock = quantity === 0;
   const isSelected = quantity > 0;
   const isMaxStock =
@@ -401,7 +399,7 @@ const ProductItem: React.FC<{
       ? styles.productCardRefill
       : group === "wholesale"
         ? styles.productCardWholesale
-        : group === "assets"
+        : group === UNIQUE_ITEMS_GROUP
           ? styles.productCardAssets
           : styles.productCardOther;
   const displayPrice = product.originalPrice ? (
@@ -459,7 +457,7 @@ const ProductItem: React.FC<{
               </View>
             )}
           </View>
-          {group === "assets" && assetDetail ? (
+          {group === UNIQUE_ITEMS_GROUP && assetDetail ? (
             <Text style={styles.productAssetIdText} numberOfLines={1}>
               {assetDetail}
             </Text>
@@ -471,8 +469,8 @@ const ProductItem: React.FC<{
                 ? isEmptyBottleSaleProduct(product)
                   ? "Empty bottle"
                   : "Retail item"
-                : group === "assets"
-                  ? "Asset item"
+                : group === UNIQUE_ITEMS_GROUP
+                  ? "Unique item"
                   : "Other product"}
             {product.unit ? ` - ${product.unit}` : ""}
           </Text>
@@ -622,7 +620,7 @@ const ProductList: React.FC = () => {
           ? await parseApiResponseWithSoftError<unknown>(truckResponse)
           : null;
         const nextTruckAssets = truckResult?.ok
-          ? extractTruckAssets(truckResult.data)
+          ? extractTruckUniqueItems(truckResult.data)
           : [];
         const normalizedProducts = normalizeProductsPayload(parseResult.data);
         const sellableProducts = buildSellableProducts(
@@ -642,6 +640,7 @@ const ProductList: React.FC = () => {
             image_url: resolveResourceUrl(serverProduct.image_url) || "",
             pricing: serverProduct.price,
             category: serverProduct.category,
+            uniqueItemCategory: serverProduct.assetCategory,
             assetCategory: serverProduct.assetCategory,
             unit: serverProduct.unit,
             pricePerUnit: serverProduct.price,
@@ -677,8 +676,8 @@ const ProductList: React.FC = () => {
       wholesale: saleProducts.filter(
         (product) => getProductGroup(product) === "wholesale",
       ),
-      assets: saleProducts.filter(
-        (product) => getProductGroup(product) === "assets",
+      uniqueItems: saleProducts.filter(
+        (product) => getProductGroup(product) === UNIQUE_ITEMS_GROUP,
       ),
       other: saleProducts.filter(
         (product) => getProductGroup(product) === "other",
@@ -795,6 +794,7 @@ const ProductList: React.FC = () => {
         image_url: fullImageUrl,
         pricing: serverProduct.price,
         category: orderCategory || serverProduct.category || "", // Prefer order category, then product category
+        uniqueItemCategory: serverProduct.assetCategory,
         assetCategory: serverProduct.assetCategory,
         unit: serverProduct.unit,
         pricePerUnit: serverProduct.price,
@@ -846,7 +846,7 @@ const ProductList: React.FC = () => {
     });
 
     router.push({
-      pathname: "/(root)/(tabs)/bottles-assets",
+      pathname: "/(root)/(tabs)/bottles-unique-items",
       params: { backTo: "add-products" },
     });
   }, [
@@ -865,7 +865,7 @@ const ProductList: React.FC = () => {
     if (params.backTo === "checkout") {
       router.replace({
         pathname: "/(root)/(tabs)/checkout",
-        params: { backTo: "bottles-assets" },
+        params: { backTo: "bottles-unique-items" },
       });
       return;
     }
@@ -1047,7 +1047,7 @@ const ProductList: React.FC = () => {
             </View>
           ) : null}
 
-          {groupedProducts.assets.length > 0 ? (
+          {groupedProducts.uniqueItems.length > 0 ? (
             <View style={styles.productCategorySection}>
               <View style={styles.productCategoryHeader}>
                 <View
@@ -1057,16 +1057,16 @@ const ProductList: React.FC = () => {
                   ]}
                 >
                   <Ionicons name="cube-outline" size={14} color="#6D28D9" />
-                  <Text style={styles.productCategoryTitle}>Assets</Text>
+                  <Text style={styles.productCategoryTitle}>Unique Items</Text>
                 </View>
                 <View style={styles.productCategoryCountBadge}>
                   <Text style={styles.productCategoryCount}>
-                    {groupedProducts.assets.length}
+                    {groupedProducts.uniqueItems.length}
                   </Text>
                 </View>
               </View>
               <View style={styles.productGrid}>
-                {groupedProducts.assets.map((product) => {
+                {groupedProducts.uniqueItems.map((product) => {
                   const initialQty = currentOrder
                     ? getProductQuantity(
                         currentOrder,
@@ -1079,7 +1079,7 @@ const ProductList: React.FC = () => {
                     <ProductItem
                       key={product.id}
                       product={product}
-                      group="assets"
+                      group={UNIQUE_ITEMS_GROUP}
                       quantity={quantities[product.id] || 0}
                       onChangeQuantity={(q) => handleChangeQuantity(product, q)}
                       unitPrice={product.price}
@@ -1155,7 +1155,9 @@ const ProductList: React.FC = () => {
             onPress={handleCheckout}
             activeOpacity={0.8}
           >
-            <Text style={styles.checkoutButtonText}>Bottles & Assets</Text>
+            <Text style={styles.checkoutButtonText}>
+              Bottles & Unique Items
+            </Text>
             <View style={styles.checkoutArrow}>
               <Ionicons name="arrow-forward" size={16} color="#1E40AF" />
             </View>

@@ -105,7 +105,7 @@ const PaymentConfirmation: React.FC = () => {
   const handleBack = useCallback(() => {
     router.replace({
       pathname: "/(root)/(tabs)/checkout",
-      params: { backTo: "bottles-assets" },
+      params: { backTo: "bottles-unique-items" },
     });
   }, [router]);
 
@@ -131,7 +131,7 @@ const PaymentConfirmation: React.FC = () => {
     );
     const vatAmount = sub * VAT_RATE;
 
-    // Calculate bottle/asset movement totals (no VAT) from editable quantities.
+    // Calculate bottle/unique item movement totals (no VAT) from editable quantities.
     let rentDepositAmount = 0;
     let rentReturnAmount = 0;
     editableRentItems.forEach((item) => {
@@ -147,7 +147,7 @@ const PaymentConfirmation: React.FC = () => {
       rentDepositAmount += amount;
     });
 
-    // Check if any bottle/asset actions have a positive quantity.
+    // Check if any bottle/unique item actions have a positive quantity.
     const hasRentItems = editableRentItems.some((item) => {
       const quantity = Math.max(
         0,
@@ -248,7 +248,7 @@ const PaymentConfirmation: React.FC = () => {
       return;
     }
 
-    // Allow confirmation if products, bottle/asset movement, or credit collection exists.
+    // Allow confirmation if products, bottle/unique item movement, or credit collection exists.
     if (
       saleRows.length === 0 &&
       !hasRentItemsSelected &&
@@ -571,11 +571,11 @@ const PaymentConfirmation: React.FC = () => {
           )}
         </View>
 
-        {/* Bottle and Asset Movement */}
+        {/* Deposit and return movement */}
         {editableRentItems.length > 0 && (
           <View style={styles.card}>
             <View style={styles.itemsTableHeader}>
-              <Text style={styles.tableHeaderText}>Bottles & Assets</Text>
+              <Text style={styles.tableHeaderText}>Deposits & Returns</Text>
               <Text
                 style={[styles.tableHeaderText, styles.tableHeaderQtyControl]}
               >
@@ -771,13 +771,15 @@ const PaymentConfirmation: React.FC = () => {
           </View>
           {parseFloat(rentDepositTotal) > 0 && (
             <View style={styles.totalRow}>
-              <Text style={styles.totalLabel}>Bottle/Asset Deposits</Text>
+              <Text style={styles.totalLabel}>
+                Bottle/Item/Unique Item Deposits
+              </Text>
               <Text style={styles.totalValue}>AED {rentDepositTotal}</Text>
             </View>
           )}
           {parseFloat(rentReturnTotal) > 0 && (
             <View style={styles.totalRow}>
-              <Text style={styles.totalLabel}>Bottle/Asset Returns</Text>
+              <Text style={styles.totalLabel}>Bottle/Unique Item Returns</Text>
               <Text style={styles.totalValue}>- AED {rentReturnTotal}</Text>
             </View>
           )}

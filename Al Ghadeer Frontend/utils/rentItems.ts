@@ -1,6 +1,8 @@
 import type { Order } from "@/types/order";
+import { isUniqueItemDepositKind, UNIQUE_ITEM_KIND } from "@/utils/uniqueItems";
 
 export type RentItem = NonNullable<Order["rent_items"]>[number];
+export type RentItemDepositKind = typeof UNIQUE_ITEM_KIND | "bottle";
 
 export const getRentItemDepositAction = (
   item: RentItem,
@@ -20,9 +22,12 @@ export const getRentItemDepositAction = (
   return "deposit";
 };
 
-export const getRentItemDepositKind = (item: RentItem): "asset" | "bottle" => {
-  if (item.deposit_kind === "asset" || item.deposit_kind === "bottle") {
-    return item.deposit_kind;
+export const getRentItemDepositKind = (item: RentItem): RentItemDepositKind => {
+  if (item.deposit_kind === "bottle") {
+    return "bottle";
+  }
+  if (isUniqueItemDepositKind(item.deposit_kind)) {
+    return UNIQUE_ITEM_KIND;
   }
 
   const normalizedSignals = [
@@ -38,7 +43,7 @@ export const getRentItemDepositKind = (item: RentItem): "asset" | "bottle" => {
     .toLowerCase();
 
   if (item.serial || item.asset_category) {
-    return "asset";
+    return UNIQUE_ITEM_KIND;
   }
 
   if (
@@ -49,13 +54,13 @@ export const getRentItemDepositKind = (item: RentItem): "asset" | "bottle" => {
     return "bottle";
   }
 
-  return "asset";
+  return UNIQUE_ITEM_KIND;
 };
 
-export const isTruckAssetTransfer = (item: RentItem): boolean => {
+export const isTruckUniqueItemTransfer = (item: RentItem): boolean => {
   return (
     getRentItemDepositAction(item) === "deposit" &&
-    getRentItemDepositKind(item) === "asset" &&
+    getRentItemDepositKind(item) === UNIQUE_ITEM_KIND &&
     item.action_source !== "held_item"
   );
 };
@@ -67,15 +72,30 @@ export const isHeldItemReturn = (item: RentItem): boolean => {
   );
 };
 
+export const isGenericItemDeposit = (item: RentItem): boolean => {
+  return (
+    getRentItemDepositAction(item) === "deposit" &&
+    item.id.startsWith("truck:item:")
+  );
+};
+
 export const getRentItemDisplayLabel = (item: RentItem): string => {
   const action = getRentItemDepositAction(item);
   const depositKind = getRentItemDepositKind(item);
 
-  if (action === "deposit_return") {
-    return depositKind === "asset" ? "Asset Return" : "Bottle Return";
+  if (isGenericItemDeposit(item)) {
+    return "Item Deposit";
   }
 
-  return depositKind === "asset" ? "Asset Deposit" : "Bottle Deposit";
+  if (action === "deposit_return") {
+    return depositKind === UNIQUE_ITEM_KIND
+      ? "Unique Item Return"
+      : "Bottle Return";
+  }
+
+  return depositKind === UNIQUE_ITEM_KIND
+    ? "Unique Item Deposit"
+    : "Bottle Deposit";
 };
 
 export const getRentItemQuantityLimit = (item: RentItem): number => {

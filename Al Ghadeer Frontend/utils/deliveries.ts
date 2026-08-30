@@ -1,4 +1,10 @@
 import type { Order } from "@/types/order";
+import {
+  isUniqueItemSignal,
+  UNIQUE_ITEM_KIND,
+  UNIQUE_ITEM_MOVEMENT_FROM_CUSTOMER,
+  UNIQUE_ITEM_MOVEMENT_TO_CUSTOMER,
+} from "@/utils/uniqueItems";
 
 export interface DeliveryAddress {
   location_id: string;
@@ -15,8 +21,11 @@ export interface DeliveryAddress {
 export interface DeliveryCustomer {
   id: string;
   name: string;
+  firstName?: string | null;
+  lastName?: string | null;
   phone: string;
   email: string | null;
+  trn: string | null;
   requires_signature: boolean;
   requires_immediate_invoice: boolean;
 }
@@ -34,7 +43,7 @@ export interface DeliveryStop {
   driver_id: string | null;
   customer: DeliveryCustomer;
   earlierVisitsTodayCount: number;
-  hasNewItems: boolean;
+  hasNewItems?: boolean;
   hasExactLocation: boolean;
   tasks: DeliveryTask[];
 }
@@ -44,11 +53,12 @@ export type Delivery = DeliveryStop;
 export interface DeliveryTaskItem {
   id: string;
   label: string;
-  type: "asset" | "retail" | "refill";
+  type: DeliverySaleItemType;
   unit: string | null;
   image_url: string | null;
   serial?: string | null;
   asset_category?: string | null;
+  unique_item_category?: string | null;
 }
 
 export type DeliveryTaskLineKind = "sale" | "deposit" | "return";
@@ -147,7 +157,7 @@ export interface ParsedDeliveryTaskLine {
   itemId: string;
   kind: string;
   label: string;
-  itemType: "asset" | "retail" | "refill";
+  itemType: DeliverySaleItemType;
   unit: string | null;
   imageUrl: string | null;
   serial: string | null;
@@ -172,6 +182,33 @@ const toText = (value: unknown): string => {
 const toNullableText = (value: unknown): string | null => {
   const text = toText(value);
   return text.length > 0 ? text : null;
+};
+
+const getCustomerDisplayName = (customer: DeliveryCustomer): string => {
+  const record = customer as DeliveryCustomer & Record<string, unknown>;
+  const explicitName = toText(record.name);
+  if (explicitName) return explicitName;
+
+  return [
+    toText(record.firstName ?? record.first_name),
+    toText(record.lastName ?? record.last_name),
+  ]
+    .filter(Boolean)
+    .join(" ")
+    .trim();
+};
+
+const getCustomerTrn = (customer: DeliveryCustomer): string | null => {
+  const record = customer as DeliveryCustomer & Record<string, unknown>;
+  return (
+    toNullableText(
+      record.trn ??
+        record.customerTrn ??
+        record.customer_trn ??
+        record.taxRegistrationNumber ??
+        record.tax_registration_number,
+    ) ?? null
+  );
 };
 
 const toNumber = (value: unknown): number | null => {
@@ -213,9 +250,9 @@ export const formatDeliveryAddress = (
   return "No address";
 };
 
-const normalizeItemType = (value: unknown): "asset" | "retail" | "refill" => {
+const normalizeItemType = (value: unknown): DeliverySaleItemType => {
   const text = toText(value).toLowerCase();
-  if (text.includes("asset")) return "asset";
+  if (isUniqueItemSignal(text)) return UNIQUE_ITEM_KIND;
   if (text.includes("refill")) return "refill";
   return "retail";
 };
@@ -279,8 +316,12 @@ const parseDeliveryTaskLines = (
       ) ?? null;
     const assetCategory =
       toNullableText(
-        line.assetCategory ??
+        line.uniqueItemCategory ??
+          line.unique_item_category ??
+          line.assetCategory ??
           line.asset_category ??
+          item?.uniqueItemCategory ??
+          item?.unique_item_category ??
           item?.assetCategory ??
           item?.asset_category,
       ) ?? null;
@@ -350,7 +391,7 @@ interface PlannedOrderProduct {
   price: number;
   unit: string | null;
   image_url: string | null;
-  type: "asset" | "retail" | "refill";
+  type: DeliverySaleItemType;
   category: string;
   asset_category?: string | null;
 }
@@ -369,14 +410,14 @@ interface PlannedRentItem {
   in_truck: boolean;
   max_quantity?: number;
   deposit_action: "deposit" | "deposit_return";
-  deposit_kind: "asset" | "bottle";
+  deposit_kind: "unique-item" | "bottle";
   action_source: "task";
   other_action_type:
     | "item-movement-from-customer"
     | "item-movement-to-customer"
-    | "asset-movement-from-customer"
-    | "asset-movement-to-customer";
-  other_action_item_type: "asset" | "bottle";
+    | "unique-item-movement-from-customer"
+    | "unique-item-movement-to-customer";
+  other_action_item_type: "unique-item" | "bottle";
 }
 
 const derivePlannedOrderProducts = (
@@ -438,8 +479,8 @@ const derivePlannedOrderProducts = (
 
 const toTaskDepositKind = (
   line: ParsedDeliveryTaskLine,
-): "asset" | "bottle" => {
-  return line.itemType === "asset" ? "asset" : "bottle";
+): "unique-item" | "bottle" => {
+  return line.itemType === UNIQUE_ITEM_KIND ? UNIQUE_ITEM_KIND : "bottle";
 };
 
 const derivePlannedRentItems = (tasks: unknown[]): PlannedRentItem[] => {
@@ -479,10 +520,10 @@ const derivePlannedRentItems = (tasks: unknown[]): PlannedRentItem[] => {
         deposit_kind: depositKind,
         action_source: "task",
         other_action_type:
-          depositKind === "asset"
+          depositKind === UNIQUE_ITEM_KIND
             ? depositAction === "deposit"
-              ? "asset-movement-to-customer"
-              : "asset-movement-from-customer"
+              ? UNIQUE_ITEM_MOVEMENT_TO_CUSTOMER
+              : UNIQUE_ITEM_MOVEMENT_FROM_CUSTOMER
             : depositAction === "deposit"
               ? "item-movement-to-customer"
               : "item-movement-from-customer",
@@ -497,6 +538,7 @@ const derivePlannedRentItems = (tasks: unknown[]): PlannedRentItem[] => {
 export const mapDeliveryToOrder = (delivery: DeliveryStop): Order => {
   const { products, totalAmount } = derivePlannedOrderProducts(delivery.tasks);
   const rentItems = derivePlannedRentItems(delivery.tasks);
+  const hasNewItems = delivery.hasNewItems !== false;
 
   return {
     id: delivery.id,
@@ -505,12 +547,13 @@ export const mapDeliveryToOrder = (delivery: DeliveryStop): Order => {
     date: delivery.date,
     start_time: delivery.start_time,
     end_time: delivery.end_time,
-    status: "assigned",
+    status: hasNewItems ? "assigned" : "delivered",
     customer_id: delivery.customer.id,
     customer_site_id: delivery.address.location_id,
-    customer_name: delivery.customer.name,
+    customer_name: getCustomerDisplayName(delivery.customer),
     customer_phone: delivery.customer.phone,
     customer_email: delivery.customer.email ?? undefined,
+    customer_trn: getCustomerTrn(delivery.customer) ?? undefined,
     customer_address: formatDeliveryAddress(delivery.address),
     latitude: delivery.address.latitude ?? undefined,
     longitude: delivery.address.longitude ?? undefined,
@@ -523,7 +566,7 @@ export const mapDeliveryToOrder = (delivery: DeliveryStop): Order => {
       0,
       Math.floor(delivery.earlierVisitsTodayCount || 0),
     ),
-    has_new_items: Boolean(delivery.hasNewItems),
+    has_new_items: hasNewItems,
     has_exact_location: Boolean(delivery.hasExactLocation),
     requires_signature: Boolean(delivery.customer.requires_signature),
     requires_immediate_invoice: Boolean(
@@ -823,7 +866,7 @@ export type ActualDeliverySaleItem = {
 
 export type ActualDeliveryDepositReturn = {
   type: "deposit" | "deposit_return";
-  depositKind: "asset" | "bottle";
+  depositKind: "unique-item" | "bottle";
   itemId: string;
   quantity: number;
 };
@@ -995,7 +1038,7 @@ export const getDeliveryEarlierAttemptsTodayCount = (
   return Math.max(0, Math.floor(numericValue));
 };
 
-export type DeliverySaleItemType = "asset" | "retail" | "refill";
+export type DeliverySaleItemType = "unique-item" | "retail" | "refill";
 
 export const toDeliverySaleItemType = (value: unknown): DeliverySaleItemType =>
   normalizeItemType(value);

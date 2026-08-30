@@ -88,7 +88,7 @@ interface HeldBottle {
   unit: string | null;
 }
 
-interface HeldAsset {
+interface HeldUniqueItem {
   itemId: string;
   label: string;
   description: string | null;
@@ -99,7 +99,7 @@ interface HeldAsset {
 
 interface CustomerHeldItems {
   bottles: HeldBottle[];
-  assets: HeldAsset[];
+  assets: HeldUniqueItem[];
 }
 
 const formatSiteAddress = (
@@ -133,7 +133,7 @@ const formatSiteAddress = (
 };
 
 const getHeldItemIconName = (
-  kind: "bottle" | "asset",
+  kind: "bottle" | "unique-item",
   category?: string | null,
 ) => {
   if (kind === "bottle") return "water-outline" as const;
@@ -253,17 +253,33 @@ const OrderDetails = () => {
         },
       );
 
-      const result =
-        await parseApiResponseWithSoftError<CustomerHeldItems>(response);
+      const result = await parseApiResponseWithSoftError<unknown>(response);
       if (!result.ok) {
         setHeldItems(null);
         setHeldItemsError(result.error);
         return;
       }
+      const heldData =
+        result.data && typeof result.data === "object"
+          ? (result.data as {
+              bottles?: unknown;
+              uniqueItems?: unknown;
+              unique_items?: unknown;
+              assets?: unknown;
+            })
+          : null;
 
       setHeldItems({
-        bottles: Array.isArray(result.data?.bottles) ? result.data.bottles : [],
-        assets: Array.isArray(result.data?.assets) ? result.data.assets : [],
+        bottles: Array.isArray(heldData?.bottles)
+          ? (heldData.bottles as HeldBottle[])
+          : [],
+        assets: Array.isArray(heldData?.uniqueItems)
+          ? (heldData.uniqueItems as HeldUniqueItem[])
+          : Array.isArray(heldData?.unique_items)
+            ? (heldData.unique_items as HeldUniqueItem[])
+            : Array.isArray(heldData?.assets)
+              ? (heldData.assets as HeldUniqueItem[])
+              : [],
       });
     } catch (error) {
       console.error("Error fetching customer held items:", error);
@@ -718,7 +734,7 @@ const OrderDetails = () => {
               <View style={styles.heldItemsEmptyContent}>
                 <Text style={styles.heldItemsEmptyTitle}>None</Text>
                 <Text style={styles.heldItemsEmptyText}>
-                  No bottles or assets.
+                  No bottles or unique items.
                 </Text>
               </View>
             </View>
@@ -735,7 +751,7 @@ const OrderDetails = () => {
                 <View style={styles.heldItemsSummaryBadge}>
                   <Ionicons name="cube-outline" size={12} color="#7C3AED" />
                   <Text style={styles.heldItemsSummaryText}>
-                    {heldAssets.length} asset
+                    {heldAssets.length} unique item
                     {heldAssets.length === 1 ? "" : "s"}
                   </Text>
                 </View>
@@ -794,7 +810,7 @@ const OrderDetails = () => {
 
               {heldAssets.length > 0 ? (
                 <View style={styles.heldItemsSection}>
-                  <Text style={styles.heldItemsSectionTitle}>Assets</Text>
+                  <Text style={styles.heldItemsSectionTitle}>Unique Items</Text>
                   {heldAssets.map((asset, index) => (
                     <View key={`${asset.itemId}-${asset.serial}-${index}`}>
                       <View style={styles.heldItemRow}>
@@ -810,7 +826,7 @@ const OrderDetails = () => {
                           ) : (
                             <Ionicons
                               name={getHeldItemIconName(
-                                "asset",
+                                "unique-item",
                                 asset.assetCategory,
                               )}
                               size={16}
@@ -823,10 +839,10 @@ const OrderDetails = () => {
                             {asset.label}
                           </Text>
                           <Text style={styles.heldItemMeta}>
-                            {asset.assetCategory || "Asset"}
+                            {asset.assetCategory || "Unique Item"}
                           </Text>
                           <Text style={styles.heldItemSerial}>
-                            Serial: {asset.serial}
+                            Serial: {asset.serial || "Not required"}
                           </Text>
                           {asset.description ? (
                             <Text style={styles.heldItemDescription}>

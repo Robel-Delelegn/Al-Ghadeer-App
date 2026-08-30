@@ -1,8 +1,14 @@
-import { Driver, Order, Product } from "@/types/order";
+import {
+  Driver,
+  Order,
+  Product,
+  type DeliveryProductItemType,
+} from "@/types/order";
 import { useAuthStore } from "@/store/auth";
 import type { CustomerHeldItems } from "@/utils/customerHeldItems";
 import type { DriverHistoryDetail } from "@/utils/driverHistory";
 import type { TruckAsset, TruckBulkItem } from "@/utils/truckLoad";
+import { isUniqueItemSignal } from "@/utils/uniqueItems";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { create } from "zustand";
 import { createJSONStorage, persist } from "zustand/middleware";
@@ -90,13 +96,14 @@ export const useExpenseStore = create<ExpenseStore>()(
 interface CartItem {
   id: string;
   item_id?: string;
-  item_type?: "asset" | "retail" | "refill";
+  item_type?: DeliveryProductItemType;
   name: string;
   image?: { uri: string } | null;
   price: number;
   quantity: number;
   currency: string;
   category?: string; // Product category
+  uniqueItemCategory?: string | null;
   assetCategory?: string | null;
   loaded_quantity?: number;
   type?: "5L" | "10L" | "300ml" | "1L" | "20L" | "dispenser"; // Optional - not used in UI
@@ -139,10 +146,13 @@ const matchesCartItemToProduct = (item: CartItem, product: Product) => {
     return false;
   }
 
-  // Assets can have multiple physical units with the same item_id. Keep those
-  // tied to their exact generated id so a stale asset selection cannot jump to
+  // Unique items can have multiple physical units with the same item_id. Keep those
+  // tied to their exact generated id so a stale unique item selection cannot jump to
   // a different serial number after a refresh.
-  if (item.item_type === "asset" || product.item_type === "asset") {
+  if (
+    isUniqueItemSignal(item.item_type) ||
+    isUniqueItemSignal(product.item_type)
+  ) {
     return false;
   }
 
@@ -164,6 +174,8 @@ const toCartItem = (
   quantity,
   currency: previous?.currency || "AED",
   category: product.category,
+  uniqueItemCategory:
+    product.uniqueItemCategory ?? product.assetCategory ?? null,
   assetCategory: product.assetCategory ?? null,
   loaded_quantity: product.loaded_quantity,
 });
@@ -199,7 +211,7 @@ export type DirectSaleDraftPaymentMethod = SelectedPaymentMethod;
 
 export interface DirectSaleDraftProduct {
   id: string;
-  type: "retail" | "refill" | "assets" | "other";
+  type: "retail" | "refill" | "unique-items" | "assets" | "other";
   itemId: string;
   assetId?: string;
   assetDisplayId?: string | null;
@@ -210,6 +222,7 @@ export interface DirectSaleDraftProduct {
   image_url: string | null;
   description: string | null;
   category?: string | null;
+  uniqueItemCategory?: string | null;
   assetCategory?: string | null;
   originalPrice?: number;
   badge?: string;
@@ -243,6 +256,7 @@ export interface DirectSaleDraftCustomer {
   id: string;
   name: string;
   phone: string;
+  trn: string | null;
   walletBalance: number;
   sites: DirectSaleDraftCustomerSite[];
 }
@@ -397,9 +411,13 @@ export const useOrderStore = create<OrderStore>()(
           const order = state.assignedOrders.find((o) => o.id === id);
           if (!order) return state;
 
+          const now = new Date().toISOString();
           const updatedOrder: Order = {
             ...order,
             status,
+            ...(status === "delivered"
+              ? { has_new_items: false, completed_at: now }
+              : {}),
             delivery: {
               ...order.delivery,
               distance_km:
@@ -411,17 +429,30 @@ export const useOrderStore = create<OrderStore>()(
               ...(status === "failed"
                 ? { failure_reason: failureReason, failure_note: failureNote }
                 : {}),
-              ...(status === "delivered"
-                ? { delivered_at: new Date().toISOString() }
-                : {}),
-              ...(status === "in_progress"
-                ? { started_at: new Date().toISOString() }
-                : {}),
+              ...(status === "delivered" ? { delivered_at: now } : {}),
+              ...(status === "in_progress" ? { started_at: now } : {}),
             },
           };
 
-          // If order is delivered or failed, remove from assignedOrders and add to completedOrders
-          if (status === "delivered" || status === "failed") {
+          if (status === "delivered") {
+            const completedOrders = state.completedOrders.some(
+              (completedOrder) => completedOrder.id === id,
+            )
+              ? state.completedOrders.map((completedOrder) =>
+                  completedOrder.id === id ? updatedOrder : completedOrder,
+                )
+              : [...state.completedOrders, updatedOrder];
+
+            return {
+              assignedOrders: state.assignedOrders.map((assignedOrder) =>
+                assignedOrder.id === id ? updatedOrder : assignedOrder,
+              ),
+              completedOrders,
+            };
+          }
+
+          // Failed orders leave the active delivery list and remain available through failure/history flows.
+          if (status === "failed") {
             return {
               assignedOrders: state.assignedOrders.filter((o) => o.id !== id),
               completedOrders: [...state.completedOrders, updatedOrder],

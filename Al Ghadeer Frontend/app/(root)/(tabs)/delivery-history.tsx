@@ -15,6 +15,10 @@ import {
   normalizeDriverHistoryListPayload,
 } from "@/utils/driverHistory";
 import { resolveResourceUrl } from "@/utils/resources";
+import {
+  isGenericUniqueItemLabel,
+  UNIQUE_ITEM_KIND,
+} from "@/utils/uniqueItems";
 import { Ionicons } from "@expo/vector-icons";
 import { useFocusEffect } from "expo-router";
 import React, { useCallback, useMemo, useState } from "react";
@@ -61,9 +65,22 @@ interface NormalizedHistoryTask {
 interface SummarySoldItem {
   key: string;
   label: string;
+  detail?: string | null;
   quantity: number;
   amount: number;
 }
+
+interface SummaryAssetMovementItem {
+  key: string;
+  label: string;
+  detail?: string | null;
+  customerName?: string | null;
+  count: number;
+  amount: number;
+}
+
+type SummaryPaymentBucket = "cash" | "check" | "wallet" | "credit" | "unknown";
+type DepositReturnSummaryGroup = "bottle" | "item" | "unique-item";
 
 const parseServerDate = (rawValue: string): Date | null => {
   const value = rawValue.trim();
@@ -202,6 +219,114 @@ const formatAmount = (value?: number | string | null): string => {
 
 const formatSummaryCount = (value: number): string => {
   return Number.isInteger(value) ? String(value) : value.toFixed(2);
+};
+
+const normalizeAssetDisplayValue = (value?: string | null): string => {
+  return (value || "").trim();
+};
+
+const normalizeAssetDisplayKey = (value?: string | null): string => {
+  return normalizeAssetDisplayValue(value)
+    .toLowerCase()
+    .replace(/[\s_-]+/g, "");
+};
+
+const isGenericAssetDisplayValue = (value?: string | null): boolean => {
+  return isGenericUniqueItemLabel(value);
+};
+
+const getAssetDisplayParts = (input: {
+  label?: string | null;
+  assetCategory?: string | null;
+}): { label: string; detail: string | null } => {
+  const label = normalizeAssetDisplayValue(input.label);
+  const assetCategory = normalizeAssetDisplayValue(input.assetCategory);
+  const primary =
+    assetCategory && !isGenericAssetDisplayValue(assetCategory)
+      ? assetCategory
+      : label || assetCategory || "Unique Item";
+  const detail =
+    label &&
+    normalizeAssetDisplayKey(label) !== normalizeAssetDisplayKey(primary)
+      ? `Label: ${label}`
+      : null;
+
+  return { label: primary, detail };
+};
+
+const getAssetSummaryKey = (input: {
+  type: string;
+  label: string;
+  detail?: string | null;
+  customerName?: string | null;
+}): string => {
+  return `${input.type}:${input.label}:${input.detail || ""}:${input.customerName || ""}`.toLowerCase();
+};
+
+const getSummaryCustomerName = (item: DriverHistoryDetail): string | null => {
+  const name = item.customer?.name?.trim();
+  return name ? name : null;
+};
+
+const normalizeMovementSignal = (value?: string | null): string => {
+  return (value || "")
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "");
+};
+
+const isGenericItemMovementSignal = (value?: string | null): boolean => {
+  const normalized = normalizeMovementSignal(value);
+  return (
+    normalized === "item" ||
+    normalized === "items" ||
+    normalized === "retail" ||
+    normalized === "retailitem" ||
+    normalized === "retailitems" ||
+    normalized === "bulk" ||
+    normalized === "bulkitem" ||
+    normalized === "bulkitems" ||
+    normalized === "productitem" ||
+    normalized === "itemdeposit" ||
+    normalized === "retailitemdeposit"
+  );
+};
+
+const getDepositReturnSummaryGroup = (
+  entry: DriverHistoryDetail["depositReturns"][number],
+): DepositReturnSummaryGroup => {
+  if (entry.depositKind === "bottle") {
+    return "bottle";
+  }
+
+  const idSignal = `${entry.id} ${entry.itemId}`.toLowerCase();
+  if (
+    idSignal.includes("truck:item:") ||
+    isGenericItemMovementSignal(entry.assetCategory) ||
+    isGenericItemMovementSignal(entry.label)
+  ) {
+    return "item";
+  }
+
+  return UNIQUE_ITEM_KIND;
+};
+
+const getItemMovementDisplayParts = (input: {
+  label?: string | null;
+  assetCategory?: string | null;
+}): { label: string; detail: string | null } => {
+  const label = normalizeAssetDisplayValue(input.label);
+  const category = normalizeAssetDisplayValue(input.assetCategory);
+  const detail =
+    category &&
+    normalizeMovementSignal(category) !== normalizeMovementSignal(label)
+      ? `Category: ${category}`
+      : null;
+
+  return {
+    label: label || category || "Item",
+    detail,
+  };
 };
 
 const formatAddress = (
@@ -534,6 +659,30 @@ const getListDisplayId = (item: DriverHistoryDetail): string => {
   return getDriverHistoryPrimaryId(item);
 };
 
+const getHistoryPaymentBucket = (
+  item: DriverHistoryDetail,
+): SummaryPaymentBucket => {
+  const method = item.sale?.payment?.method;
+  if (
+    method === "cash" ||
+    method === "check" ||
+    method === "wallet" ||
+    method === "credit"
+  ) {
+    return method;
+  }
+
+  if (item.sale?.invoice) {
+    return "credit";
+  }
+
+  if (item.sale) {
+    return "credit";
+  }
+
+  return "unknown";
+};
+
 const getListStatusConfig = (item: DriverHistoryDetail) => {
   if (isScheduledDeliveryHistory(item)) {
     if (item.isSuccessful) {
@@ -664,12 +813,19 @@ const SummaryAmountRow: React.FC<{
 
 const SummaryMovementRow: React.FC<{
   label: string;
+  detail?: string | null;
+  sideLabel?: string | null;
   count: number;
   amount?: number;
-}> = ({ label, count, amount }) => {
+}> = ({ label, detail, sideLabel, count, amount }) => {
   return (
     <View style={styles.summaryMovementRow}>
-      <Text style={styles.summaryMovementLabel}>{label}</Text>
+      <View style={styles.summaryMovementLabelWrap}>
+        <Text style={styles.summaryMovementLabel}>{label}</Text>
+        {detail ? (
+          <Text style={styles.summaryMovementDetail}>{detail}</Text>
+        ) : null}
+      </View>
       <View style={styles.summaryMovementValueWrap}>
         <Text style={styles.summaryMovementValue}>
           {formatSummaryCount(count)}
@@ -677,6 +833,11 @@ const SummaryMovementRow: React.FC<{
         {amount && amount > 0 ? (
           <Text style={styles.summaryMovementAmount}>
             AED {formatAmount(amount)}
+          </Text>
+        ) : null}
+        {sideLabel ? (
+          <Text style={styles.summaryMovementSideLabel} numberOfLines={2}>
+            {sideLabel}
           </Text>
         ) : null}
       </View>
@@ -1180,6 +1341,10 @@ const HistoryScreen = () => {
     );
     const failureReasonCounts = new Map<string, number>();
     const soldItemsByKey = new Map<string, SummarySoldItem>();
+    const assetsLeftByKey = new Map<string, SummaryAssetMovementItem>();
+    const assetsCollectedByKey = new Map<string, SummaryAssetMovementItem>();
+    const itemsLeftByKey = new Map<string, SummaryAssetMovementItem>();
+    const itemsCollectedByKey = new Map<string, SummaryAssetMovementItem>();
 
     const summary = {
       records: dailyItems.length,
@@ -1196,6 +1361,11 @@ const HistoryScreen = () => {
       approvedExpenses: summaryApprovedExpenses,
       bottleDepositCash: 0,
       bottleReturnCash: 0,
+      uniqueItemDepositCash: 0,
+      uniqueItemReturnCash: 0,
+      itemDepositCash: 0,
+      itemReturnCash: 0,
+      unclassifiedDepositReturnValue: 0,
       netDriverCollection: 0,
       bottlesLeft: 0,
       bottlesLeftValue: 0,
@@ -1203,6 +1373,10 @@ const HistoryScreen = () => {
       assetsLeft: 0,
       assetsLeftValue: 0,
       assetsCollected: 0,
+      assetsLeftItems: [] as SummaryAssetMovementItem[],
+      assetsCollectedItems: [] as SummaryAssetMovementItem[],
+      itemDepositItems: [] as SummaryAssetMovementItem[],
+      itemReturnItems: [] as SummaryAssetMovementItem[],
       itemsSoldCount: 0,
       soldItems: [] as SummarySoldItem[],
       notesCount: 0,
@@ -1210,6 +1384,8 @@ const HistoryScreen = () => {
     };
 
     dailyItems.forEach((item) => {
+      const paymentBucket = getHistoryPaymentBucket(item);
+
       if (item.remark?.trim()) {
         summary.notesCount += 1;
       }
@@ -1244,16 +1420,18 @@ const HistoryScreen = () => {
 
           summary.itemsSoldCount += quantity;
 
+          const assetDisplay =
+            saleItem.itemType === UNIQUE_ITEM_KIND
+              ? getAssetDisplayParts(saleItem)
+              : null;
           const label =
-            saleItem.itemType === "asset"
-              ? saleItem.assetCategory?.trim() ||
-                saleItem.label?.trim() ||
-                "Asset"
-              : saleItem.label?.trim() ||
-                saleItem.assetCategory?.trim() ||
-                "Sold Item";
+            assetDisplay?.label ||
+            saleItem.label?.trim() ||
+            saleItem.assetCategory?.trim() ||
+            "Sold Item";
+          const detail = assetDisplay?.detail ?? null;
           const key =
-            `${saleItem.itemType}:${saleItem.itemId || saleItem.id || label}`.toLowerCase();
+            `${saleItem.itemType}:${saleItem.itemId || saleItem.id || label}:${detail || ""}`.toLowerCase();
           const existing = soldItemsByKey.get(key);
           const amount = quantity * (saleItem.unitPrice || 0);
 
@@ -1266,6 +1444,7 @@ const HistoryScreen = () => {
           soldItemsByKey.set(key, {
             key,
             label,
+            detail,
             quantity,
             amount,
           });
@@ -1279,36 +1458,172 @@ const HistoryScreen = () => {
       item.depositReturns.forEach((entry) => {
         const quantity = entry.quantity || 0;
         const value = quantity * (entry.unitPrice || 0);
+        const signedValue = entry.type === "deposit" ? value : -value;
+        const movementGroup = getDepositReturnSummaryGroup(entry);
+        const customerName = getSummaryCustomerName(item);
 
-        if (entry.depositKind === "bottle") {
+        const applyMovementMoney = () => {
+          if (paymentBucket === "cash") {
+            if (movementGroup === "bottle") {
+              if (entry.type === "deposit") {
+                summary.bottleDepositCash += value;
+              } else {
+                summary.bottleReturnCash += value;
+              }
+              return;
+            }
+
+            if (movementGroup === "item") {
+              if (entry.type === "deposit") {
+                summary.itemDepositCash += value;
+              } else {
+                summary.itemReturnCash += value;
+              }
+              return;
+            }
+
+            if (entry.type === "deposit") {
+              summary.uniqueItemDepositCash += value;
+            } else {
+              summary.uniqueItemReturnCash += value;
+            }
+            return;
+          }
+
+          if (paymentBucket === "check") {
+            summary.checkSales += signedValue;
+            return;
+          }
+
+          if (paymentBucket === "wallet") {
+            summary.walletSales += signedValue;
+            return;
+          }
+
+          if (paymentBucket === "credit") {
+            summary.creditSales += signedValue;
+            return;
+          }
+
+          summary.unclassifiedDepositReturnValue += signedValue;
+        };
+
+        if (movementGroup === "bottle") {
           if (entry.type === "deposit") {
             summary.bottlesLeft += quantity;
             summary.bottlesLeftValue += value;
-            summary.bottleDepositCash += value;
           } else {
             summary.bottlesCollected += quantity;
-            summary.bottleReturnCash += value;
           }
+
+          applyMovementMoney();
+          return;
+        }
+
+        if (movementGroup === "item") {
+          const itemDisplay = getItemMovementDisplayParts(entry);
+          const key = getAssetSummaryKey({
+            type: entry.type === "deposit" ? "item-left" : "item-collected",
+            label: itemDisplay.label,
+            detail: itemDisplay.detail,
+          });
+          const targetMap =
+            entry.type === "deposit" ? itemsLeftByKey : itemsCollectedByKey;
+          const existing = targetMap.get(key);
+          if (existing) {
+            existing.count += quantity;
+            existing.amount += value;
+          } else {
+            targetMap.set(key, {
+              key,
+              label: itemDisplay.label,
+              detail: itemDisplay.detail,
+              count: quantity,
+              amount: value,
+            });
+          }
+
+          applyMovementMoney();
           return;
         }
 
         if (entry.type === "deposit") {
           summary.assetsLeft += quantity;
           summary.assetsLeftValue += value;
+          const assetDisplay = getAssetDisplayParts(entry);
+          const key = getAssetSummaryKey({
+            type: "left",
+            label: assetDisplay.label,
+            detail: assetDisplay.detail,
+            customerName,
+          });
+          const existing = assetsLeftByKey.get(key);
+          if (existing) {
+            existing.count += quantity;
+            existing.amount += value;
+          } else {
+            assetsLeftByKey.set(key, {
+              key,
+              label: assetDisplay.label,
+              detail: assetDisplay.detail,
+              customerName,
+              count: quantity,
+              amount: value,
+            });
+          }
         } else {
           summary.assetsCollected += quantity;
+          const assetDisplay = getAssetDisplayParts(entry);
+          const key = getAssetSummaryKey({
+            type: "collected",
+            label: assetDisplay.label,
+            detail: assetDisplay.detail,
+            customerName,
+          });
+          const existing = assetsCollectedByKey.get(key);
+          if (existing) {
+            existing.count += quantity;
+            existing.amount += value;
+          } else {
+            assetsCollectedByKey.set(key, {
+              key,
+              label: assetDisplay.label,
+              detail: assetDisplay.detail,
+              customerName,
+              count: quantity,
+              amount: value,
+            });
+          }
         }
+
+        applyMovementMoney();
       });
     });
 
     summary.netDriverCollection =
       summary.cashSales +
       summary.balanceCollections +
-      summary.bottleDepositCash -
+      summary.bottleDepositCash +
+      summary.uniqueItemDepositCash +
+      summary.itemDepositCash -
       summary.bottleReturnCash -
+      summary.uniqueItemReturnCash -
+      summary.itemReturnCash -
       summary.approvedExpenses;
     summary.soldItems = Array.from(soldItemsByKey.values()).sort((a, b) =>
       a.label.localeCompare(b.label),
+    );
+    summary.assetsLeftItems = Array.from(assetsLeftByKey.values()).sort(
+      (a, b) => a.label.localeCompare(b.label),
+    );
+    summary.assetsCollectedItems = Array.from(
+      assetsCollectedByKey.values(),
+    ).sort((a, b) => a.label.localeCompare(b.label));
+    summary.itemDepositItems = Array.from(itemsLeftByKey.values()).sort(
+      (a, b) => a.label.localeCompare(b.label),
+    );
+    summary.itemReturnItems = Array.from(itemsCollectedByKey.values()).sort(
+      (a, b) => a.label.localeCompare(b.label),
     );
 
     const topFailure = Array.from(failureReasonCounts.entries()).sort(
@@ -1775,6 +2090,20 @@ const HistoryScreen = () => {
                     label="Bottle deposit cash"
                     amount={dailySummary.bottleDepositCash}
                   />
+                  {dailySummary.uniqueItemDepositCash > 0 ? (
+                    <SummaryAmountRow
+                      icon="cube-outline"
+                      label="Unique item deposit cash"
+                      amount={dailySummary.uniqueItemDepositCash}
+                    />
+                  ) : null}
+                  {dailySummary.itemDepositCash > 0 ? (
+                    <SummaryAmountRow
+                      icon="cube-outline"
+                      label="Item deposit cash"
+                      amount={dailySummary.itemDepositCash}
+                    />
+                  ) : null}
                   <SummaryAmountRow
                     icon="remove-circle-outline"
                     label="Approved expenses"
@@ -1790,6 +2119,20 @@ const HistoryScreen = () => {
                     label="Bottle return cash"
                     amount={dailySummary.bottleReturnCash}
                   />
+                  {dailySummary.uniqueItemReturnCash > 0 ? (
+                    <SummaryAmountRow
+                      icon="return-up-back-outline"
+                      label="Unique item return cash"
+                      amount={dailySummary.uniqueItemReturnCash}
+                    />
+                  ) : null}
+                  {dailySummary.itemReturnCash > 0 ? (
+                    <SummaryAmountRow
+                      icon="return-up-back-outline"
+                      label="Item return cash"
+                      amount={dailySummary.itemReturnCash}
+                    />
+                  ) : null}
                   <SummaryAmountRow
                     icon="receipt-outline"
                     label="Check sales"
@@ -1805,6 +2148,13 @@ const HistoryScreen = () => {
                     label="Credit sales"
                     amount={dailySummary.creditSales}
                   />
+                  {dailySummary.unclassifiedDepositReturnValue !== 0 ? (
+                    <SummaryAmountRow
+                      icon="help-circle-outline"
+                      label="Unclassified deposit/return"
+                      amount={dailySummary.unclassifiedDepositReturnValue}
+                    />
+                  ) : null}
                   <SummaryAmountRow
                     icon="calculator-outline"
                     label="Net amount to collect from driver"
@@ -1814,19 +2164,73 @@ const HistoryScreen = () => {
                 </View>
               </SummarySection>
 
-              <SummarySection title="Assets">
+              <SummarySection title="Unique Items">
                 <View style={styles.summaryPanel}>
-                  <SummaryMovementRow
-                    label="Assets left with customers"
-                    count={dailySummary.assetsLeft}
-                    amount={dailySummary.assetsLeftValue}
-                  />
-                  <SummaryMovementRow
-                    label="Assets collected"
-                    count={dailySummary.assetsCollected}
-                  />
+                  {dailySummary.assetsLeftItems.length === 0 &&
+                  dailySummary.assetsCollectedItems.length === 0 ? (
+                    <Text style={styles.summaryEmptyText}>
+                      No unique item movement for this date.
+                    </Text>
+                  ) : (
+                    <>
+                      {dailySummary.assetsLeftItems.map((asset) => (
+                        <SummaryMovementRow
+                          key={asset.key}
+                          label={`Left: ${asset.label}`}
+                          detail={asset.detail}
+                          sideLabel={
+                            asset.customerName
+                              ? `Customer: ${asset.customerName}`
+                              : null
+                          }
+                          count={asset.count}
+                          amount={asset.amount}
+                        />
+                      ))}
+                      {dailySummary.assetsCollectedItems.map((asset) => (
+                        <SummaryMovementRow
+                          key={asset.key}
+                          label={`Collected: ${asset.label}`}
+                          detail={asset.detail}
+                          sideLabel={
+                            asset.customerName
+                              ? `Customer: ${asset.customerName}`
+                              : null
+                          }
+                          count={asset.count}
+                          amount={asset.amount}
+                        />
+                      ))}
+                    </>
+                  )}
                 </View>
               </SummarySection>
+
+              {dailySummary.itemDepositItems.length > 0 ||
+              dailySummary.itemReturnItems.length > 0 ? (
+                <SummarySection title="Item Deposits">
+                  <View style={styles.summaryPanel}>
+                    {dailySummary.itemDepositItems.map((item) => (
+                      <SummaryMovementRow
+                        key={item.key}
+                        label={`Left: ${item.label}`}
+                        detail={item.detail}
+                        count={item.count}
+                        amount={item.amount}
+                      />
+                    ))}
+                    {dailySummary.itemReturnItems.map((item) => (
+                      <SummaryMovementRow
+                        key={item.key}
+                        label={`Collected: ${item.label}`}
+                        detail={item.detail}
+                        count={item.count}
+                        amount={item.amount}
+                      />
+                    ))}
+                  </View>
+                </SummarySection>
+              ) : null}
 
               <SummarySection title="Products Sold">
                 <View style={styles.summaryPanel}>
@@ -1835,6 +2239,7 @@ const HistoryScreen = () => {
                       <SummaryMovementRow
                         key={item.key}
                         label={item.label}
+                        detail={item.detail}
                         count={item.quantity}
                       />
                     ))
@@ -2090,6 +2495,10 @@ const HistoryScreen = () => {
                   {detailData.customer.email || "N/A"}
                 </Text>
                 <Text style={styles.detailLine}>
+                  <Text style={styles.detailLineLabel}>TRN:</Text>{" "}
+                  {detailData.customer.trn || "N/A"}
+                </Text>
+                <Text style={styles.detailLine}>
                   <Text style={styles.detailLineLabel}>
                     Requires Signature:
                   </Text>{" "}
@@ -2187,28 +2596,42 @@ const HistoryScreen = () => {
                     No deposit returns in this report.
                   </Text>
                 ) : (
-                  detailData.depositReturns.map((entry) => (
-                    <View key={entry.id} style={styles.detailListRow}>
-                      <Text style={styles.detailListTitle}>{entry.label}</Text>
-                      <Text style={styles.detailListMeta}>
-                        {entry.type} • {entry.depositKind}
-                      </Text>
-                      <Text style={styles.detailListMeta}>
-                        Qty {entry.quantity} • AED{" "}
-                        {formatAmount(entry.unitPrice)}
-                      </Text>
-                      {entry.imageUrl ? (
-                        <TouchableOpacity
-                          style={styles.inlineLinkButton}
-                          onPress={() => void openUrl(entry.imageUrl)}
-                        >
-                          <Text style={styles.inlineLinkButtonText}>
-                            Open Image
+                  detailData.depositReturns.map((entry) => {
+                    const assetDisplay =
+                      entry.depositKind === UNIQUE_ITEM_KIND
+                        ? getAssetDisplayParts(entry)
+                        : null;
+
+                    return (
+                      <View key={entry.id} style={styles.detailListRow}>
+                        <Text style={styles.detailListTitle}>
+                          {assetDisplay?.label || entry.label}
+                        </Text>
+                        {assetDisplay?.detail ? (
+                          <Text style={styles.detailListMeta}>
+                            {assetDisplay.detail}
                           </Text>
-                        </TouchableOpacity>
-                      ) : null}
-                    </View>
-                  ))
+                        ) : null}
+                        <Text style={styles.detailListMeta}>
+                          {entry.type} • {entry.depositKind}
+                        </Text>
+                        <Text style={styles.detailListMeta}>
+                          Qty {entry.quantity} • AED{" "}
+                          {formatAmount(entry.unitPrice)}
+                        </Text>
+                        {entry.imageUrl ? (
+                          <TouchableOpacity
+                            style={styles.inlineLinkButton}
+                            onPress={() => void openUrl(entry.imageUrl)}
+                          >
+                            <Text style={styles.inlineLinkButtonText}>
+                              Open Image
+                            </Text>
+                          </TouchableOpacity>
+                        ) : null}
+                      </View>
+                    );
+                  })
                 )}
               </View>
 
@@ -2276,32 +2699,44 @@ const HistoryScreen = () => {
                     ) : null}
 
                     <View style={styles.saleItemsWrap}>
-                      {detailSale.items.map((saleItem) => (
-                        <View key={saleItem.id} style={styles.saleItemCard}>
-                          <Text style={styles.saleItemTitle}>
-                            {saleItem.label}
-                          </Text>
-                          <Text style={styles.saleItemMeta}>
-                            {saleItem.itemType} • Qty {saleItem.quantity}
-                          </Text>
-                          <Text style={styles.saleItemMeta}>
-                            AED {formatAmount(saleItem.unitPrice)} each • AED{" "}
-                            {formatAmount(
-                              saleItem.unitPrice * saleItem.quantity,
-                            )}
-                          </Text>
-                          {saleItem.imageUrl ? (
-                            <TouchableOpacity
-                              style={styles.inlineLinkButton}
-                              onPress={() => void openUrl(saleItem.imageUrl)}
-                            >
-                              <Text style={styles.inlineLinkButtonText}>
-                                Open Image
+                      {detailSale.items.map((saleItem) => {
+                        const assetDisplay =
+                          saleItem.itemType === UNIQUE_ITEM_KIND
+                            ? getAssetDisplayParts(saleItem)
+                            : null;
+
+                        return (
+                          <View key={saleItem.id} style={styles.saleItemCard}>
+                            <Text style={styles.saleItemTitle}>
+                              {assetDisplay?.label || saleItem.label}
+                            </Text>
+                            {assetDisplay?.detail ? (
+                              <Text style={styles.saleItemMeta}>
+                                {assetDisplay.detail}
                               </Text>
-                            </TouchableOpacity>
-                          ) : null}
-                        </View>
-                      ))}
+                            ) : null}
+                            <Text style={styles.saleItemMeta}>
+                              {saleItem.itemType} • Qty {saleItem.quantity}
+                            </Text>
+                            <Text style={styles.saleItemMeta}>
+                              AED {formatAmount(saleItem.unitPrice)} each • AED{" "}
+                              {formatAmount(
+                                saleItem.unitPrice * saleItem.quantity,
+                              )}
+                            </Text>
+                            {saleItem.imageUrl ? (
+                              <TouchableOpacity
+                                style={styles.inlineLinkButton}
+                                onPress={() => void openUrl(saleItem.imageUrl)}
+                              >
+                                <Text style={styles.inlineLinkButtonText}>
+                                  Open Image
+                                </Text>
+                              </TouchableOpacity>
+                            ) : null}
+                          </View>
+                        );
+                      })}
                     </View>
                   </>
                 ) : (
@@ -2641,14 +3076,23 @@ const styles = StyleSheet.create({
     justifyContent: "space-between",
     gap: 12,
   },
-  summaryMovementLabel: {
+  summaryMovementLabelWrap: {
     flex: 1,
+  },
+  summaryMovementLabel: {
     color: "#334155",
     fontSize: 13,
     fontWeight: "700",
   },
+  summaryMovementDetail: {
+    marginTop: 2,
+    color: "#64748B",
+    fontSize: 11,
+    fontWeight: "600",
+  },
   summaryMovementValueWrap: {
     alignItems: "flex-end",
+    maxWidth: 150,
   },
   summaryMovementValue: {
     color: "#0F172A",
@@ -2660,6 +3104,13 @@ const styles = StyleSheet.create({
     color: "#64748B",
     fontSize: 11,
     fontWeight: "700",
+  },
+  summaryMovementSideLabel: {
+    marginTop: 2,
+    color: "#2563EB",
+    fontSize: 10,
+    fontWeight: "700",
+    textAlign: "right",
   },
   summaryIssueRow: {
     paddingHorizontal: 12,

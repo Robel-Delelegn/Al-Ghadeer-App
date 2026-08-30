@@ -46,7 +46,7 @@ interface BulkItem {
   isRefillableBottle: boolean;
 }
 
-interface AssetItem {
+interface UniqueItem {
   id: string;
   label: string;
   description: string | null;
@@ -57,7 +57,9 @@ interface AssetItem {
 
 interface TruckLoad {
   bulkItems: BulkItem[];
-  assets: AssetItem[];
+  uniqueItems?: UniqueItem[];
+  unique_items?: UniqueItem[];
+  assets?: UniqueItem[];
 }
 
 interface TruckResponse {
@@ -95,7 +97,8 @@ const LoadedItems = () => {
 
   const loadInfo = truckData?.load;
   const bulkItems = loadInfo?.bulkItems ?? [];
-  const assets = loadInfo?.assets ?? [];
+  const uniqueItems =
+    loadInfo?.uniqueItems ?? loadInfo?.unique_items ?? loadInfo?.assets ?? [];
 
   const bulkUnitsTotal = bulkItems.reduce(
     (sum, item) => sum + (Number(item.quantity) || 0),
@@ -404,8 +407,10 @@ const LoadedItems = () => {
                   </View>
                   <View style={styles.summaryDivider} />
                   <View style={styles.summaryItem}>
-                    <Text style={styles.summaryValue}>{assets.length}</Text>
-                    <Text style={styles.summaryLabel}>Assets</Text>
+                    <Text style={styles.summaryValue}>
+                      {uniqueItems.length}
+                    </Text>
+                    <Text style={styles.summaryLabel}>Unique Items</Text>
                   </View>
                 </View>
 
@@ -446,11 +451,13 @@ const LoadedItems = () => {
                 </View>
 
                 <View style={styles.sectionCard}>
-                  <Text style={styles.sectionTitle}>Assets</Text>
-                  {assets.length === 0 ? (
-                    <Text style={styles.sectionEmptyText}>No assets.</Text>
+                  <Text style={styles.sectionTitle}>Unique Items</Text>
+                  {uniqueItems.length === 0 ? (
+                    <Text style={styles.sectionEmptyText}>
+                      No unique items.
+                    </Text>
                   ) : (
-                    assets.map((asset) => (
+                    uniqueItems.map((asset) => (
                       <View key={asset.id} style={styles.assetCard}>
                         <View style={styles.assetTopRow}>
                           <View style={styles.listRowLeft}>
@@ -466,7 +473,7 @@ const LoadedItems = () => {
                         </View>
 
                         <Text style={styles.assetMeta}>
-                          Serial: {asset.serial || "—"}
+                          Serial: {asset.serial || "Not required"}
                         </Text>
                         <Text style={styles.assetMeta}>
                           Category: {asset.category || "—"}

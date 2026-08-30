@@ -108,7 +108,7 @@ const OrganizationSignature: React.FC = () => {
   const handleBack = useCallback(() => {
     router.replace({
       pathname: "/(root)/(tabs)/checkout",
-      params: { backTo: "bottles-assets" },
+      params: { backTo: "bottles-unique-items" },
     });
   }, [router]);
 
@@ -331,7 +331,7 @@ const OrganizationSignature: React.FC = () => {
     ) {
       showWarningAlert(
         "No Items",
-        "Please add items, set bottle or asset movement, or record a credit collection.",
+        "Please add items, set deposit/return movement, or record a credit collection.",
       );
       return;
     }
@@ -671,11 +671,11 @@ const OrganizationSignature: React.FC = () => {
             ))}
           </View>
 
-          {/* Bottle and Asset Movement */}
+          {/* Deposit and return movement */}
           {editableRentItems.length > 0 && (
             <View style={styles.card}>
               <View style={styles.cardHeader}>
-                <Text style={styles.cardTitle}>Bottles & Assets</Text>
+                <Text style={styles.cardTitle}>Deposits & Returns</Text>
                 <View style={styles.itemBadge}>
                   <Text style={styles.itemBadgeText}>
                     {editableRentItems.length}

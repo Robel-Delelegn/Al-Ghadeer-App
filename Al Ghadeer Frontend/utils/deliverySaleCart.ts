@@ -3,6 +3,11 @@ import {
   toDeliverySaleItemType,
   toMoney,
 } from "@/utils/deliveries";
+import {
+  isUniqueItemSaleId,
+  isUniqueItemSignal,
+  UNIQUE_ITEM_KIND,
+} from "@/utils/uniqueItems";
 
 type CartImage = { uri: string } | null;
 
@@ -15,6 +20,7 @@ export type DeliveryCartItemLike = {
   price?: number;
   quantity?: number;
   category?: string | null;
+  uniqueItemCategory?: string | null;
   assetCategory?: string | null;
   loaded_quantity?: number | string | null;
 };
@@ -37,8 +43,6 @@ export type InvalidDeliverySaleCartItem = {
   name: string;
   reason: string;
 };
-
-const TRUCK_ASSET_SALE_PREFIX = "sale-asset:";
 
 const normalizeSignal = (value: unknown): string =>
   String(value || "")
@@ -70,16 +74,18 @@ const inferDeliverySaleItemType = (
 ): DeliverySaleItemType => {
   const itemType = normalizeSignal(item.item_type);
   const category = normalizeSignal(item.category);
-  const assetCategory = toCleanText(item.assetCategory);
+  const assetCategory = toCleanText(
+    item.uniqueItemCategory ?? item.assetCategory,
+  );
   const id = toCleanText(item.id);
 
   if (
-    itemType.includes("asset") ||
-    category.includes("asset") ||
+    isUniqueItemSignal(itemType) ||
+    isUniqueItemSignal(category) ||
     assetCategory.length > 0 ||
-    id.startsWith(TRUCK_ASSET_SALE_PREFIX)
+    isUniqueItemSaleId(id)
   ) {
-    return "asset";
+    return UNIQUE_ITEM_KIND;
   }
 
   return toDeliverySaleItemType(item.item_type || item.category);
@@ -127,14 +133,15 @@ export const buildDeliverySaleCartRows = (
     }
 
     if (
-      itemType === "asset" &&
-      cartId.startsWith(TRUCK_ASSET_SALE_PREFIX) &&
+      itemType === UNIQUE_ITEM_KIND &&
+      isUniqueItemSaleId(cartId) &&
       !toCleanText(item?.item_id)
     ) {
       invalidItems.push({
         id: invalidId,
         name: invalidName,
-        reason: "The selected asset is missing its asset item identifier.",
+        reason:
+          "The selected unique item is missing its unique item identifier.",
       });
       return [];
     }
@@ -161,7 +168,8 @@ export const buildDeliverySaleCartRows = (
         quantity,
         unitPrice,
         category: toCleanText(item.category) || null,
-        assetCategory: toCleanText(item.assetCategory) || null,
+        assetCategory:
+          toCleanText(item.uniqueItemCategory ?? item.assetCategory) || null,
       },
     ];
   });

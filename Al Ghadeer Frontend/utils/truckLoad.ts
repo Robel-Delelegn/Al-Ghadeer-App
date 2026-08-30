@@ -1,6 +1,10 @@
 import type { Order } from "@/types/order";
+import {
+  UNIQUE_ITEM_KIND,
+  UNIQUE_ITEM_MOVEMENT_TO_CUSTOMER,
+} from "@/utils/uniqueItems";
 
-export interface TruckAsset {
+export interface TruckUniqueItem {
   id: string;
   itemId: string;
   label: string;
@@ -24,7 +28,7 @@ export interface TruckBulkItem {
   isRefillableBottle: boolean;
 }
 
-export type TruckAssetRentItem = NonNullable<Order["rent_items"]>[number];
+export type TruckUniqueItemRentItem = NonNullable<Order["rent_items"]>[number];
 
 const toText = (value: unknown): string => {
   return typeof value === "string" ? value.trim() : "";
@@ -131,7 +135,7 @@ const pickArray = (
   return [];
 };
 
-const isExplicitlyUnavailableAsset = (source: Record<string, unknown>) => {
+const isExplicitlyUnavailableUniqueItem = (source: Record<string, unknown>) => {
   const availabilityFlags = [
     source.inTruck,
     source.in_truck,
@@ -159,18 +163,31 @@ const isExplicitlyUnavailableAsset = (source: Record<string, unknown>) => {
   ].includes(status);
 };
 
-const normalizeTruckAsset = (
+const normalizeTruckUniqueItem = (
   value: unknown,
   _index: number,
-): TruckAsset | null => {
+): TruckUniqueItem | null => {
   const source = asObject(value);
   if (!source) return null;
-  if (isExplicitlyUnavailableAsset(source)) return null;
+  if (isExplicitlyUnavailableUniqueItem(source)) return null;
   const item = asObject(source.item) || asObject(source.product);
 
   const id =
-    pickText(source, ["id", "assetId", "asset_id", "loadItemId"]) ||
-    pickText(item, ["id", "assetId", "asset_id"]);
+    pickText(source, [
+      "id",
+      "uniqueItemId",
+      "unique_item_id",
+      "assetId",
+      "asset_id",
+      "loadItemId",
+    ]) ||
+    pickText(item, [
+      "id",
+      "uniqueItemId",
+      "unique_item_id",
+      "assetId",
+      "asset_id",
+    ]);
   const itemId =
     pickText(source, ["itemId", "item_id", "productId", "product_id"]) ||
     pickText(item, ["itemId", "item_id", "id"]) ||
@@ -178,8 +195,20 @@ const normalizeTruckAsset = (
   const label =
     pickText(source, ["label", "name", "title"]) ||
     pickText(item, ["label", "name", "title"]) ||
-    pickText(source, ["category", "assetCategory", "asset_category"]) ||
-    pickText(item, ["category", "assetCategory", "asset_category"]) ||
+    pickText(source, [
+      "category",
+      "uniqueItemCategory",
+      "unique_item_category",
+      "assetCategory",
+      "asset_category",
+    ]) ||
+    pickText(item, [
+      "category",
+      "uniqueItemCategory",
+      "unique_item_category",
+      "assetCategory",
+      "asset_category",
+    ]) ||
     itemId;
 
   if (!id || !itemId || !label) {
@@ -198,6 +227,8 @@ const normalizeTruckAsset = (
         "serial",
         "serialNumber",
         "serial_number",
+        "uniqueItemSerial",
+        "unique_item_serial",
         "assetSerial",
         "asset_serial",
       ]) ??
@@ -205,26 +236,42 @@ const normalizeTruckAsset = (
         "serial",
         "serialNumber",
         "serial_number",
+        "uniqueItemSerial",
+        "unique_item_serial",
         "assetSerial",
         "asset_serial",
       ]),
     category:
       pickNullableText(source, [
         "category",
+        "uniqueItemCategory",
+        "unique_item_category",
         "assetCategory",
         "asset_category",
       ]) ??
-      pickNullableText(item, ["category", "assetCategory", "asset_category"]),
+      pickNullableText(item, [
+        "category",
+        "uniqueItemCategory",
+        "unique_item_category",
+        "assetCategory",
+        "asset_category",
+      ]),
     image_url:
       pickNullableText(source, ["image_url", "imageUrl"]) ??
       pickNullableText(item, ["image_url", "imageUrl"]),
   };
 };
 
-export const extractTruckAssets = (payload: unknown): TruckAsset[] => {
+export const extractTruckUniqueItems = (
+  payload: unknown,
+): TruckUniqueItem[] => {
   const root = asObject(payload);
   const load = asObject(root?.load);
   const loadAssets = pickArray(load, [
+    "uniqueItems",
+    "unique_items",
+    "uniqueItemItems",
+    "unique_item_items",
     "assets",
     "assetItems",
     "asset_items",
@@ -235,6 +282,10 @@ export const extractTruckAssets = (payload: unknown): TruckAsset[] => {
     loadAssets.length > 0
       ? loadAssets
       : pickArray(root, [
+          "uniqueItems",
+          "unique_items",
+          "uniqueItemItems",
+          "unique_item_items",
           "assets",
           "assetItems",
           "asset_items",
@@ -242,12 +293,12 @@ export const extractTruckAssets = (payload: unknown): TruckAsset[] => {
           "serial_assets",
         ]);
 
-  const assets = rawAssets
-    .map((asset, index) => normalizeTruckAsset(asset, index))
-    .filter((asset): asset is TruckAsset => asset !== null);
+  const uniqueItems = rawAssets
+    .map((asset, index) => normalizeTruckUniqueItem(asset, index))
+    .filter((asset): asset is TruckUniqueItem => asset !== null);
 
-  const deduped = new Map<string, TruckAsset>();
-  assets.forEach((asset) => {
+  const deduped = new Map<string, TruckUniqueItem>();
+  uniqueItems.forEach((asset) => {
     if (!deduped.has(asset.id)) {
       deduped.set(asset.id, asset);
     }
@@ -436,7 +487,9 @@ export const getTruckBulkItemMatchKeys = (item: TruckBulkItem): string[] => {
   return Array.from(new Set(keys));
 };
 
-export const toTruckAssetRentItem = (asset: TruckAsset): TruckAssetRentItem => {
+export const toTruckUniqueItemRentItem = (
+  asset: TruckUniqueItem,
+): TruckUniqueItemRentItem => {
   return {
     id: asset.id,
     item_id: asset.itemId,
@@ -450,19 +503,20 @@ export const toTruckAssetRentItem = (asset: TruckAsset): TruckAssetRentItem => {
     in_truck: false,
     max_quantity: 1,
     deposit_action: "deposit",
-    deposit_kind: "asset",
-    action_source: "product_asset",
+    deposit_kind: UNIQUE_ITEM_KIND,
+    action_source: "product_unique_item",
     asset_category: asset.category,
-    other_action_type: "asset-movement-to-customer",
-    other_action_item_type: "asset",
+    unique_item_category: asset.category,
+    other_action_type: UNIQUE_ITEM_MOVEMENT_TO_CUSTOMER,
+    other_action_item_type: UNIQUE_ITEM_KIND,
   };
 };
 
-export const mergeTruckAssetsIntoRentItems = (
+export const mergeTruckUniqueItemsIntoRentItems = (
   rentItems: Order["rent_items"] | undefined,
-  assets: TruckAsset[],
-): TruckAssetRentItem[] => {
-  const merged = new Map<string, TruckAssetRentItem>();
+  assets: TruckUniqueItem[],
+): TruckUniqueItemRentItem[] => {
+  const merged = new Map<string, TruckUniqueItemRentItem>();
 
   (rentItems || []).forEach((item) => {
     merged.set(item.id, {
@@ -474,7 +528,7 @@ export const mergeTruckAssetsIntoRentItems = (
   assets.forEach((asset) => {
     const existing = merged.get(asset.id);
     if (!existing) {
-      merged.set(asset.id, toTruckAssetRentItem(asset));
+      merged.set(asset.id, toTruckUniqueItemRentItem(asset));
       return;
     }
 
@@ -489,14 +543,25 @@ export const mergeTruckAssetsIntoRentItems = (
       max_quantity:
         typeof existing.max_quantity === "number" ? existing.max_quantity : 1,
       deposit_action: existing.deposit_action || "deposit",
-      deposit_kind: existing.deposit_kind || "asset",
-      action_source: existing.action_source || "product_asset",
+      deposit_kind: existing.deposit_kind || UNIQUE_ITEM_KIND,
+      action_source: existing.action_source || "product_unique_item",
       asset_category: existing.asset_category ?? asset.category,
+      unique_item_category:
+        existing.unique_item_category ??
+        existing.asset_category ??
+        asset.category,
       other_action_type:
-        existing.other_action_type || "asset-movement-to-customer",
-      other_action_item_type: existing.other_action_item_type || "asset",
+        existing.other_action_type || UNIQUE_ITEM_MOVEMENT_TO_CUSTOMER,
+      other_action_item_type:
+        existing.other_action_item_type || UNIQUE_ITEM_KIND,
     });
   });
 
   return Array.from(merged.values());
 };
+
+export type TruckAsset = TruckUniqueItem;
+export type TruckAssetRentItem = TruckUniqueItemRentItem;
+export const extractTruckAssets = extractTruckUniqueItems;
+export const toTruckAssetRentItem = toTruckUniqueItemRentItem;
+export const mergeTruckAssetsIntoRentItems = mergeTruckUniqueItemsIntoRentItems;

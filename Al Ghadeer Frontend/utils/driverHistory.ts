@@ -1,5 +1,10 @@
 import type { DeliveryAddress, DeliveryCustomer } from "@/utils/deliveries";
 import { resolveResourceUrl } from "@/utils/resources";
+import {
+  isUniqueItemDepositKind,
+  isUniqueItemSignal,
+  UNIQUE_ITEM_KIND,
+} from "@/utils/uniqueItems";
 
 export type DriverHistoryKind = "scheduled_delivery" | "adhoc_delivery";
 
@@ -13,7 +18,7 @@ export interface DriverHistoryDepositReturn {
   id: string;
   type: "deposit" | "deposit_return";
   itemId: string;
-  depositKind: "asset" | "bottle";
+  depositKind: "unique-item" | "bottle";
   quantity: number;
   unitPrice: number;
   label: string;
@@ -24,7 +29,7 @@ export interface DriverHistoryDepositReturn {
 export interface DriverHistorySaleItem {
   id: string;
   itemId: string;
-  itemType: "asset" | "retail" | "refill";
+  itemType: "unique-item" | "retail" | "refill";
   label: string;
   assetCategory: string | null;
   imageUrl: string | null;
@@ -153,11 +158,26 @@ const normalizeKind = (value: unknown): DriverHistoryKind | null => {
 
 const normalizeCustomer = (value: unknown): DeliveryCustomer => {
   const record = isRecord(value) ? value : null;
+  const firstName = toText(record?.firstName ?? record?.first_name);
+  const lastName = toText(record?.lastName ?? record?.last_name);
+  const displayName =
+    toText(record?.name) || [firstName, lastName].filter(Boolean).join(" ");
+
   return {
     id: toText(record?.id),
-    name: toText(record?.name),
+    name: displayName,
+    firstName: firstName || null,
+    lastName: lastName || null,
     phone: toText(record?.phone),
     email: toNullableText(record?.email),
+    trn:
+      toNullableText(
+        record?.trn ??
+          record?.customerTrn ??
+          record?.customer_trn ??
+          record?.taxRegistrationNumber ??
+          record?.tax_registration_number,
+      ) ?? null,
     requires_signature: Boolean(record?.requires_signature),
     requires_immediate_invoice: Boolean(record?.requires_immediate_invoice),
   };
@@ -202,14 +222,17 @@ const normalizeDepositReturn = (
       ? record.product
       : null;
   const type = toText(record?.type);
-  const depositKind = toText(record?.depositKind);
+  const rawDepositKind = toText(record?.depositKind);
+  const depositKind = isUniqueItemDepositKind(rawDepositKind)
+    ? UNIQUE_ITEM_KIND
+    : rawDepositKind;
   const quantity = toNumber(record?.quantity);
   const unitPrice = toNumber(record?.unitPrice);
 
   if (
     !record ||
     (type !== "deposit" && type !== "deposit_return") ||
-    (depositKind !== "asset" && depositKind !== "bottle") ||
+    (depositKind !== UNIQUE_ITEM_KIND && depositKind !== "bottle") ||
     quantity === null ||
     unitPrice === null
   ) {
@@ -225,9 +248,13 @@ const normalizeDepositReturn = (
     unitPrice,
     label: toText(record.label) || toText(record.name) || toText(item?.label),
     assetCategory:
+      toNullableText(record.uniqueItemCategory) ??
+      toNullableText(record.unique_item_category) ??
       toNullableText(record.assetCategory) ??
       toNullableText(record.asset_category) ??
       toNullableText(record.category) ??
+      toNullableText(item?.uniqueItemCategory) ??
+      toNullableText(item?.unique_item_category) ??
       toNullableText(item?.assetCategory) ??
       toNullableText(item?.asset_category) ??
       toNullableText(item?.category),
@@ -243,13 +270,17 @@ const normalizeSaleItem = (value: unknown): DriverHistorySaleItem | null => {
       ? record.product
       : null;
   const rawItemType = toText(record?.itemType);
-  const itemType = rawItemType === "assets" ? "asset" : rawItemType;
+  const itemType = isUniqueItemSignal(rawItemType)
+    ? UNIQUE_ITEM_KIND
+    : rawItemType;
   const quantity = toNumber(record?.quantity);
   const unitPrice = toNumber(record?.unitPrice);
 
   if (
     !record ||
-    (itemType !== "asset" && itemType !== "retail" && itemType !== "refill") ||
+    (itemType !== UNIQUE_ITEM_KIND &&
+      itemType !== "retail" &&
+      itemType !== "refill") ||
     quantity === null ||
     unitPrice === null
   ) {
@@ -262,9 +293,13 @@ const normalizeSaleItem = (value: unknown): DriverHistorySaleItem | null => {
     itemType,
     label: toText(record.label) || toText(record.name) || toText(item?.label),
     assetCategory:
+      toNullableText(record.uniqueItemCategory) ??
+      toNullableText(record.unique_item_category) ??
       toNullableText(record.assetCategory) ??
       toNullableText(record.asset_category) ??
       toNullableText(record.category) ??
+      toNullableText(item?.uniqueItemCategory) ??
+      toNullableText(item?.unique_item_category) ??
       toNullableText(item?.assetCategory) ??
       toNullableText(item?.asset_category) ??
       toNullableText(item?.category),
@@ -313,7 +348,7 @@ const normalizeSalePayment = (
 ): DriverHistorySalePayment => {
   const record = isRecord(value) ? value : null;
   const method = normalizeSalePaymentMethod(
-    record ? record.method ?? record.payment_method : value,
+    record ? (record.method ?? record.payment_method) : value,
   );
   const amount = toNumber(record?.amount) ?? fallbackAmount;
 

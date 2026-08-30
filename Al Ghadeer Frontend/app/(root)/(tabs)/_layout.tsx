@@ -138,7 +138,7 @@ export default function Layout() {
         }}
       />
       <Tabs.Screen
-        name="bottles-assets"
+        name="bottles-unique-items"
         options={{
           headerShown: false,
           href: null, // Hide from tab bar
@@ -194,7 +194,7 @@ export default function Layout() {
         }}
       />
       <Tabs.Screen
-        name="direct-sale-bottles-assets"
+        name="direct-sale-bottles-unique-items"
         options={{
           headerShown: false,
           href: null, // Hide from tab bar

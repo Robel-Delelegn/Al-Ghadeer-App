@@ -114,7 +114,7 @@ const Checkout: React.FC = () => {
 
   const handleBack = useCallback(() => {
     router.replace({
-      pathname: "/(root)/(tabs)/bottles-assets",
+      pathname: "/(root)/(tabs)/bottles-unique-items",
       params: { backTo: "add-products" },
     });
   }, [router]);
@@ -128,7 +128,7 @@ const Checkout: React.FC = () => {
 
   const handleEditBottlesAssets = useCallback(() => {
     router.push({
-      pathname: "/(root)/(tabs)/bottles-assets",
+      pathname: "/(root)/(tabs)/bottles-unique-items",
       params: { backTo: "checkout" },
     });
   }, [router]);
@@ -196,7 +196,7 @@ const Checkout: React.FC = () => {
     }, 0);
     const vatAmount = sub * VAT_RATE;
 
-    // Calculate bottle/asset movement total (no VAT) for selected actions.
+    // Calculate bottle/unique item movement total (no VAT) for selected actions.
     const rentTotal =
       selectedDeliveryActions.reduce((sum, item) => {
         if (item.in_truck) {
@@ -205,12 +205,12 @@ const Checkout: React.FC = () => {
         return sum;
       }, 0) || 0;
 
-    // Check if any bottle/asset actions are selected.
+    // Check if any bottle/unique item actions are selected.
     const hasRentItems = selectedDeliveryActions.some(
       (item) => item.in_truck === true,
     );
 
-    // Sale total excludes bottle/asset deposits and returns. Those movements are
+    // Sale total excludes bottle/unique item deposits and returns. Those movements are
     // recorded separately and must not affect sale totals or payment amount.
     const total = sub + vatAmount;
     const count = cartItems.reduce(
@@ -228,7 +228,7 @@ const Checkout: React.FC = () => {
     };
   }, [cartItems, selectedDeliveryActions]);
   const handleContinueToPayment = useCallback(() => {
-    // Allow proceeding if products, bottle/asset movement, or credit collection exists.
+    // Allow proceeding if products, deposit/return movement, or credit collection exists.
     if (
       cartItems.length === 0 &&
       !hasRentItemsSelected &&
@@ -236,7 +236,7 @@ const Checkout: React.FC = () => {
     ) {
       showWarningAlert(
         "Empty Cart",
-        "Please add items, record bottle or asset movement, or record a credit collection.",
+        "Please add items, record deposit/return movement, or record a credit collection.",
       );
       return;
     }
@@ -413,11 +413,11 @@ const Checkout: React.FC = () => {
           )}
         </View>
 
-        {/* Bottle and Asset Movement */}
+        {/* Deposit and return movement */}
         {selectedDeliveryActions.length > 0 && (
           <View style={styles.card}>
             <View style={styles.cardHeader}>
-              <Text style={styles.cardTitle}>Bottles & Assets</Text>
+              <Text style={styles.cardTitle}>Deposits & Returns</Text>
               <TouchableOpacity
                 onPress={handleEditBottlesAssets}
                 activeOpacity={0.7}
@@ -738,7 +738,7 @@ const Checkout: React.FC = () => {
           </View>
           {parseFloat(rentItemsTotal) > 0 && (
             <View style={styles.summaryRow}>
-              <Text style={styles.summaryLabel}>Bottles & Assets</Text>
+              <Text style={styles.summaryLabel}>Deposits & Returns</Text>
               <Text style={styles.summaryValue}>AED {rentItemsTotal}</Text>
             </View>
           )}

@@ -63,6 +63,18 @@ const isOrderAvailableAt = (order: Order, minuteOfDay: number) => {
   return minuteOfDay >= startTime || minuteOfDay <= endTime;
 };
 
+const isDeliveredListOrder = (order: Order) =>
+  order.status === "delivered" || order.has_new_items === false;
+
+const comparePendingFirst = (first: Order, second: Order) => {
+  const firstDone = isDeliveredListOrder(first) ? 1 : 0;
+  const secondDone = isDeliveredListOrder(second) ? 1 : 0;
+  return firstDone - secondDone;
+};
+
+const sortPendingFirst = (orders: Order[]) =>
+  [...orders].sort(comparePendingFirst);
+
 const Home = () => {
   const { user } = useAuthStore();
   const { setAssignedOrders, selectOrder, assignedOrders, currentDriver } =
@@ -104,13 +116,16 @@ const Home = () => {
 
   // Count currently available orders
   const availableOrdersCount = React.useMemo(() => {
-    const hasSchedulingWindow = assignedOrders.some((order) =>
+    const pendingOrders = assignedOrders.filter(
+      (order) => !isDeliveredListOrder(order),
+    );
+    const hasSchedulingWindow = pendingOrders.some((order) =>
       Boolean(order.start_time && order.end_time),
     );
     if (!hasSchedulingWindow) {
-      return assignedOrders.length;
+      return pendingOrders.length;
     }
-    return assignedOrders.filter((order) =>
+    return pendingOrders.filter((order) =>
       isOrderAvailableAt(order, currentMinuteOfDay),
     ).length;
   }, [assignedOrders, currentMinuteOfDay]);
@@ -118,7 +133,7 @@ const Home = () => {
   // Filter deliveries based on search query
   const filteredDeliveries = React.useMemo(() => {
     if (!searchQuery.trim()) {
-      return assignedOrders;
+      return sortPendingFirst(assignedOrders);
     }
 
     const query = searchQuery.toLowerCase().trim();
@@ -134,11 +149,15 @@ const Home = () => {
       "customer_email",
     ];
 
-    return assignedOrders.filter((order) =>
-      searchFields.some((field) => {
-        const value = order[field as keyof Order];
-        return typeof value === "string" && value.toLowerCase().includes(query);
-      }),
+    return sortPendingFirst(
+      assignedOrders.filter((order) =>
+        searchFields.some((field) => {
+          const value = order[field as keyof Order];
+          return (
+            typeof value === "string" && value.toLowerCase().includes(query)
+          );
+        }),
+      ),
     );
   }, [assignedOrders, searchQuery]);
 
@@ -190,12 +209,34 @@ const Home = () => {
           return;
         }
 
-        const deliveries = Array.isArray(result.data) ? result.data : [];
-        const transformedOrders: Order[] = deliveries.map((delivery) =>
-          mapDeliveryToOrder(delivery),
-        );
-
         const currentAssignedOrders = useOrderStore.getState().assignedOrders;
+        const locallyDeliveredOrders = new Map(
+          currentAssignedOrders
+            .filter((order) => isDeliveredListOrder(order))
+            .map((order) => [order.id, order]),
+        );
+        const deliveries = Array.isArray(result.data) ? result.data : [];
+        const transformedOrders: Order[] = sortPendingFirst(
+          deliveries.map((delivery) => {
+            const mappedOrder = mapDeliveryToOrder(delivery);
+            const locallyDeliveredOrder = locallyDeliveredOrders.get(
+              mappedOrder.id,
+            );
+            if (!locallyDeliveredOrder) return mappedOrder;
+
+            return {
+              ...mappedOrder,
+              status: "delivered",
+              has_new_items: false,
+              completed_at:
+                locallyDeliveredOrder.completed_at ?? mappedOrder.completed_at,
+              delivery: {
+                ...mappedOrder.delivery,
+                ...locallyDeliveredOrder.delivery,
+              },
+            };
+          }),
+        );
         if (
           preserveExistingOnEmpty &&
           transformedOrders.length === 0 &&

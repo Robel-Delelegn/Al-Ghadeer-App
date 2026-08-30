@@ -1,5 +1,6 @@
 import type { Order } from "@/types/order";
 import { resolveResourceUrl } from "@/utils/resources";
+import { UNIQUE_ITEM_HELD_PREFIX, UNIQUE_ITEM_KIND } from "@/utils/uniqueItems";
 
 export interface CustomerHeldBottle {
   fullBottleId: string;
@@ -177,18 +178,36 @@ const normalizeAsset = (value: unknown): CustomerHeldAsset | null => {
 
   const item = isRecord(record.item) ? record.item : null;
   const itemId =
-    pickText(record, ["itemId", "item_id", "assetId", "asset_id", "id"]) ||
-    pickText(item, ["itemId", "item_id", "assetId", "asset_id", "id"]);
+    pickText(record, [
+      "itemId",
+      "item_id",
+      "uniqueItemId",
+      "unique_item_id",
+      "assetId",
+      "asset_id",
+      "id",
+    ]) ||
+    pickText(item, [
+      "itemId",
+      "item_id",
+      "uniqueItemId",
+      "unique_item_id",
+      "assetId",
+      "asset_id",
+      "id",
+    ]);
   const label =
     pickText(record, ["label", "name", "title"]) ||
     pickText(item, ["label", "name", "title"]) ||
     itemId ||
-    "Asset";
+    "Unique Item";
   const serial =
     pickText(record, [
       "serial",
       "serialNumber",
       "serial_number",
+      "uniqueItemSerial",
+      "unique_item_serial",
       "assetSerial",
       "asset_serial",
     ]) ||
@@ -196,6 +215,8 @@ const normalizeAsset = (value: unknown): CustomerHeldAsset | null => {
       "serial",
       "serialNumber",
       "serial_number",
+      "uniqueItemSerial",
+      "unique_item_serial",
       "assetSerial",
       "asset_serial",
     ]) ||
@@ -221,11 +242,19 @@ const normalizeAsset = (value: unknown): CustomerHeldAsset | null => {
     serial,
     assetCategory:
       pickNullableText(record, [
+        "uniqueItemCategory",
+        "unique_item_category",
         "assetCategory",
         "asset_category",
         "category",
       ]) ??
-      pickNullableText(item, ["assetCategory", "asset_category", "category"]),
+      pickNullableText(item, [
+        "uniqueItemCategory",
+        "unique_item_category",
+        "assetCategory",
+        "asset_category",
+        "category",
+      ]),
   };
 };
 
@@ -245,6 +274,12 @@ export const normalizeCustomerHeldItems = (
       .map((entry) => normalizeBottle(entry))
       .filter((entry): entry is CustomerHeldBottle => entry !== null),
     assets: pickArray(record, [
+      "uniqueItems",
+      "unique_items",
+      "heldUniqueItems",
+      "held_unique_items",
+      "customerUniqueItems",
+      "customer_unique_items",
       "assets",
       "heldAssets",
       "held_assets",
@@ -277,7 +312,7 @@ const toHeldBottleRentItem = (bottle: CustomerHeldBottle): RentItem => {
 
 const toHeldAssetRentItem = (asset: CustomerHeldAsset): RentItem => {
   return {
-    id: `held:asset:${asset.itemId}:${asset.serial}`,
+    id: `${UNIQUE_ITEM_HELD_PREFIX}${asset.itemId}:${asset.serial}`,
     item_id: asset.itemId,
     name: asset.label,
     category: "deposit",
@@ -287,11 +322,12 @@ const toHeldAssetRentItem = (asset: CustomerHeldAsset): RentItem => {
     serial: asset.serial,
     in_truck: false,
     deposit_action: "deposit_return",
-    deposit_kind: "asset",
+    deposit_kind: UNIQUE_ITEM_KIND,
     action_source: "held_item",
     max_quantity: 1,
     unit: asset.unit,
     asset_category: asset.assetCategory,
+    unique_item_category: asset.assetCategory,
     description: asset.description,
   };
 };

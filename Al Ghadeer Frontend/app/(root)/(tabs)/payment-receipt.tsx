@@ -13,8 +13,15 @@ import {
   getOrderSelectedDeliveryActions,
   getRentItemDepositAction,
   getRentItemDepositKind,
+  isGenericItemDeposit,
 } from "@/utils/rentItems";
 import { getApiBaseUrl } from "@/utils/resources";
+import {
+  getSpecificUniqueItemCategory,
+  isGenericUniqueItemLabel,
+  isUniqueItemSignal,
+  UNIQUE_ITEM_KIND,
+} from "@/utils/uniqueItems";
 import { Ionicons } from "@expo/vector-icons";
 import * as FileSystem from "expo-file-system";
 import { useLocalSearchParams, useRouter } from "expo-router";
@@ -47,8 +54,9 @@ type DeliveryActionRow = {
   quantity: number;
   unitPrice: number;
   type: "deposit" | "deposit_return";
-  depositKind: "asset" | "bottle";
+  depositKind: "unique-item" | "bottle";
   isAsset: boolean;
+  isGenericItem?: boolean;
 };
 
 type SaleRow = {
@@ -174,6 +182,38 @@ const formatCurrency = (value: number): string => {
   return `AED ${value.toFixed(2)}`;
 };
 
+const toOptionalDisplayText = (value: unknown): string | null => {
+  if (typeof value === "string") {
+    const text = value.trim();
+    return text.length > 0 ? text : null;
+  }
+
+  if (typeof value === "number" && Number.isFinite(value)) {
+    return String(value);
+  }
+
+  return null;
+};
+
+const readCustomerTrn = (value: unknown): string | null => {
+  if (!value || typeof value !== "object") return null;
+  const record = value as Record<string, unknown>;
+  const keys = [
+    "trn",
+    "customerTrn",
+    "customer_trn",
+    "taxRegistrationNumber",
+    "tax_registration_number",
+  ];
+
+  for (const key of keys) {
+    const text = toOptionalDisplayText(record[key]);
+    if (text) return text;
+  }
+
+  return null;
+};
+
 const normalizeItemKind = (value: unknown): string => {
   return String(value || "")
     .trim()
@@ -182,25 +222,7 @@ const normalizeItemKind = (value: unknown): string => {
 };
 
 const isAssetKind = (...values: unknown[]): boolean => {
-  return values.some((value) => normalizeItemKind(value).includes("asset"));
-};
-
-const isGenericAssetLabel = (value: string): boolean => {
-  const normalized = normalizeItemKind(value);
-  return (
-    normalized === "asset" ||
-    normalized === "assets" ||
-    normalized === "assetitem" ||
-    normalized === "assetproduct"
-  );
-};
-
-const getSpecificAssetCategory = (...values: (string | null | undefined)[]) => {
-  for (const value of values) {
-    const label = typeof value === "string" ? value.trim() : "";
-    if (label && !isGenericAssetLabel(label)) return label;
-  }
-  return null;
+  return values.some((value) => isUniqueItemSignal(value));
 };
 
 const appendUniqueDisplayPart = (parts: string[], value?: string | null) => {
@@ -222,11 +244,11 @@ const getAssetReceiptParts = (item: ItemDisplayData) => {
     typeof item.assetCategory === "string" ? item.assetCategory.trim() : "";
 
   const primaryLabel =
-    assetCategory && !isGenericAssetLabel(assetCategory)
+    assetCategory && !isGenericUniqueItemLabel(assetCategory)
       ? assetCategory
-      : fallbackLabel && !isGenericAssetLabel(fallbackLabel)
+      : fallbackLabel && !isGenericUniqueItemLabel(fallbackLabel)
         ? fallbackLabel
-        : rawLabel || fallbackLabel || assetCategory || "Asset";
+        : rawLabel || fallbackLabel || assetCategory || "Unique Item";
   const itemId =
     item.isAsset && typeof item.itemId === "string" ? item.itemId.trim() : "";
   const normalizedItemId = normalizeItemKind(itemId);
@@ -247,7 +269,7 @@ const getAssetReceiptParts = (item: ItemDisplayData) => {
     appendUniqueDisplayPart(secondaryParts, fallbackLabel);
   }
   if (itemId && normalizedItemId !== normalizeItemKind(primaryLabel)) {
-    appendUniqueDisplayPart(secondaryParts, `Asset ID: ${itemId}`);
+    appendUniqueDisplayPart(secondaryParts, `Unique Item ID: ${itemId}`);
   }
 
   return {
@@ -306,7 +328,11 @@ const getFallbackRentItemLabel = (
     return name;
   }
 
-  const kind = getRentItemDepositKind(item) === "bottle" ? "Bottle" : "Asset";
+  const kind = isGenericItemDeposit(item)
+    ? "Item"
+    : getRentItemDepositKind(item) === "bottle"
+      ? "Bottle"
+      : "Unique Item";
   const action =
     getRentItemDepositAction(item) === "deposit" ? "Deposit" : "Return";
   return `${kind} ${action}`;
@@ -318,7 +344,7 @@ const addAssetDisplayLookup = (
   value: AssetDisplayLookupValue,
 ) => {
   const cleanLabel = typeof value.label === "string" ? value.label.trim() : "";
-  const cleanAssetCategory = getSpecificAssetCategory(value.assetCategory);
+  const cleanAssetCategory = getSpecificUniqueItemCategory(value.assetCategory);
 
   if (!cleanLabel && !cleanAssetCategory) return;
 
@@ -349,7 +375,11 @@ const getAssetDisplayLookup = (
 };
 
 const getDeliveryActionTypeLabel = (row: DeliveryActionRow): string => {
-  const kind = row.depositKind === "bottle" ? "Bottle" : "Asset";
+  const kind = row.isGenericItem
+    ? "Item"
+    : row.depositKind === "bottle"
+      ? "Bottle"
+      : "Unique Item";
   const action = row.type === "deposit" ? "Deposit" : "Return";
   return `${kind} ${action}`;
 };
@@ -546,6 +576,7 @@ const PaymentReceipt: React.FC = () => {
     cartItems,
     selectedPaymentMethod,
     lastConfirmPaymentResponse,
+    directSaleDraft,
     clearCart,
     setLastConfirmPaymentResponse,
   } = useOrderStore();
@@ -601,6 +632,20 @@ const PaymentReceipt: React.FC = () => {
     ],
   );
 
+  const customerTrn = useMemo(() => {
+    return (
+      confirmationDetail?.customer.trn ||
+      readCustomerTrn(orderDetail) ||
+      readCustomerTrn(orderDetail?.customer) ||
+      readCustomerTrn(directSaleDraft?.customerData) ||
+      null
+    );
+  }, [
+    confirmationDetail?.customer.trn,
+    directSaleDraft?.customerData,
+    orderDetail,
+  ]);
+
   const saleAssetDisplayLookup = useMemo(() => {
     const lookup = new Map<string, AssetDisplayLookupValue>();
 
@@ -639,7 +684,7 @@ const PaymentReceipt: React.FC = () => {
     ];
 
     rentItems.forEach((item) => {
-      if (getRentItemDepositKind(item) !== "asset") return;
+      if (getRentItemDepositKind(item) !== UNIQUE_ITEM_KIND) return;
       addAssetDisplayLookup(lookup, [item.item_id, item.id], {
         label: item.name,
         assetCategory: item.asset_category ?? null,
@@ -728,12 +773,28 @@ const PaymentReceipt: React.FC = () => {
   ]);
 
   const deliveryActionRows = useMemo<DeliveryActionRow[]>(() => {
+    const genericItemActionKeys = new Set<string>();
+    getOrderSelectedDeliveryActions(orderDetail)
+      .filter((item) => isGenericItemDeposit(item))
+      .forEach((item) => {
+        [item.id, item.item_id].forEach((key) => {
+          const cleanKey = typeof key === "string" ? key.trim() : "";
+          if (cleanKey) {
+            genericItemActionKeys.add(cleanKey);
+          }
+        });
+      });
+
     if (confirmationDetail) {
       return confirmationDetail.depositReturns.map((entry) => {
         const assetDisplay = getAssetDisplayLookup(
           deliveryActionAssetDisplayLookup,
           [entry.itemId, entry.id],
         );
+        const isGenericItem =
+          entry.id.startsWith("truck:item:") ||
+          genericItemActionKeys.has(entry.itemId) ||
+          genericItemActionKeys.has(entry.id);
 
         return {
           id: entry.id,
@@ -746,7 +807,8 @@ const PaymentReceipt: React.FC = () => {
           unitPrice: entry.unitPrice,
           type: entry.type,
           depositKind: entry.depositKind,
-          isAsset: entry.depositKind === "asset",
+          isAsset: entry.depositKind === UNIQUE_ITEM_KIND,
+          isGenericItem,
         };
       });
     }
@@ -770,14 +832,11 @@ const PaymentReceipt: React.FC = () => {
           unitPrice: typeof item.price === "number" ? item.price : 0,
           type: getRentItemDepositAction(item),
           depositKind: getRentItemDepositKind(item),
-          isAsset: getRentItemDepositKind(item) === "asset",
+          isAsset: getRentItemDepositKind(item) === UNIQUE_ITEM_KIND,
+          isGenericItem: isGenericItemDeposit(item),
         };
       });
-  }, [
-    confirmationDetail?.depositReturns,
-    deliveryActionAssetDisplayLookup,
-    orderDetail,
-  ]);
+  }, [confirmationDetail, deliveryActionAssetDisplayLookup, orderDetail]);
 
   const creditCollectionRows = useMemo<CreditCollectionRow[]>(() => {
     if (confirmationDetail?.creditCollections?.length) {
@@ -1569,7 +1628,7 @@ const PaymentReceipt: React.FC = () => {
             <div class="info-section">
               <div class="info-row">
                 <span class="info-label">Customer TRN:</span>
-                <span></span>
+                <span>${escapeHtml(customerTrn || "N/A")}</span>
               </div>
               <div class="info-row">
                 <span class="info-label">Payment Mode:</span>
@@ -1619,6 +1678,7 @@ const PaymentReceipt: React.FC = () => {
     invoiceDateLabel,
     invoiceTimeLabel,
     invoiceAdjustmentRows,
+    customerTrn,
     paymentMethodDisplay,
     receiptSubtotalWithoutVat,
     receiptTotalAmount,
@@ -1919,7 +1979,9 @@ const PaymentReceipt: React.FC = () => {
             <View style={styles.invoiceInfoSection}>
               <View style={styles.invoiceDetailRow}>
                 <Text style={styles.invoiceDetailLabel}>Customer TRN:</Text>
-                <Text style={styles.invoiceDetailValue}></Text>
+                <Text style={styles.invoiceDetailValue}>
+                  {customerTrn || "N/A"}
+                </Text>
               </View>
               <View style={styles.invoiceDetailRow}>
                 <Text style={styles.invoiceDetailLabel}>Payment Mode:</Text>

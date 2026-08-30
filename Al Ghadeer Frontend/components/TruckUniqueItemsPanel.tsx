@@ -2,7 +2,7 @@ import { Ionicons } from "@expo/vector-icons";
 import React from "react";
 import { Image, StyleSheet, Text, TouchableOpacity, View } from "react-native";
 
-export interface TruckAssetPanelItem {
+export interface TruckUniqueItemPanelItem {
   id: string;
   label: string;
   serial: string | null;
@@ -10,7 +10,7 @@ export interface TruckAssetPanelItem {
   imageUrl?: string | null;
 }
 
-const getAssetIconName = (category: string | null) => {
+const getUniqueItemIconName = (category: string | null) => {
   const normalized = (category || "").trim().toLowerCase();
   if (normalized.includes("bottle")) {
     return "water-outline" as const;
@@ -21,19 +21,19 @@ const getAssetIconName = (category: string | null) => {
   return "cube-outline" as const;
 };
 
-const getAssetCategoryLabel = (category: string | null) => {
+const getUniqueItemCategoryLabel = (category: string | null) => {
   const normalized = (category || "").trim();
-  return normalized.length > 0 ? normalized : "Transfer asset";
+  return normalized.length > 0 ? normalized : "Transfer unique item";
 };
 
-const TruckAssetsPanel = ({
+const TruckUniqueItemsPanel = ({
   assets,
   selectedAssetIds,
   onToggleAsset,
 }: {
-  assets: TruckAssetPanelItem[];
+  assets: TruckUniqueItemPanelItem[];
   selectedAssetIds?: Record<string, boolean>;
-  onToggleAsset?: (asset: TruckAssetPanelItem) => void;
+  onToggleAsset?: (asset: TruckUniqueItemPanelItem) => void;
 }) => {
   const isInteractive = typeof onToggleAsset === "function";
 
@@ -42,7 +42,7 @@ const TruckAssetsPanel = ({
       <View style={styles.headerRow}>
         <View style={styles.headerBadge}>
           <Ionicons name="cube-outline" size={14} color="#0F172A" />
-          <Text style={styles.headerTitle}>Assets To Transfer</Text>
+          <Text style={styles.headerTitle}>Unique Items To Transfer</Text>
         </View>
         <View style={styles.countBadge}>
           <Text style={styles.countText}>{assets.length}</Text>
@@ -51,15 +51,15 @@ const TruckAssetsPanel = ({
 
       <Text style={styles.subtitle}>
         {isInteractive
-          ? "Serial-tracked assets available for customer transfer. They are not billed or taxed, and once confirmed they are deducted from truck stock."
-          : "Serial-tracked assets currently loaded on the truck."}
+          ? "Unique items available for customer transfer. They are not billed or taxed, and once confirmed they are deducted from truck stock."
+          : "Unique items currently loaded on the truck."}
       </Text>
 
       {assets.length === 0 ? (
         <View style={styles.emptyState}>
           <Ionicons name="cube-outline" size={18} color="#94A3B8" />
           <Text style={styles.emptyText}>
-            No serial-tracked assets are loaded right now.
+            No unique items are loaded right now.
           </Text>
         </View>
       ) : (
@@ -75,7 +75,7 @@ const TruckAssetsPanel = ({
                   />
                 ) : (
                   <Ionicons
-                    name={getAssetIconName(asset.category)}
+                    name={getUniqueItemIconName(asset.category)}
                     size={18}
                     color="#0369A1"
                   />
@@ -128,13 +128,13 @@ const TruckAssetsPanel = ({
                 </View>
 
                 <Text style={styles.assetCategory}>
-                  {getAssetCategoryLabel(asset.category)}
+                  {getUniqueItemCategoryLabel(asset.category)}
                 </Text>
 
                 <View style={styles.assetSerialRow}>
                   <Ionicons name="qr-code-outline" size={14} color="#64748B" />
                   <Text style={styles.assetSerial}>
-                    Serial: {asset.serial || "Unspecified"}
+                    Serial: {asset.serial || "Not required"}
                   </Text>
                 </View>
               </View>
@@ -317,4 +317,5 @@ const styles = StyleSheet.create({
   },
 });
 
-export default TruckAssetsPanel;
+export type TruckAssetPanelItem = TruckUniqueItemPanelItem;
+export default TruckUniqueItemsPanel;
