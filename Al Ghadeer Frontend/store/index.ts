@@ -95,6 +95,7 @@ export const useExpenseStore = create<ExpenseStore>()(
 // Cart Item for product management
 interface CartItem {
   id: string;
+  sale_item_id?: string;
   item_id?: string;
   item_type?: DeliveryProductItemType;
   name: string;
@@ -106,6 +107,7 @@ interface CartItem {
   uniqueItemCategory?: string | null;
   assetCategory?: string | null;
   loaded_quantity?: number;
+  remark?: string;
   type?: "5L" | "10L" | "300ml" | "1L" | "20L" | "dispenser"; // Optional - not used in UI
 }
 
@@ -166,6 +168,7 @@ const toCartItem = (
 ): CartItem => ({
   ...previous,
   id: product.id,
+  sale_item_id: product.sale_item_id,
   item_id: product.item_id,
   item_type: product.item_type,
   name: product.name,
@@ -211,6 +214,7 @@ export type DirectSaleDraftPaymentMethod = SelectedPaymentMethod;
 
 export interface DirectSaleDraftProduct {
   id: string;
+  saleItemId?: string;
   type: "retail" | "refill" | "unique-items" | "assets" | "other";
   itemId: string;
   assetId?: string;
@@ -228,6 +232,7 @@ export interface DirectSaleDraftProduct {
   badge?: string;
   loaded_quantity?: number | string;
   available_stock?: number | string;
+  remark?: string;
 }
 
 export interface DirectSaleDraftSiteSubscription {
@@ -277,6 +282,7 @@ export interface DirectSaleDraftLocation {
 export interface DirectSaleDraftAssetDraft {
   selected: boolean;
   price: string;
+  forRepair?: boolean;
 }
 
 export interface DirectSaleDraft {
@@ -294,8 +300,10 @@ export interface DirectSaleDraft {
   assetDrafts: Record<string, DirectSaleDraftAssetDraft>;
   bottleDepositPrices: Record<string, string>;
   bottleDepositQuantities: Record<string, number>;
+  bottleDepositForRepair: Record<string, boolean>;
   bottleReturnPrices: Record<string, string>;
   bottleReturnQuantities: Record<string, number>;
+  bottleReturnForRepair: Record<string, boolean>;
   creditCollectionAmount: string;
   creditCollectionRemark: string;
 }
@@ -357,6 +365,7 @@ interface OrderStore {
   addToCart: (product: Product, quantity: number) => void;
   removeFromCart: (productId: string) => void;
   updateCartItemQuantity: (productId: string, quantity: number) => void;
+  updateCartItemRemark: (productId: string, remark: string) => void;
   clearCart: () => void;
   getAvailableStock: (productId: string) => number; // Get available stock for a product (loaded_quantity - cart quantity)
 
@@ -617,6 +626,14 @@ export const useOrderStore = create<OrderStore>()(
             ),
           };
         });
+      },
+
+      updateCartItemRemark: (productId: string, remark: string) => {
+        set((state) => ({
+          cartItems: state.cartItems.map((item) =>
+            item.id === productId ? { ...item, remark } : item,
+          ),
+        }));
       },
 
       clearCart: () => {

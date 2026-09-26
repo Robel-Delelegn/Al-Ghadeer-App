@@ -34,6 +34,7 @@ const IP_ADDRESS = getApiBaseUrl();
 
 interface ServerProduct {
   id: string;
+  saleItemId: string;
   itemId: string;
   assetDisplayId?: string | null;
   assetDisplayLabel?: string | null;
@@ -242,6 +243,7 @@ const normalizeProductRecord = (
 
   return {
     id,
+    saleItemId: id,
     itemId,
     type,
     name,
@@ -325,6 +327,8 @@ const buildSellableProducts = (
     return [
       {
         id: `${UNIQUE_ITEM_SALE_PREFIX}${asset.id}:${asset.serial || asset.itemId}`,
+        saleItemId:
+          metadata?.saleItemId || `${UNIQUE_ITEMS_GROUP}:${asset.itemId}`,
         itemId: asset.itemId,
         assetDisplayId,
         assetDisplayLabel: asset.label || metadata?.name || null,
@@ -633,6 +637,7 @@ const ProductList: React.FC = () => {
         const storeProducts: Product[] = sellableProducts.map(
           (serverProduct) => ({
             id: serverProduct.id,
+            sale_item_id: serverProduct.saleItemId,
             item_id: serverProduct.itemId,
             item_type: getProductItemType(serverProduct),
             name: serverProduct.name,
@@ -709,7 +714,7 @@ const ProductList: React.FC = () => {
       // Use utility function to get quantity (works with both array and Record formats)
       // Match by both name AND category to avoid mixing retail-items and refill items
       const initialQty = currentOrder
-        ? getProductQuantity(currentOrder, p.name, p.category, p.itemId)
+        ? getProductQuantity(currentOrder, p.name, p.category, p.itemId, p.type)
         : 0;
       record[p.id] = initialQty;
     });
@@ -783,10 +788,12 @@ const ProductList: React.FC = () => {
             currentOrder,
             serverProduct.name,
             serverProduct.itemId,
+            serverProduct.type,
           )
         : undefined;
       return {
         id: serverProduct.id,
+        sale_item_id: serverProduct.saleItemId,
         item_id: serverProduct.itemId,
         item_type: getProductItemType(serverProduct),
         name: serverProduct.name,
@@ -979,6 +986,7 @@ const ProductList: React.FC = () => {
                         product.name,
                         product.category,
                         product.itemId,
+                        product.type,
                       )
                     : 0;
                   return (
@@ -1028,6 +1036,7 @@ const ProductList: React.FC = () => {
                         product.name,
                         product.category,
                         product.itemId,
+                        product.type,
                       )
                     : 0;
                   return (
@@ -1073,6 +1082,7 @@ const ProductList: React.FC = () => {
                         product.name,
                         product.category,
                         product.itemId,
+                        product.type,
                       )
                     : 0;
                   return (
@@ -1120,6 +1130,7 @@ const ProductList: React.FC = () => {
                         product.name,
                         product.category,
                         product.itemId,
+                        product.type,
                       )
                     : 0;
                   return (

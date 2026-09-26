@@ -79,6 +79,7 @@ const Checkout: React.FC = () => {
     selectedPaymentMethod,
     setPaymentMethod,
     setAssignedOrders,
+    updateCartItemRemark,
   } = useOrderStore();
 
   const orderDetail = assignedOrders.find(
@@ -88,6 +89,9 @@ const Checkout: React.FC = () => {
     React.useState("");
   const [creditCollectionRemark, setCreditCollectionRemark] =
     React.useState("");
+  const [expandedRemarkKey, setExpandedRemarkKey] = React.useState<
+    string | null
+  >(null);
   const selectedDeliveryActions = useMemo(
     () => getOrderSelectedDeliveryActions(orderDetail),
     [orderDetail],
@@ -132,6 +136,42 @@ const Checkout: React.FC = () => {
       params: { backTo: "checkout" },
     });
   }, [router]);
+
+  const handleToggleRepair = useCallback(
+    (itemId: string) => {
+      if (!orderDetail) return;
+      const nextActions = selectedDeliveryActions.map((item) =>
+        item.id === itemId
+          ? { ...item, for_repair: item.for_repair !== true }
+          : item,
+      );
+      setAssignedOrders(
+        assignedOrders.map((order) =>
+          order.id === orderDetail.id
+            ? { ...order, draft_delivery_actions: nextActions }
+            : order,
+        ),
+      );
+    },
+    [assignedOrders, orderDetail, selectedDeliveryActions, setAssignedOrders],
+  );
+
+  const handleChangeDepositRemark = useCallback(
+    (itemId: string, remark: string) => {
+      if (!orderDetail) return;
+      const nextActions = selectedDeliveryActions.map((item) =>
+        item.id === itemId ? { ...item, remark } : item,
+      );
+      setAssignedOrders(
+        assignedOrders.map((order) =>
+          order.id === orderDetail.id
+            ? { ...order, draft_delivery_actions: nextActions }
+            : order,
+        ),
+      );
+    },
+    [assignedOrders, orderDetail, selectedDeliveryActions, setAssignedOrders],
+  );
 
   const parsedCreditCollectionAmount = useMemo(
     () => parseMoneyDraft(creditCollectionAmount),
@@ -405,6 +445,54 @@ const Checkout: React.FC = () => {
                       </Text>
                     </View>
                   </View>
+                  <TouchableOpacity
+                    style={styles.remarkToggle}
+                    onPress={() =>
+                      setExpandedRemarkKey((current) =>
+                        current === `sale:${item.id}`
+                          ? null
+                          : `sale:${item.id}`,
+                      )
+                    }
+                    activeOpacity={0.75}
+                  >
+                    <Ionicons
+                      name={item.remark ? "chatbubble" : "chatbubble-outline"}
+                      size={14}
+                      color={item.remark ? "#2563EB" : "#64748B"}
+                    />
+                    <Text
+                      style={[
+                        styles.remarkToggleText,
+                        item.remark && styles.remarkToggleTextActive,
+                      ]}
+                    >
+                      {item.remark ? "Remark added" : "Add remark"}
+                    </Text>
+                    <Ionicons
+                      name={
+                        expandedRemarkKey === `sale:${item.id}`
+                          ? "chevron-up"
+                          : "chevron-down"
+                      }
+                      size={14}
+                      color="#94A3B8"
+                    />
+                  </TouchableOpacity>
+                  {expandedRemarkKey === `sale:${item.id}` ? (
+                    <TextInput
+                      style={styles.itemRemarkInput}
+                      value={item.remark || ""}
+                      onChangeText={(value) =>
+                        updateCartItemRemark(item.id, value)
+                      }
+                      placeholder="Add a note about this item"
+                      placeholderTextColor="#94A3B8"
+                      multiline
+                      maxLength={2000}
+                      autoFocus
+                    />
+                  ) : null}
                   {index < cartItems.length - 1 && (
                     <View style={styles.itemDivider} />
                   )}
@@ -472,6 +560,75 @@ const Checkout: React.FC = () => {
                           AED {(item.price * item.quantity).toFixed(2)}
                         </Text>
                       </View>
+                      <TouchableOpacity
+                        style={styles.repairToggle}
+                        onPress={() => handleToggleRepair(item.id)}
+                        activeOpacity={0.75}
+                      >
+                        <Ionicons
+                          name={item.for_repair ? "checkbox" : "square-outline"}
+                          size={17}
+                          color={item.for_repair ? "#B45309" : "#94A3B8"}
+                        />
+                        <Text
+                          style={[
+                            styles.repairToggleText,
+                            item.for_repair && styles.repairToggleTextActive,
+                          ]}
+                        >
+                          For repair
+                        </Text>
+                      </TouchableOpacity>
+                      <TouchableOpacity
+                        style={styles.remarkToggle}
+                        onPress={() =>
+                          setExpandedRemarkKey((current) =>
+                            current === `movement:${item.id}`
+                              ? null
+                              : `movement:${item.id}`,
+                          )
+                        }
+                        activeOpacity={0.75}
+                      >
+                        <Ionicons
+                          name={
+                            item.remark ? "chatbubble" : "chatbubble-outline"
+                          }
+                          size={14}
+                          color={item.remark ? "#2563EB" : "#64748B"}
+                        />
+                        <Text
+                          style={[
+                            styles.remarkToggleText,
+                            item.remark && styles.remarkToggleTextActive,
+                          ]}
+                        >
+                          {item.remark ? "Remark added" : "Add remark"}
+                        </Text>
+                        <Ionicons
+                          name={
+                            expandedRemarkKey === `movement:${item.id}`
+                              ? "chevron-up"
+                              : "chevron-down"
+                          }
+                          size={14}
+                          color="#94A3B8"
+                        />
+                      </TouchableOpacity>
+                      {expandedRemarkKey === `movement:${item.id}` ? (
+                        <TextInput
+                          style={styles.itemRemarkInput}
+                          value={item.remark || ""}
+                          onChangeText={(value) =>
+                            handleChangeDepositRemark(item.id, value)
+                          }
+                          placeholder="Add a note about this movement"
+                          placeholderTextColor="#94A3B8"
+                          multiline
+                          maxLength={2000}
+                          autoFocus
+                        />
+                      ) : null}
                       {index <
                         selectedDeliveryActions.filter((item) => item.in_truck)
                           .length -
@@ -1022,6 +1179,50 @@ const styles = StyleSheet.create({
     height: 1,
     backgroundColor: "#F3F4F6",
     marginLeft: 48,
+  },
+  repairToggle: {
+    flexDirection: "row",
+    alignItems: "center",
+    alignSelf: "flex-end",
+    gap: 5,
+    marginTop: 4,
+  },
+  repairToggleText: {
+    fontSize: 11,
+    color: "#64748B",
+  },
+  repairToggleTextActive: {
+    color: "#92400E",
+    fontWeight: "700",
+  },
+  remarkToggle: {
+    flexDirection: "row",
+    alignItems: "center",
+    alignSelf: "flex-end",
+    gap: 5,
+    marginTop: 5,
+    paddingVertical: 2,
+  },
+  remarkToggleText: {
+    fontSize: 11,
+    color: "#64748B",
+    fontWeight: "600",
+  },
+  remarkToggleTextActive: {
+    color: "#2563EB",
+  },
+  itemRemarkInput: {
+    minHeight: 34,
+    borderWidth: 1,
+    borderColor: "#E2E8F0",
+    borderRadius: 8,
+    paddingHorizontal: 9,
+    paddingVertical: 7,
+    marginTop: 5,
+    marginBottom: 5,
+    fontSize: 12,
+    color: "#334155",
+    backgroundColor: "#FFFFFF",
   },
   itemsList: {
     gap: 0,

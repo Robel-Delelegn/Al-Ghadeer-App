@@ -22,6 +22,8 @@ import {
   getRentItemDisplayLabel,
   getRentItemQuantityLimit,
   isGenericItemDeposit,
+  isGenericItemMovement,
+  isGenericItemReturn,
 } from "@/utils/rentItems";
 import {
   extractTruckUniqueItems,
@@ -353,6 +355,8 @@ const MovementItem = ({
   showPriceInput = false,
   priceDraft,
   onChangePrice,
+  forRepair = false,
+  onToggleForRepair,
 }: {
   item: RentItem;
   quantity: number;
@@ -360,6 +364,8 @@ const MovementItem = ({
   showPriceInput?: boolean;
   priceDraft?: string;
   onChangePrice?: (itemId: string, value: string) => void;
+  forRepair?: boolean;
+  onToggleForRepair?: (itemId: string) => void;
 }) => {
   const depositKind = getRentItemDepositKind(item);
   const maxQuantity = getRentItemQuantityLimit(item);
@@ -498,6 +504,12 @@ const MovementItem = ({
           </View>
         </View>
       ) : null}
+      {onToggleForRepair ? (
+        <RepairToggle
+          enabled={forRepair}
+          onPress={() => onToggleForRepair(item.id)}
+        />
+      ) : null}
     </View>
   );
 };
@@ -508,12 +520,16 @@ const BottleDepositItem = ({
   onChangeQuantity,
   priceDraft,
   onChangePrice,
+  forRepair = false,
+  onToggleForRepair,
 }: {
   bottle: BottleDepositOption;
   quantity: number;
   onChangeQuantity: (bottleKey: string, delta: number) => void;
   priceDraft: string;
   onChangePrice: (bottleKey: string, value: string) => void;
+  forRepair?: boolean;
+  onToggleForRepair?: (bottleKey: string) => void;
 }) => {
   const isBottle = bottle.kind === "bottle";
   const detailParts: string[] = [];
@@ -620,9 +636,43 @@ const BottleDepositItem = ({
           />
         </View>
       </View>
+      {onToggleForRepair ? (
+        <RepairToggle
+          enabled={forRepair}
+          onPress={() => onToggleForRepair(bottle.key)}
+        />
+      ) : null}
     </View>
   );
 };
+
+const RepairToggle = ({
+  enabled,
+  onPress,
+}: {
+  enabled: boolean;
+  onPress: () => void;
+}) => (
+  <TouchableOpacity
+    style={styles.repairToggle}
+    onPress={onPress}
+    activeOpacity={0.75}
+  >
+    <Ionicons
+      name={enabled ? "checkbox" : "square-outline"}
+      size={17}
+      color={enabled ? "#B45309" : "#94A3B8"}
+    />
+    <Text
+      style={[
+        styles.repairToggleText,
+        enabled && styles.repairToggleTextActive,
+      ]}
+    >
+      For repair
+    </Text>
+  </TouchableOpacity>
+);
 
 const EmptySection = ({
   icon,
@@ -650,6 +700,7 @@ const BottlesUniqueItems = () => {
   const [truckAssets, setTruckAssets] = useState<TruckUniqueItem[]>([]);
   const [heldItems, setHeldItems] = useState<CustomerHeldItems>({
     bottles: [],
+    otherRetailItems: [],
     assets: [],
   });
   const [loading, setLoading] = useState(true);
@@ -675,7 +726,7 @@ const BottlesUniqueItems = () => {
       setApiError(null);
       setHeldItemsError(null);
       setTruckLoadError(null);
-      setHeldItems({ bottles: [], assets: [] });
+      setHeldItems({ bottles: [], otherRetailItems: [], assets: [] });
       setTruckBulkItems([]);
       setTruckAssets([]);
 
@@ -742,27 +793,27 @@ const BottlesUniqueItems = () => {
       }
 
       if (!heldItemsResponse) {
-        setHeldItems({ bottles: [], assets: [] });
+        setHeldItems({ bottles: [], otherRetailItems: [], assets: [] });
       } else {
         const heldResult =
           await parseApiResponseWithSoftError<unknown>(heldItemsResponse);
         if (!heldResult.ok) {
-          setHeldItems({ bottles: [], assets: [] });
+          setHeldItems({ bottles: [], otherRetailItems: [], assets: [] });
           setHeldItemsError(heldResult.error);
         } else {
           setHeldItems(normalizeCustomerHeldItems(heldResult.data));
         }
       }
     } catch (error) {
-      console.error("Error fetching bottle and unique item data:", error);
+      console.error("Error fetching deposit and return data:", error);
       setProducts([]);
       setTruckBulkItems([]);
       setTruckAssets([]);
-      setHeldItems({ bottles: [], assets: [] });
+      setHeldItems({ bottles: [], otherRetailItems: [], assets: [] });
       setApiError(
         error instanceof Error
           ? error.message
-          : "Failed to load bottle and unique item data.",
+          : "Failed to load deposit and return data.",
       );
     } finally {
       setLoading(false);
@@ -809,7 +860,7 @@ const BottlesUniqueItems = () => {
           truckAssets,
         ),
         heldItems,
-      ),
+      ).filter((item) => !isGenericItemMovement(item)),
     [
       currentOrder?.rent_items,
       heldItems,
@@ -837,6 +888,9 @@ const BottlesUniqueItems = () => {
   const [rentItemDepositPrices, setRentItemDepositPrices] = useState<
     Record<string, string>
   >({});
+  const [rentItemForRepair, setRentItemForRepair] = useState<
+    Record<string, boolean>
+  >({});
   const [bottleDepositQuantities, setBottleDepositQuantities] = useState<
     Record<string, number>
   >({});
@@ -855,6 +909,17 @@ const BottlesUniqueItems = () => {
       initial[item.id] = Math.max(0, selectedItem?.quantity || 0);
     });
     setRentItemQuantities(initial);
+    const repairFlags: Record<string, boolean> = {};
+    selectableRentItems.forEach((item) => {
+      const selectedItem =
+        selectedDeliveryActionMap.get(item.id) ||
+        (item.item_id
+          ? selectedDeliveryActionMap.get(item.item_id)
+          : undefined);
+      repairFlags[item.id] =
+        selectedItem?.for_repair === true || item.for_repair === true;
+    });
+    setRentItemForRepair(repairFlags);
   }, [selectableRentItems, selectedDeliveryActionMap]);
 
   useEffect(() => {
@@ -896,6 +961,13 @@ const BottlesUniqueItems = () => {
     },
     [selectableRentItems],
   );
+
+  const handleToggleRentItemRepair = useCallback((itemId: string) => {
+    setRentItemForRepair((previous) => ({
+      ...previous,
+      [itemId]: previous[itemId] !== true,
+    }));
+  }, []);
 
   const handleChangeRentItemDepositPrice = useCallback(
     (itemId: string, value: string) => {
@@ -941,29 +1013,14 @@ const BottlesUniqueItems = () => {
 
       const isBottleDeposit =
         bulkItem.isRefillableBottle || Boolean(refillProduct);
-      const matchedProductCategory = normalizeCategory(
-        matchedProduct?.category,
-      );
-      const matchedProductType = normalizeCategory(matchedProduct?.type);
-      const bulkCategory = normalizeCategory(bulkItem.category);
-      const isAssetBulkItem =
-        matchedProduct?.type === UNIQUE_ITEMS_GROUP ||
-        isUniqueItemSignal(matchedProductType) ||
-        isUniqueItemSignal(matchedProductCategory) ||
-        isUniqueItemSignal(bulkCategory);
-
-      if (!isBottleDeposit && isAssetBulkItem) {
+      if (!isBottleDeposit) {
         return options;
       }
 
       options.push({
-        key: `truck:${isBottleDeposit ? "bottle" : "item"}:${bulkItem.id}`,
-        itemId: isBottleDeposit
-          ? bulkItem.emptyBottleId || bulkItem.itemId || bulkItem.id
-          : bulkItem.itemId || bulkItem.id,
-        label: isBottleDeposit
-          ? toEmptyRefillLabel(refillProduct?.name || bulkItem.label)
-          : matchedProduct?.name || bulkItem.label,
+        key: `truck:bottle:${bulkItem.id}`,
+        itemId: bulkItem.emptyBottleId || bulkItem.itemId || bulkItem.id,
+        label: toEmptyRefillLabel(refillProduct?.name || bulkItem.label),
         description: matchedProduct?.description ?? bulkItem.description,
         category: matchedProduct?.category ?? bulkItem.category,
         unit: matchedProduct?.unit ?? refillProduct?.unit ?? bulkItem.unit,
@@ -972,7 +1029,7 @@ const BottlesUniqueItems = () => {
           resolveResourceUrl(refillProduct?.image_url) ||
           resolveResourceUrl(bulkItem.image_url),
         availableQuantity,
-        kind: isBottleDeposit ? "bottle" : "item",
+        kind: "bottle",
       });
 
       return options;
@@ -981,11 +1038,6 @@ const BottlesUniqueItems = () => {
 
   const refillBottleDepositOptions = useMemo(
     () => bottleDepositOptions.filter((item) => item.kind === "bottle"),
-    [bottleDepositOptions],
-  );
-
-  const truckItemDepositOptions = useMemo(
-    () => bottleDepositOptions.filter((item) => item.kind === "item"),
     [bottleDepositOptions],
   );
 
@@ -1074,8 +1126,14 @@ const BottlesUniqueItems = () => {
       selectableRentItems.filter(
         (item) =>
           getRentItemDepositAction(item) === "deposit_return" &&
-          getRentItemDepositKind(item) === "bottle",
+          getRentItemDepositKind(item) === "bottle" &&
+          !isGenericItemReturn(item),
       ),
+    [selectableRentItems],
+  );
+
+  const heldRetailReturnItems = useMemo(
+    () => selectableRentItems.filter((item) => isGenericItemReturn(item)),
     [selectableRentItems],
   );
 
@@ -1113,10 +1171,16 @@ const BottlesUniqueItems = () => {
             ),
             quantity,
             in_truck: true,
+            for_repair: rentItemForRepair[item.id] === true,
           },
         ];
       }),
-    [rentItemDepositPrices, rentItemQuantities, selectableRentItems],
+    [
+      rentItemDepositPrices,
+      rentItemForRepair,
+      rentItemQuantities,
+      selectableRentItems,
+    ],
   );
 
   const selectedBottleDepositItems = useMemo<RentItem[]>(
@@ -1151,10 +1215,16 @@ const BottlesUniqueItems = () => {
                 : UNIQUE_ITEM_MOVEMENT_TO_CUSTOMER,
             other_action_item_type:
               bottle.kind === "bottle" ? ("bottle" as const) : UNIQUE_ITEM_KIND,
+            for_repair: rentItemForRepair[bottle.key] === true,
           },
         ];
       }),
-    [bottleDepositOptions, bottleDepositPrices, bottleDepositQuantities],
+    [
+      bottleDepositOptions,
+      bottleDepositPrices,
+      bottleDepositQuantities,
+      rentItemForRepair,
+    ],
   );
 
   const movementSummary = useMemo(() => {
@@ -1165,6 +1235,7 @@ const BottlesUniqueItems = () => {
       );
 
     const collectedBottles = countSelected(bottleReturnItems);
+    const collectedItems = countSelected(heldRetailReturnItems);
     const collectedAssets = countSelected(heldAssetReturnItems);
     const leftBottles = selectedBottleDepositItems
       .filter((item) => !isGenericItemDeposit(item))
@@ -1175,12 +1246,14 @@ const BottlesUniqueItems = () => {
     const leftAssets = countSelected(depositAssetItems);
     return {
       collectedBottles,
+      collectedItems,
       collectedAssets,
       leftBottles,
       leftItems,
       leftAssets,
       totalSelected:
         collectedBottles +
+        collectedItems +
         collectedAssets +
         leftBottles +
         leftItems +
@@ -1190,6 +1263,7 @@ const BottlesUniqueItems = () => {
     bottleReturnItems,
     depositAssetItems,
     heldAssetReturnItems,
+    heldRetailReturnItems,
     rentItemQuantities,
     selectedBottleDepositItems,
   ]);
@@ -1197,7 +1271,11 @@ const BottlesUniqueItems = () => {
   const handleCollectAllReturns = useCallback(() => {
     setRentItemQuantities((previousQuantities) => {
       const nextQuantities = { ...previousQuantities };
-      [...bottleReturnItems, ...heldAssetReturnItems].forEach((item) => {
+      [
+        ...bottleReturnItems,
+        ...heldRetailReturnItems,
+        ...heldAssetReturnItems,
+      ].forEach((item) => {
         const maxQuantity = getRentItemQuantityLimit(item);
         nextQuantities[item.id] = Number.isFinite(maxQuantity)
           ? maxQuantity
@@ -1205,7 +1283,7 @@ const BottlesUniqueItems = () => {
       });
       return nextQuantities;
     });
-  }, [bottleReturnItems, heldAssetReturnItems]);
+  }, [bottleReturnItems, heldAssetReturnItems, heldRetailReturnItems]);
 
   const handleContinue = useCallback(() => {
     if (!currentOrder) {
@@ -1267,9 +1345,7 @@ const BottlesUniqueItems = () => {
         <View style={styles.loadingBox}>
           <ActivityIndicator size="large" color="#1E40AF" />
         </View>
-        <Text style={styles.loadingText}>
-          Loading bottles and unique items...
-        </Text>
+        <Text style={styles.loadingText}>Loading deposits and returns...</Text>
       </View>
     );
   }
@@ -1295,11 +1371,15 @@ const BottlesUniqueItems = () => {
   }
 
   const returnsAvailable =
-    bottleReturnItems.length + heldAssetReturnItems.length;
+    bottleReturnItems.length +
+    heldRetailReturnItems.length +
+    heldAssetReturnItems.length;
   const bottomNavClearance = Math.max(insets.bottom, 12) + 92;
   const footerScrollClearance = bottomNavClearance + 100;
   const collectedCount =
-    movementSummary.collectedBottles + movementSummary.collectedAssets;
+    movementSummary.collectedBottles +
+    movementSummary.collectedItems +
+    movementSummary.collectedAssets;
   const leftCount =
     movementSummary.leftBottles +
     movementSummary.leftItems +
@@ -1412,6 +1492,8 @@ const BottlesUniqueItems = () => {
                       rentItemDepositPrices[item.id] ?? toMoneyDraft(item.price)
                     }
                     onChangePrice={handleChangeRentItemDepositPrice}
+                    forRepair={rentItemForRepair[item.id] === true}
+                    onToggleForRepair={handleToggleRentItemRepair}
                   />
                 ))}
               </View>
@@ -1438,6 +1520,8 @@ const BottlesUniqueItems = () => {
                       rentItemDepositPrices[item.id] ?? toMoneyDraft(item.price)
                     }
                     onChangePrice={handleChangeRentItemDepositPrice}
+                    forRepair={rentItemForRepair[item.id] === true}
+                    onToggleForRepair={handleToggleRentItemRepair}
                   />
                 ))}
               </View>
@@ -1498,6 +1582,8 @@ const BottlesUniqueItems = () => {
                     onChangeQuantity={handleChangeBottleDepositQuantity}
                     priceDraft={bottleDepositPrices[bottle.key] ?? "0.00"}
                     onChangePrice={handleChangeBottleDepositPrice}
+                    forRepair={rentItemForRepair[bottle.key] === true}
+                    onToggleForRepair={handleToggleRentItemRepair}
                   />
                 ))}
               </View>
@@ -1505,32 +1591,6 @@ const BottlesUniqueItems = () => {
               <EmptySection
                 icon="water-outline"
                 text="No empty bottle deposits available."
-              />
-            )}
-          </View>
-
-          <View style={styles.subsection}>
-            <Text style={styles.subsectionTitle}>Item Deposits</Text>
-            {truckItemDepositOptions.length > 0 ? (
-              <View style={styles.itemList}>
-                {truckItemDepositOptions.map((item) => (
-                  <BottleDepositItem
-                    key={item.key}
-                    bottle={item}
-                    quantity={Math.max(
-                      0,
-                      bottleDepositQuantities[item.key] ?? 0,
-                    )}
-                    onChangeQuantity={handleChangeBottleDepositQuantity}
-                    priceDraft={bottleDepositPrices[item.key] ?? "0.00"}
-                    onChangePrice={handleChangeBottleDepositPrice}
-                  />
-                ))}
-              </View>
-            ) : (
-              <EmptySection
-                icon="cube-outline"
-                text="No retail item deposits available from the truck."
               />
             )}
           </View>
@@ -1550,6 +1610,8 @@ const BottlesUniqueItems = () => {
                       rentItemDepositPrices[item.id] ?? toMoneyDraft(item.price)
                     }
                     onChangePrice={handleChangeRentItemDepositPrice}
+                    forRepair={rentItemForRepair[item.id] === true}
+                    onToggleForRepair={handleToggleRentItemRepair}
                   />
                 ))}
               </View>
@@ -1951,6 +2013,22 @@ const styles = StyleSheet.create({
     paddingTop: 9,
     borderTopWidth: 1,
     borderTopColor: "#E2E8F0",
+  },
+  repairToggle: {
+    display: "none",
+    flexDirection: "row",
+    alignItems: "center",
+    alignSelf: "flex-end",
+    gap: 5,
+    marginTop: 8,
+  },
+  repairToggleText: {
+    fontSize: 11,
+    color: "#64748B",
+  },
+  repairToggleTextActive: {
+    color: "#92400E",
+    fontWeight: "700",
   },
   depositPriceCopy: {
     flex: 1,

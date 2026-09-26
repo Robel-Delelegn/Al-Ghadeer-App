@@ -2,6 +2,10 @@ import ApiErrorText from "@/components/ApiErrorText";
 import { useLocationStore, useOrderStore } from "@/store/index";
 import { authenticatedFetch, useAuthStore } from "@/store/auth";
 import { parseApiResponseWithSoftError } from "@/utils/api";
+import {
+  normalizeCustomerHeldItems,
+  type CustomerHeldItems,
+} from "@/utils/customerHeldItems";
 import { parseDeliveryTasks } from "@/utils/deliveries";
 import { getDriverRequestId } from "@/utils/driverIdentity";
 import { getTotalItemsCount, normalizeOrderProducts } from "@/utils/orderUtils";
@@ -77,29 +81,6 @@ interface CustomerSite {
   flatNo: string | null;
   deliveryInstructions: string | null;
   routeId: string | null;
-}
-
-interface HeldBottle {
-  itemId: string;
-  label: string;
-  description: string | null;
-  image_url: string | null;
-  quantity: number;
-  unit: string | null;
-}
-
-interface HeldUniqueItem {
-  itemId: string;
-  label: string;
-  description: string | null;
-  image_url: string | null;
-  serial: string;
-  assetCategory: string | null;
-}
-
-interface CustomerHeldItems {
-  bottles: HeldBottle[];
-  assets: HeldUniqueItem[];
 }
 
 const formatSiteAddress = (
@@ -259,28 +240,7 @@ const OrderDetails = () => {
         setHeldItemsError(result.error);
         return;
       }
-      const heldData =
-        result.data && typeof result.data === "object"
-          ? (result.data as {
-              bottles?: unknown;
-              uniqueItems?: unknown;
-              unique_items?: unknown;
-              assets?: unknown;
-            })
-          : null;
-
-      setHeldItems({
-        bottles: Array.isArray(heldData?.bottles)
-          ? (heldData.bottles as HeldBottle[])
-          : [],
-        assets: Array.isArray(heldData?.uniqueItems)
-          ? (heldData.uniqueItems as HeldUniqueItem[])
-          : Array.isArray(heldData?.unique_items)
-            ? (heldData.unique_items as HeldUniqueItem[])
-            : Array.isArray(heldData?.assets)
-              ? (heldData.assets as HeldUniqueItem[])
-              : [],
-      });
+      setHeldItems(normalizeCustomerHeldItems(result.data));
     } catch (error) {
       console.error("Error fetching customer held items:", error);
       setHeldItems(null);
@@ -626,12 +586,20 @@ const OrderDetails = () => {
 
   const productCount = order ? getTotalItemsCount(order) : 0;
   const heldBottles = heldItems?.bottles || [];
+  const heldRetailItems = heldItems?.otherRetailItems || [];
   const heldAssets = heldItems?.assets || [];
   const totalHeldBottleQuantity = heldBottles.reduce(
     (sum, bottle) => sum + Math.max(0, bottle.quantity || 0),
     0,
   );
-  const hasHeldItems = heldBottles.length > 0 || heldAssets.length > 0;
+  const totalHeldRetailQuantity = heldRetailItems.reduce(
+    (sum, item) => sum + Math.max(0, item.quantity || 0),
+    0,
+  );
+  const hasHeldItems =
+    heldBottles.length > 0 ||
+    heldRetailItems.length > 0 ||
+    heldAssets.length > 0;
 
   return (
     <View style={[styles.container, { paddingTop: insets.top }]}>
@@ -734,13 +702,20 @@ const OrderDetails = () => {
               <View style={styles.heldItemsEmptyContent}>
                 <Text style={styles.heldItemsEmptyTitle}>None</Text>
                 <Text style={styles.heldItemsEmptyText}>
-                  No bottles or unique items.
+                  No bottles, retail items, or unique items.
                 </Text>
               </View>
             </View>
           ) : (
             <>
               <View style={styles.heldItemsSummaryRow}>
+                <View style={styles.heldItemsSummaryBadge}>
+                  <Ionicons name="cube-outline" size={12} color="#0F766E" />
+                  <Text style={styles.heldItemsSummaryText}>
+                    {totalHeldRetailQuantity} retail item
+                    {totalHeldRetailQuantity === 1 ? "" : "s"}
+                  </Text>
+                </View>
                 <View style={styles.heldItemsSummaryBadge}>
                   <Ionicons name="water-outline" size={12} color="#0369A1" />
                   <Text style={styles.heldItemsSummaryText}>
@@ -761,7 +736,7 @@ const OrderDetails = () => {
                 <View style={styles.heldItemsSection}>
                   <Text style={styles.heldItemsSectionTitle}>Bottles</Text>
                   {heldBottles.map((bottle, index) => (
-                    <View key={`${bottle.itemId}-${index}`}>
+                    <View key={`${bottle.emptyBottleId}-${index}`}>
                       <View style={styles.heldItemRow}>
                         <View style={styles.heldItemMedia}>
                           {resolveResourceUrl(bottle.image_url) ? (
@@ -803,6 +778,54 @@ const OrderDetails = () => {
                       {index < heldBottles.length - 1 && (
                         <View style={styles.productDivider} />
                       )}
+                    </View>
+                  ))}
+                </View>
+              ) : null}
+
+              {heldRetailItems.length > 0 ? (
+                <View style={styles.heldItemsSection}>
+                  <Text style={styles.heldItemsSectionTitle}>Retail Items</Text>
+                  {heldRetailItems.map((item, index) => (
+                    <View key={`${item.itemId}-${index}`}>
+                      <View style={styles.heldItemRow}>
+                        <View style={styles.heldItemMedia}>
+                          {resolveResourceUrl(item.image_url) ? (
+                            <Image
+                              source={{
+                                uri: resolveResourceUrl(item.image_url) || "",
+                              }}
+                              style={styles.heldItemImage}
+                              resizeMode="cover"
+                            />
+                          ) : (
+                            <Ionicons
+                              name="cube-outline"
+                              size={16}
+                              color="#0F766E"
+                            />
+                          )}
+                        </View>
+                        <View style={styles.heldItemInfo}>
+                          <Text style={styles.heldItemLabel}>{item.label}</Text>
+                          <Text style={styles.heldItemMeta}>
+                            {item.unit ? `${item.unit} • ` : ""}Held quantity
+                          </Text>
+                          {item.description ? (
+                            <Text style={styles.heldItemDescription}>
+                              {item.description}
+                            </Text>
+                          ) : null}
+                        </View>
+                        <View style={styles.heldItemQuantityBadge}>
+                          <Text style={styles.heldItemQuantityText}>
+                            ×{item.quantity}
+                          </Text>
+                        </View>
+                      </View>
+                      {index < heldRetailItems.length - 1 ? (
+                        <View style={styles.productDivider} />
+                      ) : null}
                     </View>
                   ))}
                 </View>

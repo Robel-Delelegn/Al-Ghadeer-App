@@ -34,6 +34,7 @@ import {
 } from "@/utils/deliveries";
 import {
   buildDeliverySaleCartRows,
+  toActualDeliverySaleItems,
   toDeliverySaleRequestItems,
 } from "@/utils/deliverySaleCart";
 import {
@@ -142,6 +143,9 @@ const OrganizationSignature: React.FC = () => {
   const [rentItemQuantities, setRentItemQuantities] = useState<
     Record<string, number>
   >({});
+  const [rentItemForRepair, setRentItemForRepair] = useState<
+    Record<string, boolean>
+  >({});
   const { rows: saleRows, invalidItems: invalidSaleItems } = useMemo(
     () => buildDeliverySaleCartRows(cartItems),
     [cartItems],
@@ -165,6 +169,13 @@ const OrganizationSignature: React.FC = () => {
     },
     [],
   );
+
+  const handleToggleRentItemRepair = useCallback((itemId: string) => {
+    setRentItemForRepair((previous) => ({
+      ...previous,
+      [itemId]: previous[itemId] !== true,
+    }));
+  }, []);
 
   const { totalWithVat, itemCount } = useMemo(() => {
     const sub = saleRows.reduce(
@@ -372,15 +383,21 @@ const OrganizationSignature: React.FC = () => {
         }))
         .filter((item) => item.quantity > 0);
 
+      const actualSaleItems = toActualDeliverySaleItems(saleRows);
       const saleItems = toDeliverySaleRequestItems(saleRows);
 
-      const depositsReturns = rentItems.map((item) => ({
+      const actualDepositReturns = rentItems.map((item) => ({
         type: getRentItemDepositAction(item),
         depositKind: getRentItemDepositKind(item),
         itemId: item.item_id || item.id,
         quantity: item.quantity,
         unitPrice: toMoney(item.price),
+        forRepair: rentItemForRepair[item.id] === true,
+        ...(item.remark?.trim() ? { remark: item.remark.trim() } : {}),
       }));
+      const depositsReturns = actualDepositReturns.map(
+        ({ depositKind: _depositKind, ...entry }) => entry,
+      );
 
       const requestData = {
         status: "success" as const,
@@ -390,8 +407,8 @@ const OrganizationSignature: React.FC = () => {
           getDeliveryEarlierAttemptsTodayCount(orderDetail),
         tasks: buildDeliveryTaskOutcomesForActualDelivery(
           orderDetail.tasks || [],
-          saleItems,
-          depositsReturns,
+          actualSaleItems,
+          actualDepositReturns,
         ),
         ...(saleItems.length > 0
           ? {
@@ -514,6 +531,7 @@ const OrganizationSignature: React.FC = () => {
   }, [
     editableRentItems,
     rentItemQuantities,
+    rentItemForRepair,
     saleRows,
     receiverName,
     hasSignature,
@@ -758,6 +776,24 @@ const OrganizationSignature: React.FC = () => {
                         </Text>
                       </View>
                     </View>
+                    <TouchableOpacity
+                      style={styles.repairToggle}
+                      onPress={() => handleToggleRentItemRepair(item.id)}
+                      activeOpacity={0.75}
+                    >
+                      <Ionicons
+                        name={
+                          rentItemForRepair[item.id]
+                            ? "checkbox"
+                            : "square-outline"
+                        }
+                        size={16}
+                        color={
+                          rentItemForRepair[item.id] ? "#B45309" : "#94A3B8"
+                        }
+                      />
+                      <Text style={styles.repairToggleText}>For repair</Text>
+                    </TouchableOpacity>
                     {index < editableRentItems.length - 1 && (
                       <View style={styles.itemDivider} />
                     )}
@@ -793,10 +829,12 @@ const OrganizationSignature: React.FC = () => {
               />
             </View>
             <View style={styles.inputGroup}>
-              <Text style={styles.inputLabel}>Notes</Text>
+              <Text style={styles.inputLabel}>
+                Delivery / Deposit & Return Remark
+              </Text>
               <TextInput
                 style={[styles.input, styles.inputMultiline]}
-                placeholder="Any additional notes..."
+                placeholder="Example: External company bottle collected and discarded"
                 placeholderTextColor="#9CA3AF"
                 value={notes}
                 onChangeText={setNotes}
@@ -1252,6 +1290,18 @@ const styles = StyleSheet.create({
   itemDivider: {
     height: 1,
     backgroundColor: "#F1F5F9",
+  },
+  repairToggle: {
+    display: "none",
+    flexDirection: "row",
+    alignItems: "center",
+    alignSelf: "flex-end",
+    gap: 5,
+    marginTop: 4,
+  },
+  repairToggleText: {
+    fontSize: 11,
+    color: "#64748B",
   },
   otherActionRow: {
     flexDirection: "row",

@@ -13,7 +13,7 @@ import {
   getOrderSelectedDeliveryActions,
   getRentItemDepositAction,
   getRentItemDepositKind,
-  isGenericItemDeposit,
+  isGenericItemMovement,
 } from "@/utils/rentItems";
 import { getApiBaseUrl } from "@/utils/resources";
 import {
@@ -57,6 +57,8 @@ type DeliveryActionRow = {
   depositKind: "unique-item" | "bottle";
   isAsset: boolean;
   isGenericItem?: boolean;
+  forRepair?: boolean;
+  remark?: string | null;
 };
 
 type SaleRow = {
@@ -68,6 +70,7 @@ type SaleRow = {
   quantity: number;
   unitPrice: number;
   isAsset: boolean;
+  remark?: string | null;
 };
 
 type ItemDisplayData = {
@@ -76,6 +79,7 @@ type ItemDisplayData = {
   isAsset?: boolean;
   assetFallbackLabel?: string | null;
   assetCategory?: string | null;
+  remark?: string | null;
 };
 
 type AssetDisplayLookupValue = {
@@ -295,7 +299,12 @@ const buildItemLabelHtml = (item: ItemDisplayData): string => {
     ? `<div style="margin-top:2px;font-size:10px;color:#64748b;">${escapeHtml(detail)}</div>`
     : "";
 
-  return `${escapeHtml(label)}${detailHtml}`;
+  const remark = typeof item.remark === "string" ? item.remark.trim() : "";
+  const remarkHtml = remark
+    ? `<div style="margin-top:2px;font-size:10px;color:#64748b;">Remark: ${escapeHtml(remark)}</div>`
+    : "";
+
+  return `${escapeHtml(label)}${detailHtml}${remarkHtml}`;
 };
 
 const escapeHtml = (value: string): string => {
@@ -328,7 +337,7 @@ const getFallbackRentItemLabel = (
     return name;
   }
 
-  const kind = isGenericItemDeposit(item)
+  const kind = isGenericItemMovement(item)
     ? "Item"
     : getRentItemDepositKind(item) === "bottle"
       ? "Bottle"
@@ -389,6 +398,7 @@ const ReceiptItemLabel: React.FC<{
   style: React.ComponentProps<typeof Text>["style"];
 }> = ({ item, style }) => {
   const { label, detail } = getItemDisplayParts(item);
+  const remark = typeof item.remark === "string" ? item.remark.trim() : "";
 
   return (
     <Text style={style}>
@@ -397,6 +407,12 @@ const ReceiptItemLabel: React.FC<{
         <>
           <Text style={styles.invoiceItemMetaText}>{"\n"}</Text>
           <Text style={styles.invoiceItemMetaText}>{detail}</Text>
+        </>
+      ) : null}
+      {remark ? (
+        <>
+          <Text style={styles.invoiceItemMetaText}>{"\n"}</Text>
+          <Text style={styles.invoiceItemMetaText}>Remark: {remark}</Text>
         </>
       ) : null}
     </Text>
@@ -437,7 +453,7 @@ const buildActionSectionHtml = (rows: DeliveryActionRow[]): string => {
     .map(
       (row) => `
         <tr>
-          <td>${escapeHtml(getDeliveryActionTypeLabel(row))}</td>
+          <td>${escapeHtml(`${getDeliveryActionTypeLabel(row)}${row.forRepair ? " (For repair)" : ""}`)}</td>
           <td>${buildItemLabelHtml(row)}</td>
           <td class="qty-cell">${escapeHtml(formatQuantity(row.quantity))}</td>
         </tr>
@@ -551,6 +567,7 @@ const DeliveryNoteActionSection: React.FC<{
         >
           <Text style={[styles.invoiceItemText, styles.deliveryNoteTypeCell]}>
             {getDeliveryActionTypeLabel(row)}
+            {row.forRepair ? " (For repair)" : ""}
           </Text>
           <ReceiptItemLabel
             item={row}
@@ -712,6 +729,7 @@ const PaymentReceipt: React.FC = () => {
           quantity: item.quantity,
           unitPrice: item.unitPrice,
           isAsset: isAssetKind(item.itemType),
+          remark: item.remark,
         };
       });
     }
@@ -738,6 +756,7 @@ const PaymentReceipt: React.FC = () => {
               product.category,
               product.asset_category,
             ),
+            remark: null,
           };
         },
       );
@@ -763,6 +782,7 @@ const PaymentReceipt: React.FC = () => {
           quantity: item.quantity,
           unitPrice: item.price,
           isAsset: isAssetKind(item.item_type, item.category),
+          remark: item.remark ?? null,
         };
       });
   }, [
@@ -775,7 +795,7 @@ const PaymentReceipt: React.FC = () => {
   const deliveryActionRows = useMemo<DeliveryActionRow[]>(() => {
     const genericItemActionKeys = new Set<string>();
     getOrderSelectedDeliveryActions(orderDetail)
-      .filter((item) => isGenericItemDeposit(item))
+      .filter((item) => isGenericItemMovement(item))
       .forEach((item) => {
         [item.id, item.item_id].forEach((key) => {
           const cleanKey = typeof key === "string" ? key.trim() : "";
@@ -809,6 +829,8 @@ const PaymentReceipt: React.FC = () => {
           depositKind: entry.depositKind,
           isAsset: entry.depositKind === UNIQUE_ITEM_KIND,
           isGenericItem,
+          forRepair: entry.forRepair,
+          remark: entry.remark,
         };
       });
     }
@@ -833,7 +855,9 @@ const PaymentReceipt: React.FC = () => {
           type: getRentItemDepositAction(item),
           depositKind: getRentItemDepositKind(item),
           isAsset: getRentItemDepositKind(item) === UNIQUE_ITEM_KIND,
-          isGenericItem: isGenericItemDeposit(item),
+          isGenericItem: isGenericItemMovement(item),
+          forRepair: item.for_repair,
+          remark: item.remark ?? null,
         };
       });
   }, [confirmationDetail, deliveryActionAssetDisplayLookup, orderDetail]);

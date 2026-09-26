@@ -10,6 +10,7 @@ import {
   ActivityIndicator,
   ScrollView,
   Text,
+  TextInput,
   TouchableOpacity,
   View,
   StyleSheet,
@@ -26,6 +27,7 @@ import {
 } from "@/utils/deliveries";
 import {
   buildDeliverySaleCartRows,
+  toActualDeliverySaleItems,
   toDeliverySaleRequestItems,
 } from "@/utils/deliverySaleCart";
 import {
@@ -78,6 +80,9 @@ const PaymentConfirmation: React.FC = () => {
   const [rentItemQuantities, setRentItemQuantities] = useState<
     Record<string, number>
   >({});
+  const [rentItemForRepair, setRentItemForRepair] = useState<
+    Record<string, boolean>
+  >({});
   const { rows: saleRows, invalidItems: invalidSaleItems } = useMemo(
     () => buildDeliverySaleCartRows(cartItems),
     [cartItems],
@@ -90,6 +95,13 @@ const PaymentConfirmation: React.FC = () => {
     });
     setRentItemQuantities(initial);
   }, [editableRentItems]);
+
+  const handleToggleRentItemRepair = useCallback((itemId: string) => {
+    setRentItemForRepair((previous) => ({
+      ...previous,
+      [itemId]: previous[itemId] !== true,
+    }));
+  }, []);
 
   const handleChangeRentItemQuantity = useCallback(
     (itemId: string, delta: number) => {
@@ -114,6 +126,7 @@ const PaymentConfirmation: React.FC = () => {
   const receiverName = params.receiver_name as string | undefined;
   const receiverPosition = params.receiver_position as string | undefined;
   const notes = params.notes as string | undefined;
+  const [deliveryRemark, setDeliveryRemark] = useState(notes || "");
 
   const {
     subtotal,
@@ -274,6 +287,7 @@ const PaymentConfirmation: React.FC = () => {
         }))
         .filter((item) => item.quantity > 0);
 
+      const actualSaleItems = toActualDeliverySaleItems(saleRows);
       const saleItems = toDeliverySaleRequestItems(saleRows);
       const saleSubtotal = saleItems.reduce(
         (sum, item) => sum + item.unitPrice * item.quantity,
@@ -282,13 +296,18 @@ const PaymentConfirmation: React.FC = () => {
       const saleVat = saleSubtotal * VAT_RATE;
       const saleTotal = saleSubtotal + saleVat;
 
-      const depositsReturns = rentItems.map((item) => ({
+      const actualDepositReturns = rentItems.map((item) => ({
         type: getRentItemDepositAction(item),
         depositKind: getRentItemDepositKind(item),
         itemId: item.item_id || item.id,
         quantity: item.quantity,
         unitPrice: toMoney(item.price),
+        forRepair: rentItemForRepair[item.id] === true,
+        ...(item.remark?.trim() ? { remark: item.remark.trim() } : {}),
       }));
+      const depositsReturns = actualDepositReturns.map(
+        ({ depositKind: _depositKind, ...entry }) => entry,
+      );
 
       const receiver =
         receiverName && receiverName.trim().length > 0
@@ -309,8 +328,8 @@ const PaymentConfirmation: React.FC = () => {
           getDeliveryEarlierAttemptsTodayCount(orderDetail),
         tasks: buildDeliveryTaskOutcomesForActualDelivery(
           orderDetail.tasks || [],
-          saleItems,
-          depositsReturns,
+          actualSaleItems,
+          actualDepositReturns,
         ),
         ...(saleItems.length > 0
           ? {
@@ -331,7 +350,7 @@ const PaymentConfirmation: React.FC = () => {
         ...(depositsReturns.length > 0 ? { depositsReturns } : {}),
         ...(creditCollections.length > 0 ? { creditCollections } : {}),
         ...(receiver ? { receiver } : {}),
-        ...(notes?.trim() ? { remark: notes.trim() } : {}),
+        ...(deliveryRemark.trim() ? { remark: deliveryRemark.trim() } : {}),
       };
 
       console.log("[delivery-confirm] request payload", {
@@ -429,13 +448,14 @@ const PaymentConfirmation: React.FC = () => {
     signatureData,
     receiverName,
     receiverPosition,
-    notes,
+    deliveryRemark,
     hasRentItemsSelected,
     hasDraftCreditCollections,
     creditCollections,
     editableRentItems,
     invalidSaleItems,
     rentItemQuantities,
+    rentItemForRepair,
   ]);
 
   const customerName = orderDetail?.customer_name || "Customer";
@@ -664,6 +684,22 @@ const PaymentConfirmation: React.FC = () => {
                       {(item.price * quantity).toFixed(2)}
                     </Text>
                   </View>
+                  <TouchableOpacity
+                    style={styles.repairToggle}
+                    onPress={() => handleToggleRentItemRepair(item.id)}
+                    activeOpacity={0.75}
+                  >
+                    <Ionicons
+                      name={
+                        rentItemForRepair[item.id]
+                          ? "checkbox"
+                          : "square-outline"
+                      }
+                      size={16}
+                      color={rentItemForRepair[item.id] ? "#B45309" : "#94A3B8"}
+                    />
+                    <Text style={styles.repairToggleText}>For repair</Text>
+                  </TouchableOpacity>
                   {index < editableRentItems.length - 1 && (
                     <View style={styles.itemDivider} />
                   )}
@@ -672,6 +708,22 @@ const PaymentConfirmation: React.FC = () => {
             })}
           </View>
         )}
+
+        <View style={styles.card}>
+          <Text style={styles.cardTitle}>
+            Delivery / Deposit & Return Remark
+          </Text>
+          <TextInput
+            style={styles.remarkInput}
+            placeholder="Example: External company bottle collected and discarded"
+            placeholderTextColor="#9CA3AF"
+            value={deliveryRemark}
+            onChangeText={setDeliveryRemark}
+            multiline
+            numberOfLines={3}
+            textAlignVertical="top"
+          />
+        </View>
 
         {/* Customer */}
         <View style={styles.card}>
@@ -771,9 +823,7 @@ const PaymentConfirmation: React.FC = () => {
           </View>
           {parseFloat(rentDepositTotal) > 0 && (
             <View style={styles.totalRow}>
-              <Text style={styles.totalLabel}>
-                Bottle/Item/Unique Item Deposits
-              </Text>
+              <Text style={styles.totalLabel}>Bottle/Unique Item Deposits</Text>
               <Text style={styles.totalValue}>AED {rentDepositTotal}</Text>
             </View>
           )}
@@ -1005,6 +1055,29 @@ const styles = StyleSheet.create({
     height: 1,
     backgroundColor: "#F3F4F6",
     marginVertical: 8,
+  },
+  remarkInput: {
+    minHeight: 76,
+    borderWidth: 1,
+    borderColor: "#E5E7EB",
+    borderRadius: 10,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    fontSize: 13,
+    color: "#1F2937",
+    backgroundColor: "#FAFAFA",
+  },
+  repairToggle: {
+    display: "none",
+    flexDirection: "row",
+    alignItems: "center",
+    alignSelf: "flex-end",
+    gap: 5,
+    marginTop: 4,
+  },
+  repairToggleText: {
+    fontSize: 11,
+    color: "#64748B",
   },
   itemsTableHeader: {
     flexDirection: "row",

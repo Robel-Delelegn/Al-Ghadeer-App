@@ -772,8 +772,9 @@ const SummaryAmountRow: React.FC<{
   label: string;
   amount: number;
   icon: IconName;
+  helper?: string | null;
   emphasis?: boolean;
-}> = ({ label, amount, icon, emphasis = false }) => {
+}> = ({ label, amount, icon, helper, emphasis = false }) => {
   return (
     <View
       style={[
@@ -790,14 +791,19 @@ const SummaryAmountRow: React.FC<{
         >
           <Ionicons name={icon} size={14} color="#0369A1" />
         </View>
-        <Text
-          style={[
-            styles.summaryAmountLabel,
-            emphasis && styles.summaryAmountLabelEmphasis,
-          ]}
-        >
-          {label}
-        </Text>
+        <View style={styles.summaryAmountLabelTextWrap}>
+          <Text
+            style={[
+              styles.summaryAmountLabel,
+              emphasis && styles.summaryAmountLabelEmphasis,
+            ]}
+          >
+            {label}
+          </Text>
+          {helper ? (
+            <Text style={styles.summaryAmountHelper}>{helper}</Text>
+          ) : null}
+        </View>
       </View>
       <Text
         style={[
@@ -807,6 +813,14 @@ const SummaryAmountRow: React.FC<{
       >
         AED {formatAmount(amount)}
       </Text>
+    </View>
+  );
+};
+
+const SummaryMoneyGroupHeader: React.FC<{ title: string }> = ({ title }) => {
+  return (
+    <View style={styles.summaryMoneyGroupHeader}>
+      <Text style={styles.summaryMoneyGroupHeaderText}>{title}</Text>
     </View>
   );
 };
@@ -1353,6 +1367,9 @@ const HistoryScreen = () => {
       failedDeliveries: failedDeliveries.length,
       directSales: directSales.length,
       totalVisits: dailyItems.length,
+      salesWithoutVat: 0,
+      salesVat: 0,
+      salesWithVat: 0,
       cashSales: 0,
       checkSales: 0,
       walletSales: 0,
@@ -1403,6 +1420,10 @@ const HistoryScreen = () => {
       }
 
       if (item.sale) {
+        summary.salesWithoutVat += item.sale.totals.subtotal;
+        summary.salesVat += item.sale.totals.vat;
+        summary.salesWithVat += item.sale.totals.total;
+
         const payment = item.sale.payment;
         if (payment?.method === "cash") {
           summary.cashSales += payment.amount;
@@ -2080,74 +2101,97 @@ const HistoryScreen = () => {
 
               <SummarySection title="Money Summary">
                 <View style={styles.summaryPanel}>
+                  <SummaryMoneyGroupHeader title="Product Sales" />
+                  <SummaryAmountRow
+                    icon="receipt-outline"
+                    label="Sales excl. VAT"
+                    amount={dailySummary.salesWithoutVat}
+                  />
+                  <SummaryAmountRow
+                    icon="calculator-outline"
+                    label="VAT collected"
+                    amount={dailySummary.salesVat}
+                  />
+                  <SummaryAmountRow
+                    icon="receipt-outline"
+                    label="Sales incl. VAT"
+                    amount={dailySummary.salesWithVat}
+                  />
+
+                  <SummaryMoneyGroupHeader title="Payment Breakdown" />
                   <SummaryAmountRow
                     icon="cash-outline"
-                    label="Cash sale collected"
+                    label="Cash sales"
                     amount={dailySummary.cashSales}
+                    helper="Includes VAT"
                   />
                   <SummaryAmountRow
-                    icon="add-circle-outline"
-                    label="Bottle deposit cash"
-                    amount={dailySummary.bottleDepositCash}
+                    icon="receipt-outline"
+                    label="Check sales"
+                    amount={dailySummary.checkSales}
+                    helper="Includes VAT"
                   />
-                  {dailySummary.uniqueItemDepositCash > 0 ? (
-                    <SummaryAmountRow
-                      icon="cube-outline"
-                      label="Unique item deposit cash"
-                      amount={dailySummary.uniqueItemDepositCash}
-                    />
-                  ) : null}
-                  {dailySummary.itemDepositCash > 0 ? (
-                    <SummaryAmountRow
-                      icon="cube-outline"
-                      label="Item deposit cash"
-                      amount={dailySummary.itemDepositCash}
-                    />
-                  ) : null}
                   <SummaryAmountRow
-                    icon="remove-circle-outline"
-                    label="Approved expenses"
-                    amount={dailySummary.approvedExpenses}
+                    icon="wallet-outline"
+                    label="Wallet sales"
+                    amount={dailySummary.walletSales}
+                    helper="Includes VAT"
                   />
+                  <SummaryAmountRow
+                    icon="document-text-outline"
+                    label="Credit sales"
+                    amount={dailySummary.creditSales}
+                    helper="Includes VAT"
+                  />
+
+                  <SummaryMoneyGroupHeader title="Cash Adjustments" />
                   <SummaryAmountRow
                     icon="archive-outline"
                     label="Balance collected"
                     amount={dailySummary.balanceCollections}
                   />
                   <SummaryAmountRow
+                    icon="add-circle-outline"
+                    label="Bottle deposit cash taken"
+                    amount={dailySummary.bottleDepositCash}
+                    helper="No VAT"
+                  />
+                  <SummaryAmountRow
+                    icon="cube-outline"
+                    label="Unique item deposit cash taken"
+                    amount={dailySummary.uniqueItemDepositCash}
+                    helper="No VAT"
+                  />
+                  <SummaryAmountRow
+                    icon="cube-outline"
+                    label="Item deposit cash taken"
+                    amount={dailySummary.itemDepositCash}
+                    helper="No VAT"
+                  />
+                  <SummaryAmountRow
                     icon="return-down-back-outline"
-                    label="Bottle return cash"
+                    label="Bottle return cash paid back"
                     amount={dailySummary.bottleReturnCash}
-                  />
-                  {dailySummary.uniqueItemReturnCash > 0 ? (
-                    <SummaryAmountRow
-                      icon="return-up-back-outline"
-                      label="Unique item return cash"
-                      amount={dailySummary.uniqueItemReturnCash}
-                    />
-                  ) : null}
-                  {dailySummary.itemReturnCash > 0 ? (
-                    <SummaryAmountRow
-                      icon="return-up-back-outline"
-                      label="Item return cash"
-                      amount={dailySummary.itemReturnCash}
-                    />
-                  ) : null}
-                  <SummaryAmountRow
-                    icon="receipt-outline"
-                    label="Check sales"
-                    amount={dailySummary.checkSales}
+                    helper="No VAT"
                   />
                   <SummaryAmountRow
-                    icon="wallet-outline"
-                    label="Wallet sales"
-                    amount={dailySummary.walletSales}
+                    icon="return-up-back-outline"
+                    label="Unique item return cash paid back"
+                    amount={dailySummary.uniqueItemReturnCash}
+                    helper="No VAT"
                   />
                   <SummaryAmountRow
-                    icon="document-text-outline"
-                    label="Credit sales"
-                    amount={dailySummary.creditSales}
+                    icon="return-up-back-outline"
+                    label="Item return cash paid back"
+                    amount={dailySummary.itemReturnCash}
+                    helper="No VAT"
                   />
+                  <SummaryAmountRow
+                    icon="remove-circle-outline"
+                    label="Approved expenses deducted"
+                    amount={dailySummary.approvedExpenses}
+                  />
+
                   {dailySummary.unclassifiedDepositReturnValue !== 0 ? (
                     <SummaryAmountRow
                       icon="help-circle-outline"
@@ -2155,10 +2199,13 @@ const HistoryScreen = () => {
                       amount={dailySummary.unclassifiedDepositReturnValue}
                     />
                   ) : null}
+
+                  <SummaryMoneyGroupHeader title="Final Cash Total" />
                   <SummaryAmountRow
                     icon="calculator-outline"
-                    label="Net amount to collect from driver"
+                    label="Driver cash handover total"
                     amount={dailySummary.netDriverCollection}
+                    helper="Cash sales + balance + cash deposits - returns - expenses"
                     emphasis
                   />
                 </View>
@@ -2619,6 +2666,14 @@ const HistoryScreen = () => {
                           Qty {entry.quantity} • AED{" "}
                           {formatAmount(entry.unitPrice)}
                         </Text>
+                        {entry.forRepair ? (
+                          <Text style={styles.detailListMeta}>For repair</Text>
+                        ) : null}
+                        {entry.remark ? (
+                          <Text style={styles.detailListMeta}>
+                            Remark: {entry.remark}
+                          </Text>
+                        ) : null}
                         {entry.imageUrl ? (
                           <TouchableOpacity
                             style={styles.inlineLinkButton}
@@ -2724,6 +2779,11 @@ const HistoryScreen = () => {
                                 saleItem.unitPrice * saleItem.quantity,
                               )}
                             </Text>
+                            {saleItem.remark ? (
+                              <Text style={styles.saleItemMeta}>
+                                Remark: {saleItem.remark}
+                              </Text>
+                            ) : null}
                             {saleItem.imageUrl ? (
                               <TouchableOpacity
                                 style={styles.inlineLinkButton}
@@ -3009,6 +3069,21 @@ const styles = StyleSheet.create({
     borderRadius: 14,
     overflow: "hidden",
   },
+  summaryMoneyGroupHeader: {
+    paddingHorizontal: 12,
+    paddingTop: 12,
+    paddingBottom: 6,
+    backgroundColor: "#F8FAFC",
+    borderBottomWidth: 1,
+    borderBottomColor: "#EEF2F6",
+  },
+  summaryMoneyGroupHeaderText: {
+    color: "#475569",
+    fontSize: 10,
+    fontWeight: "800",
+    textTransform: "uppercase",
+    letterSpacing: 0,
+  },
   summaryAmountRow: {
     minHeight: 48,
     paddingHorizontal: 12,
@@ -3040,11 +3115,20 @@ const styles = StyleSheet.create({
   summaryAmountIconEmphasis: {
     backgroundColor: "#D1FAE5",
   },
+  summaryAmountLabelTextWrap: {
+    flex: 1,
+  },
   summaryAmountLabel: {
     flex: 1,
     color: "#334155",
     fontSize: 13,
     fontWeight: "700",
+  },
+  summaryAmountHelper: {
+    marginTop: 2,
+    color: "#64748B",
+    fontSize: 10,
+    fontWeight: "600",
   },
   summaryAmountLabelEmphasis: {
     color: "#065F46",

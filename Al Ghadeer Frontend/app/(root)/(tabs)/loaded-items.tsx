@@ -73,6 +73,26 @@ const formatTruckLabel = (truck: TruckInfo): string => {
   return truck.label || truck.licensePlate || truck.make || "Assigned truck";
 };
 
+const formatBulkQuantity = (quantity: number, unit: string | null): string => {
+  const normalizedUnit = unit?.trim();
+  if (!normalizedUnit || Number.isFinite(Number(normalizedUnit))) {
+    return String(quantity);
+  }
+
+  const singularUnits: Record<string, string> = {
+    bottles: "bottle",
+    packs: "pack",
+    pieces: "piece",
+    units: "unit",
+  };
+  const displayUnit =
+    quantity === 1
+      ? singularUnits[normalizedUnit.toLowerCase()] || normalizedUnit
+      : normalizedUnit;
+
+  return `${quantity} ${displayUnit}`;
+};
+
 const LoadedItems = () => {
   const insets = useSafeAreaInsets();
   const { user } = useAuthStore();
@@ -440,9 +460,7 @@ const LoadedItems = () => {
                         </View>
                         <View style={styles.quantityBadge}>
                           <Text style={styles.quantityBadgeText}>
-                            {item.unit
-                              ? `${item.quantity} ${item.unit}`
-                              : item.quantity}
+                            {formatBulkQuantity(item.quantity, item.unit)}
                           </Text>
                         </View>
                       </View>

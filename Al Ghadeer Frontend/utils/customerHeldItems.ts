@@ -12,6 +12,15 @@ export interface CustomerHeldBottle {
   unit: string | null;
 }
 
+export interface CustomerHeldRetailItem {
+  itemId: string;
+  label: string;
+  description: string | null;
+  image_url: string | null;
+  quantity: number;
+  unit: string | null;
+}
+
 export interface CustomerHeldAsset {
   itemId: string;
   label: string;
@@ -24,6 +33,7 @@ export interface CustomerHeldAsset {
 
 export interface CustomerHeldItems {
   bottles: CustomerHeldBottle[];
+  otherRetailItems: CustomerHeldRetailItem[];
   assets: CustomerHeldAsset[];
 }
 
@@ -258,6 +268,29 @@ const normalizeAsset = (value: unknown): CustomerHeldAsset | null => {
   };
 };
 
+const normalizeRetailItem = (value: unknown): CustomerHeldRetailItem | null => {
+  const record = isRecord(value) ? value : null;
+  if (!record) return null;
+
+  const itemId = pickText(record, ["itemId"]);
+  const label = pickText(record, ["label"]);
+  const quantity = Math.max(
+    0,
+    Math.floor(pickNumber(record, ["quantity"]) ?? 0),
+  );
+
+  if (!itemId || !label || quantity <= 0) return null;
+
+  return {
+    itemId,
+    label,
+    description: pickNullableText(record, ["description"]),
+    image_url: pickNullableText(record, ["image_url"]),
+    quantity,
+    unit: pickNullableText(record, ["unit"]),
+  };
+};
+
 export const normalizeCustomerHeldItems = (
   value: unknown,
 ): CustomerHeldItems => {
@@ -273,6 +306,9 @@ export const normalizeCustomerHeldItems = (
     ])
       .map((entry) => normalizeBottle(entry))
       .filter((entry): entry is CustomerHeldBottle => entry !== null),
+    otherRetailItems: pickArray(record, ["otherRetailItems"])
+      .map((entry) => normalizeRetailItem(entry))
+      .filter((entry): entry is CustomerHeldRetailItem => entry !== null),
     assets: pickArray(record, [
       "uniqueItems",
       "unique_items",
@@ -290,6 +326,25 @@ export const normalizeCustomerHeldItems = (
       .filter((entry): entry is CustomerHeldAsset => entry !== null),
   };
 };
+
+const toHeldRetailRentItem = (item: CustomerHeldRetailItem): RentItem => ({
+  id: `held:item:${item.itemId}`,
+  item_id: item.itemId,
+  name: item.label,
+  category: "deposit",
+  price: 0,
+  quantity: 0,
+  image_url: resolveResourceUrl(item.image_url) || "",
+  in_truck: false,
+  deposit_action: "deposit_return",
+  deposit_kind: "bottle",
+  action_source: "held_item",
+  max_quantity: item.quantity,
+  unit: item.unit,
+  description: item.description,
+  other_action_type: "item-movement-from-customer",
+  other_action_item_type: "bottle",
+});
 
 const toHeldBottleRentItem = (bottle: CustomerHeldBottle): RentItem => {
   return {
@@ -365,6 +420,12 @@ export const mergeHeldItemsIntoRentItems = (
       unit: existing.unit ?? nextItem.unit,
       description: existing.description ?? nextItem.description,
     });
+  });
+
+  heldItems.otherRetailItems.forEach((item) => {
+    const nextItem = toHeldRetailRentItem(item);
+    const existing = merged.get(nextItem.id);
+    merged.set(nextItem.id, existing ? { ...nextItem, ...existing } : nextItem);
   });
 
   heldItems.assets.forEach((asset) => {

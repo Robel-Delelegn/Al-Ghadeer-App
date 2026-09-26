@@ -9,7 +9,6 @@ import { resolveResourceUrl } from "@/utils/resources";
 import { getTruckBulkItemMatchKeys } from "@/utils/truckLoad";
 import {
   getSpecificUniqueItemCategory,
-  isUniqueItemSignal,
   UNIQUE_ITEM_KIND,
   UNIQUE_ITEMS_GROUP,
 } from "@/utils/uniqueItems";
@@ -49,6 +48,7 @@ interface BottleReturnOption {
   unit: string | null;
   imageUrl: string | null;
   availableQuantity: number;
+  kind: "bottle" | "item";
 }
 
 interface BottleDepositOption {
@@ -64,19 +64,13 @@ interface BottleDepositOption {
 }
 
 const EMPTY_PRODUCTS: DirectSaleDraftProduct[] = [];
-const EMPTY_HELD_ITEMS = { bottles: [], assets: [] };
+const EMPTY_HELD_ITEMS = { bottles: [], otherRetailItems: [], assets: [] };
 const EMPTY_TRUCK_ASSETS: NonNullable<
   ReturnType<typeof useOrderStore.getState>["directSaleDraft"]
 >["truckAssets"] = [];
 const EMPTY_TRUCK_BULK_ITEMS: NonNullable<
   ReturnType<typeof useOrderStore.getState>["directSaleDraft"]
 >["truckBulkItems"] = [];
-const normalizeCategory = (category?: string | null) =>
-  (category || "")
-    .trim()
-    .toLowerCase()
-    .replace(/[\s_-]+/g, "");
-
 const appendUniqueDisplayPart = (parts: string[], value?: string | null) => {
   const label = (value || "").trim();
   if (!label) return;
@@ -207,6 +201,34 @@ const QuantityStepper = ({
   );
 };
 
+const RepairToggle = ({
+  enabled,
+  onPress,
+}: {
+  enabled: boolean;
+  onPress: () => void;
+}) => (
+  <TouchableOpacity
+    style={styles.repairToggle}
+    onPress={onPress}
+    activeOpacity={0.75}
+  >
+    <Ionicons
+      name={enabled ? "checkbox" : "square-outline"}
+      size={17}
+      color={enabled ? "#B45309" : "#94A3B8"}
+    />
+    <Text
+      style={[
+        styles.repairToggleText,
+        enabled && styles.repairToggleTextActive,
+      ]}
+    >
+      For repair
+    </Text>
+  </TouchableOpacity>
+);
+
 const EmptySection = ({
   icon,
   text,
@@ -240,6 +262,12 @@ const DirectSaleBottlesUniqueItems = () => {
   const [bottleReturnQuantities, setBottleReturnQuantities] = useState<
     Record<string, number>
   >(directSaleDraft?.bottleReturnQuantities || {});
+  const [bottleDepositForRepair, setBottleDepositForRepair] = useState<
+    Record<string, boolean>
+  >(directSaleDraft?.bottleDepositForRepair || {});
+  const [bottleReturnForRepair, setBottleReturnForRepair] = useState<
+    Record<string, boolean>
+  >(directSaleDraft?.bottleReturnForRepair || {});
 
   const products = directSaleDraft?.products ?? EMPTY_PRODUCTS;
   const heldItems = directSaleDraft?.heldItems ?? EMPTY_HELD_ITEMS;
@@ -312,9 +340,12 @@ const DirectSaleBottlesUniqueItems = () => {
         unit: bottle.unit,
         imageUrl: resolveResourceUrl(bottle.image_url),
         availableQuantity: bottle.quantity,
+        kind: "bottle" as const,
       })),
     [heldItems.bottles],
   );
+
+  const returnOptions = bottleReturnOptions;
 
   const bottleDepositOptions = useMemo<BottleDepositOption[]>(() => {
     const productsById = new Map<string, DirectSaleDraftProduct>();
@@ -347,29 +378,14 @@ const DirectSaleBottlesUniqueItems = () => {
 
       const isBottleDeposit =
         bulkItem.isRefillableBottle || Boolean(refillProduct);
-      const matchedProductCategory = normalizeCategory(
-        matchedProduct?.category,
-      );
-      const matchedProductType = normalizeCategory(matchedProduct?.type);
-      const bulkCategory = normalizeCategory(bulkItem.category);
-      const isAssetBulkItem =
-        matchedProduct?.type === UNIQUE_ITEMS_GROUP ||
-        isUniqueItemSignal(matchedProductType) ||
-        isUniqueItemSignal(matchedProductCategory) ||
-        isUniqueItemSignal(bulkCategory);
-
-      if (!isBottleDeposit && isAssetBulkItem) {
+      if (!isBottleDeposit) {
         return options;
       }
 
       options.push({
-        key: `truck:${isBottleDeposit ? "bottle" : "item"}:${bulkItem.id}`,
-        itemId: isBottleDeposit
-          ? bulkItem.emptyBottleId || bulkItem.itemId || bulkItem.id
-          : bulkItem.itemId || bulkItem.id,
-        label: isBottleDeposit
-          ? toEmptyRefillLabel(refillProduct?.label || bulkItem.label)
-          : matchedProduct?.label || bulkItem.label,
+        key: `truck:bottle:${bulkItem.id}`,
+        itemId: bulkItem.emptyBottleId || bulkItem.itemId || bulkItem.id,
+        label: toEmptyRefillLabel(refillProduct?.label || bulkItem.label),
         description: matchedProduct?.description ?? bulkItem.description,
         category: matchedProduct?.category ?? bulkItem.category,
         unit: matchedProduct?.unit ?? refillProduct?.unit ?? bulkItem.unit,
@@ -378,7 +394,7 @@ const DirectSaleBottlesUniqueItems = () => {
           refillProduct?.image_url ||
           resolveResourceUrl(bulkItem.image_url),
         availableQuantity,
-        kind: isBottleDeposit ? "bottle" : "item",
+        kind: "bottle",
       });
 
       return options;
@@ -387,11 +403,6 @@ const DirectSaleBottlesUniqueItems = () => {
 
   const refillBottleDepositOptions = useMemo(
     () => bottleDepositOptions.filter((item) => item.kind === "bottle"),
-    [bottleDepositOptions],
-  );
-
-  const truckItemDepositOptions = useMemo(
-    () => bottleDepositOptions.filter((item) => item.kind === "item"),
     [bottleDepositOptions],
   );
 
@@ -413,6 +424,7 @@ const DirectSaleBottlesUniqueItems = () => {
         nextDrafts[asset.key] = {
           selected: existingDraft?.selected ?? false,
           price: existingDraft?.price ?? asset.defaultPrice.toFixed(2),
+          forRepair: existingDraft?.forRepair ?? false,
         };
       });
 
@@ -423,7 +435,7 @@ const DirectSaleBottlesUniqueItems = () => {
   useEffect(() => {
     setBottleReturnQuantities((previousQuantities) => {
       const nextQuantities: Record<string, number> = {};
-      bottleReturnOptions.forEach((bottle) => {
+      returnOptions.forEach((bottle) => {
         const previousQuantity = previousQuantities[bottle.key] ?? 0;
         nextQuantities[bottle.key] = Math.max(
           0,
@@ -432,7 +444,7 @@ const DirectSaleBottlesUniqueItems = () => {
       });
       return nextQuantities;
     });
-  }, [bottleReturnOptions]);
+  }, [returnOptions]);
 
   useEffect(() => {
     setBottleDepositQuantities((previousQuantities) => {
@@ -461,12 +473,12 @@ const DirectSaleBottlesUniqueItems = () => {
   useEffect(() => {
     setBottleReturnPrices((previousPrices) => {
       const nextPrices: Record<string, string> = {};
-      bottleReturnOptions.forEach((bottle) => {
+      returnOptions.forEach((bottle) => {
         nextPrices[bottle.key] = previousPrices[bottle.key] ?? "0.00";
       });
       return nextPrices;
     });
-  }, [bottleReturnOptions]);
+  }, [returnOptions]);
 
   const selectedAssetEntries = useMemo(
     () =>
@@ -481,20 +493,24 @@ const DirectSaleBottlesUniqueItems = () => {
               ? ("deposit_return" as const)
               : ("deposit" as const),
             price: price ?? Number.NaN,
+            forRepair: draft.forRepair === true,
           };
         })
         .filter(
           (
             asset,
-          ): asset is AssetOption & { action: AssetAction; price: number } =>
-            asset !== null,
+          ): asset is AssetOption & {
+            action: AssetAction;
+            price: number;
+            forRepair: boolean;
+          } => asset !== null,
         ),
     [assetDrafts, assetOptions],
   );
 
   const selectedBottleReturnEntries = useMemo(
     () =>
-      bottleReturnOptions
+      returnOptions
         .map((bottle) => {
           const quantity = bottleReturnQuantities[bottle.key] ?? 0;
           if (quantity <= 0) return null;
@@ -505,6 +521,7 @@ const DirectSaleBottlesUniqueItems = () => {
             quantity,
             priceDraft,
             unitPrice: unitPrice ?? Number.NaN,
+            forRepair: bottleReturnForRepair[bottle.key] === true,
           };
         })
         .filter(
@@ -514,9 +531,15 @@ const DirectSaleBottlesUniqueItems = () => {
             quantity: number;
             priceDraft: string;
             unitPrice: number;
+            forRepair: boolean;
           } => bottle !== null,
         ),
-    [bottleReturnOptions, bottleReturnPrices, bottleReturnQuantities],
+    [
+      bottleReturnForRepair,
+      returnOptions,
+      bottleReturnPrices,
+      bottleReturnQuantities,
+    ],
   );
 
   const selectedBottleDepositEntries = useMemo(
@@ -532,6 +555,7 @@ const DirectSaleBottlesUniqueItems = () => {
             quantity,
             priceDraft,
             unitPrice: unitPrice ?? Number.NaN,
+            forRepair: bottleDepositForRepair[bottle.key] === true,
           };
         })
         .filter(
@@ -541,9 +565,15 @@ const DirectSaleBottlesUniqueItems = () => {
             quantity: number;
             priceDraft: string;
             unitPrice: number;
+            forRepair: boolean;
           } => bottle !== null,
         ),
-    [bottleDepositOptions, bottleDepositPrices, bottleDepositQuantities],
+    [
+      bottleDepositForRepair,
+      bottleDepositOptions,
+      bottleDepositPrices,
+      bottleDepositQuantities,
+    ],
   );
 
   const collectedCount =
@@ -592,15 +622,19 @@ const DirectSaleBottlesUniqueItems = () => {
       assetDrafts,
       bottleDepositPrices,
       bottleDepositQuantities,
+      bottleDepositForRepair,
       bottleReturnPrices,
       bottleReturnQuantities,
+      bottleReturnForRepair,
     });
   }, [
     assetDrafts,
     bottleDepositPrices,
     bottleDepositQuantities,
+    bottleDepositForRepair,
     bottleReturnPrices,
     bottleReturnQuantities,
+    bottleReturnForRepair,
     directSaleDraft,
     setDirectSaleDraft,
   ]);
@@ -650,11 +684,23 @@ const DirectSaleBottlesUniqueItems = () => {
     [],
   );
 
+  const handleToggleAssetRepair = useCallback((assetKey: string) => {
+    setAssetDrafts((previousDrafts) => {
+      const currentDraft = previousDrafts[assetKey];
+      if (!currentDraft) return previousDrafts;
+      return {
+        ...previousDrafts,
+        [assetKey]: {
+          ...currentDraft,
+          forRepair: currentDraft.forRepair !== true,
+        },
+      };
+    });
+  }, []);
+
   const handleChangeBottleReturnQuantity = useCallback(
     (bottleKey: string, delta: number) => {
-      const bottle = bottleReturnOptions.find(
-        (entry) => entry.key === bottleKey,
-      );
+      const bottle = returnOptions.find((entry) => entry.key === bottleKey);
       const maxQuantity = bottle?.availableQuantity ?? Infinity;
 
       setBottleReturnQuantities((previousQuantities) => {
@@ -669,7 +715,7 @@ const DirectSaleBottlesUniqueItems = () => {
         };
       });
     },
-    [bottleReturnOptions],
+    [returnOptions],
   );
   const handleChangeBottleReturnPrice = useCallback(
     (bottleKey: string, value: string) => {
@@ -680,6 +726,13 @@ const DirectSaleBottlesUniqueItems = () => {
     },
     [],
   );
+
+  const handleToggleBottleReturnRepair = useCallback((bottleKey: string) => {
+    setBottleReturnForRepair((previous) => ({
+      ...previous,
+      [bottleKey]: previous[bottleKey] !== true,
+    }));
+  }, []);
 
   const handleChangeBottleDepositQuantity = useCallback(
     (bottleKey: string, delta: number) => {
@@ -713,6 +766,13 @@ const DirectSaleBottlesUniqueItems = () => {
     },
     [],
   );
+
+  const handleToggleBottleDepositRepair = useCallback((bottleKey: string) => {
+    setBottleDepositForRepair((previous) => ({
+      ...previous,
+      [bottleKey]: previous[bottleKey] !== true,
+    }));
+  }, []);
 
   const renderAssetCard = (asset: AssetOption) => {
     const draft = assetDrafts[asset.key] || {
@@ -836,6 +896,10 @@ const DirectSaleBottlesUniqueItems = () => {
             </Text>
           </TouchableOpacity>
         </View>
+        <RepairToggle
+          enabled={draft.forRepair === true}
+          onPress={() => handleToggleAssetRepair(asset.key)}
+        />
       </View>
     );
   };
@@ -866,7 +930,13 @@ const DirectSaleBottlesUniqueItems = () => {
                 resizeMode="cover"
               />
             ) : (
-              <Ionicons name="water-outline" size={21} color="#047857" />
+              <Ionicons
+                name={
+                  bottle.kind === "bottle" ? "water-outline" : "cube-outline"
+                }
+                size={21}
+                color="#047857"
+              />
             )}
           </View>
           <View style={styles.movementContent}>
@@ -922,6 +992,10 @@ const DirectSaleBottlesUniqueItems = () => {
             tone="return"
           />
         </View>
+        <RepairToggle
+          enabled={bottleReturnForRepair[bottle.key] === true}
+          onPress={() => handleToggleBottleReturnRepair(bottle.key)}
+        />
       </View>
     );
   };
@@ -1024,6 +1098,10 @@ const DirectSaleBottlesUniqueItems = () => {
             tone="leave"
           />
         </View>
+        <RepairToggle
+          enabled={bottleDepositForRepair[bottle.key] === true}
+          onPress={() => handleToggleBottleDepositRepair(bottle.key)}
+        />
       </View>
     );
   };
@@ -1184,22 +1262,6 @@ const DirectSaleBottlesUniqueItems = () => {
               <EmptySection
                 icon="water-outline"
                 text="No bottle deposits available."
-              />
-            )}
-          </View>
-
-          <View style={styles.subsection}>
-            <Text style={styles.subsectionTitle}>Item Deposits</Text>
-            {truckItemDepositOptions.length > 0 ? (
-              <View style={styles.itemList}>
-                {truckItemDepositOptions.map((item) =>
-                  renderBottleDepositCard(item),
-                )}
-              </View>
-            ) : (
-              <EmptySection
-                icon="cube-outline"
-                text="No retail item deposits available from the truck."
               />
             )}
           </View>
@@ -1633,6 +1695,22 @@ const styles = StyleSheet.create({
   includeButtonText: {
     fontSize: 12,
     fontWeight: "800",
+  },
+  repairToggle: {
+    display: "none",
+    flexDirection: "row",
+    alignItems: "center",
+    alignSelf: "flex-end",
+    gap: 5,
+    marginTop: 8,
+  },
+  repairToggleText: {
+    fontSize: 11,
+    color: "#64748B",
+  },
+  repairToggleTextActive: {
+    color: "#92400E",
+    fontWeight: "700",
   },
   stepper: {
     flexDirection: "row",

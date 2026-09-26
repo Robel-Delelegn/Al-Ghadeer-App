@@ -1,5 +1,31 @@
 import { Order } from "@/types/order";
 
+const normalizeProductKind = (value?: string | null): string => {
+  const normalized = (value || "")
+    .trim()
+    .toLowerCase()
+    .replace(/[\s_-]+/g, "");
+
+  if (normalized.includes("refill")) return "refill";
+  if (normalized.includes("retail")) return "retail";
+  if (normalized.includes("uniqueitem") || normalized.includes("asset")) {
+    return "unique-item";
+  }
+  return normalized;
+};
+
+const matchesProductKind = (
+  product: OrderProduct,
+  expectedType?: string,
+  expectedCategory?: string,
+): boolean => {
+  const expectedKind = normalizeProductKind(expectedType || expectedCategory);
+  if (!expectedKind) return true;
+
+  const productKind = normalizeProductKind(product.type || product.category);
+  return !productKind || productKind === expectedKind;
+};
+
 // Product in order (new format)
 export interface OrderProduct {
   id: string;
@@ -63,6 +89,7 @@ export function getProductQuantity(
   productName: string,
   productCategory?: string,
   productItemId?: string,
+  productType?: string,
 ): number {
   if (!order.products) return 0;
 
@@ -70,7 +97,7 @@ export function getProductQuantity(
   if (Array.isArray(order.products)) {
     const product = order.products.find((p) => {
       if (productItemId && p.item_id === productItemId) {
-        return true;
+        return matchesProductKind(p, productType, productCategory);
       }
       const nameMatch = p.name === productName;
       // If category is provided, also match by category
@@ -107,6 +134,7 @@ export function getProductCategory(
   order: Order,
   productName: string,
   productItemId?: string,
+  productType?: string,
 ): string | undefined {
   if (!order.products) return undefined;
 
@@ -114,7 +142,7 @@ export function getProductCategory(
   if (Array.isArray(order.products)) {
     const product = order.products.find((p) => {
       if (productItemId && p.item_id === productItemId) {
-        return true;
+        return matchesProductKind(p, productType);
       }
       return p.name === productName;
     });

@@ -21,6 +21,8 @@ export interface DriverHistoryDepositReturn {
   depositKind: "unique-item" | "bottle";
   quantity: number;
   unitPrice: number;
+  forRepair: boolean;
+  remark: string | null;
   label: string;
   assetCategory: string | null;
   imageUrl: string | null;
@@ -35,6 +37,7 @@ export interface DriverHistorySaleItem {
   imageUrl: string | null;
   quantity: number;
   unitPrice: number;
+  remark: string | null;
 }
 
 export interface DriverHistoryInvoice {
@@ -246,6 +249,8 @@ const normalizeDepositReturn = (
     depositKind,
     quantity,
     unitPrice,
+    forRepair: record.forRepair === true,
+    remark: toNullableText(record.remark),
     label: toText(record.label) || toText(record.name) || toText(item?.label),
     assetCategory:
       toNullableText(record.uniqueItemCategory) ??
@@ -306,6 +311,7 @@ const normalizeSaleItem = (value: unknown): DriverHistorySaleItem | null => {
     imageUrl: resolveResourceUrl(toNullableText(record.imageUrl)),
     quantity,
     unitPrice,
+    remark: toNullableText(record.remark),
   };
 };
 

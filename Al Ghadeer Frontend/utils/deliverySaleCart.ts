@@ -13,6 +13,7 @@ type CartImage = { uri: string } | null;
 
 export type DeliveryCartItemLike = {
   id?: string;
+  sale_item_id?: string;
   item_id?: string;
   item_type?: string;
   name?: string;
@@ -23,11 +24,13 @@ export type DeliveryCartItemLike = {
   uniqueItemCategory?: string | null;
   assetCategory?: string | null;
   loaded_quantity?: number | string | null;
+  remark?: string | null;
 };
 
 export type DeliverySaleCartRow = {
   key: string;
   cartId: string;
+  saleItemId: string;
   itemId: string;
   itemType: DeliverySaleItemType;
   name: string;
@@ -36,6 +39,7 @@ export type DeliverySaleCartRow = {
   unitPrice: number;
   category: string | null;
   assetCategory: string | null;
+  remark: string;
 };
 
 export type InvalidDeliverySaleCartItem = {
@@ -107,10 +111,11 @@ export const buildDeliverySaleCartRows = (
     const stockLimit = toStockLimit(item?.loaded_quantity);
     const itemType = inferDeliverySaleItemType(item);
     const itemId = toCleanText(item?.item_id) || cartId;
+    const saleItemId = toCleanText(item?.sale_item_id) || cartId;
     const invalidId = cartId || `cart-line-${index}`;
     const invalidName = name || "Selected item";
 
-    if (!name || !cartId || !itemId) {
+    if (!name || !cartId || !itemId || !saleItemId) {
       invalidItems.push({
         id: invalidId,
         name: invalidName,
@@ -161,6 +166,7 @@ export const buildDeliverySaleCartRows = (
       {
         key: `${cartId}:${itemId}:${itemType}:${unitPrice}:${index}`,
         cartId,
+        saleItemId,
         itemId,
         itemType,
         name,
@@ -170,6 +176,7 @@ export const buildDeliverySaleCartRows = (
         category: toCleanText(item.category) || null,
         assetCategory:
           toCleanText(item.uniqueItemCategory ?? item.assetCategory) || null,
+        remark: toCleanText(item.remark),
       },
     ];
   });
@@ -177,10 +184,34 @@ export const buildDeliverySaleCartRows = (
   return { rows, invalidItems };
 };
 
-export const toDeliverySaleRequestItems = (rows: DeliverySaleCartRow[]) =>
-  rows.map((row) => ({
-    itemId: row.itemId,
-    itemType: row.itemType,
-    quantity: row.quantity,
-    unitPrice: row.unitPrice,
+export type DeliverySaleRequestItem = {
+  itemId: string;
+  quantity: number;
+  unitPrice: number;
+  remark?: string;
+};
+
+export type ActualDeliverySaleItem = DeliverySaleRequestItem & {
+  itemType: DeliverySaleItemType;
+};
+
+export const toDeliverySaleRequestItems = (
+  rows: DeliverySaleCartRow[],
+): DeliverySaleRequestItem[] =>
+  rows.map(({ saleItemId, quantity, unitPrice, remark }) => ({
+    itemId: saleItemId,
+    quantity,
+    unitPrice,
+    ...(remark ? { remark } : {}),
+  }));
+
+export const toActualDeliverySaleItems = (
+  rows: DeliverySaleCartRow[],
+): ActualDeliverySaleItem[] =>
+  rows.map(({ itemId, itemType, quantity, unitPrice, remark }) => ({
+    itemId,
+    itemType,
+    quantity,
+    unitPrice,
+    remark,
   }));

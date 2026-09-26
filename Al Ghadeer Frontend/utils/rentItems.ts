@@ -79,12 +79,22 @@ export const isGenericItemDeposit = (item: RentItem): boolean => {
   );
 };
 
+export const isGenericItemReturn = (item: RentItem): boolean => {
+  return (
+    getRentItemDepositAction(item) === "deposit_return" &&
+    item.id.startsWith("held:item:")
+  );
+};
+
+export const isGenericItemMovement = (item: RentItem): boolean =>
+  isGenericItemDeposit(item) || isGenericItemReturn(item);
+
 export const getRentItemDisplayLabel = (item: RentItem): string => {
   const action = getRentItemDepositAction(item);
   const depositKind = getRentItemDepositKind(item);
 
-  if (isGenericItemDeposit(item)) {
-    return "Item Deposit";
+  if (isGenericItemMovement(item)) {
+    return action === "deposit_return" ? "Item Return" : "Item Deposit";
   }
 
   if (action === "deposit_return") {
@@ -113,9 +123,11 @@ export const getOrderSelectedDeliveryActions = (
 ): RentItem[] => {
   if (!order) return [];
 
-  if (Array.isArray(order.draft_delivery_actions)) {
-    return order.draft_delivery_actions;
-  }
+  const selectedItems = Array.isArray(order.draft_delivery_actions)
+    ? order.draft_delivery_actions
+    : (order.rent_items || []).filter((item) => item.in_truck === true);
 
-  return (order.rent_items || []).filter((item) => item.in_truck === true);
+  // The API accepts deposit movements only for bottles and unique items.
+  // Discard generic-retail drafts created by older app builds.
+  return selectedItems.filter((item) => !isGenericItemMovement(item));
 };

@@ -61,6 +61,7 @@ const API_BASE_URL = (
 // Unified product structure used by direct-sale UI.
 interface ServerProduct {
   id: string;
+  saleItemId?: string;
   type: "retail" | "refill" | "unique-items" | "assets" | "other";
   itemId: string;
   assetId?: string;
@@ -221,6 +222,7 @@ interface DirectSaleBottleReturnOption {
   unit: string | null;
   imageUrl: string | null;
   availableQuantity: number;
+  kind: "bottle" | "item";
 }
 
 interface DirectSaleBottleDepositOption {
@@ -530,6 +532,7 @@ const normalizeProductRecord = (
 
   return {
     id,
+    saleItemId: id,
     itemId,
     assetId:
       toStringValue(source.assetId) ||
@@ -611,6 +614,8 @@ const buildSellableProducts = (
     return [
       {
         id: `${UNIQUE_ITEM_SALE_PREFIX}${asset.id}:${asset.serial || asset.itemId}`,
+        saleItemId:
+          metadata?.saleItemId || `${UNIQUE_ITEMS_GROUP}:${asset.itemId}`,
         type: UNIQUE_ITEMS_GROUP,
         itemId: asset.itemId,
         assetId: asset.id,
@@ -804,6 +809,7 @@ const EMPTY_CHECK_DETAILS: DirectSaleCheckDraft = {
 
 const EMPTY_HELD_ITEMS: CustomerHeldItems = {
   bottles: [],
+  otherRetailItems: [],
   assets: [],
 };
 
@@ -2379,9 +2385,11 @@ const DirectSales: React.FC = () => {
         unit: bottle.unit,
         imageUrl: resolveResourceUrl(bottle.image_url),
         availableQuantity: bottle.quantity,
+        kind: "bottle" as const,
       })),
     [heldItems.bottles],
   );
+  const directSaleReturnOptions = directSaleBottleOptions;
   const directSaleBottleDepositOptions = useMemo<
     DirectSaleBottleDepositOption[]
   >(() => {
@@ -2416,29 +2424,14 @@ const DirectSales: React.FC = () => {
 
         const isBottleDeposit =
           bulkItem.isRefillableBottle || Boolean(refillProduct);
-        const matchedProductCategory = normalizeCategory(
-          matchedProduct?.category,
-        );
-        const matchedProductType = normalizeCategory(matchedProduct?.type);
-        const bulkCategory = normalizeCategory(bulkItem.category);
-        const isAssetBulkItem =
-          matchedProduct?.type === UNIQUE_ITEMS_GROUP ||
-          isUniqueItemSignal(matchedProductType) ||
-          isUniqueItemSignal(matchedProductCategory) ||
-          isUniqueItemSignal(bulkCategory);
-
-        if (!isBottleDeposit && isAssetBulkItem) {
+        if (!isBottleDeposit) {
           return options;
         }
 
         options.push({
-          key: `truck:${isBottleDeposit ? "bottle" : "item"}:${bulkItem.id}`,
-          itemId: isBottleDeposit
-            ? bulkItem.emptyBottleId || bulkItem.itemId || bulkItem.id
-            : bulkItem.itemId || bulkItem.id,
-          label: isBottleDeposit
-            ? toEmptyRefillLabel(refillProduct?.label || bulkItem.label)
-            : matchedProduct?.label || bulkItem.label,
+          key: `truck:bottle:${bulkItem.id}`,
+          itemId: bulkItem.emptyBottleId || bulkItem.itemId || bulkItem.id,
+          label: toEmptyRefillLabel(refillProduct?.label || bulkItem.label),
           description: matchedProduct?.description ?? bulkItem.description,
           category: matchedProduct?.category ?? bulkItem.category,
           unit: matchedProduct?.unit ?? refillProduct?.unit ?? bulkItem.unit,
@@ -2447,7 +2440,7 @@ const DirectSales: React.FC = () => {
             refillProduct?.image_url ||
             resolveResourceUrl(bulkItem.image_url),
           availableQuantity,
-          kind: isBottleDeposit ? "bottle" : "item",
+          kind: "bottle",
         });
 
         return options;
@@ -2462,10 +2455,6 @@ const DirectSales: React.FC = () => {
     [directSaleBottleDepositOptions],
   );
 
-  const directSaleTruckItemDepositOptions = useMemo(
-    () => directSaleBottleDepositOptions.filter((item) => item.kind === "item"),
-    [directSaleBottleDepositOptions],
-  );
   const heldAssetOptions = useMemo(
     () => directSaleAssetOptions.filter((asset) => asset.source === "held"),
     [directSaleAssetOptions],
@@ -2479,7 +2468,7 @@ const DirectSales: React.FC = () => {
     setBottleReturnQuantities((previousQuantities) => {
       const nextQuantities: Record<string, number> = {};
 
-      directSaleBottleOptions.forEach((bottle) => {
+      directSaleReturnOptions.forEach((bottle) => {
         const previousQuantity = previousQuantities[bottle.key] ?? 0;
         nextQuantities[bottle.key] = Math.max(
           0,
@@ -2489,7 +2478,7 @@ const DirectSales: React.FC = () => {
 
       return nextQuantities;
     });
-  }, [directSaleBottleOptions]);
+  }, [directSaleReturnOptions]);
 
   useEffect(() => {
     setBottleDepositQuantities((previousQuantities) => {
@@ -2523,17 +2512,17 @@ const DirectSales: React.FC = () => {
     setBottleReturnPrices((previousPrices) => {
       const nextPrices: Record<string, string> = {};
 
-      directSaleBottleOptions.forEach((bottle) => {
+      directSaleReturnOptions.forEach((bottle) => {
         nextPrices[bottle.key] = previousPrices[bottle.key] ?? "0.00";
       });
 
       return nextPrices;
     });
-  }, [directSaleBottleOptions]);
+  }, [directSaleReturnOptions]);
 
   const selectedBottleReturnEntries = useMemo(
     () =>
-      directSaleBottleOptions
+      directSaleReturnOptions
         .map((bottle) => {
           const quantity = bottleReturnQuantities[bottle.key] ?? 0;
           if (quantity <= 0) return null;
@@ -2555,7 +2544,7 @@ const DirectSales: React.FC = () => {
             unitPrice: number;
           } => bottle !== null,
         ),
-    [bottleReturnPrices, bottleReturnQuantities, directSaleBottleOptions],
+    [bottleReturnPrices, bottleReturnQuantities, directSaleReturnOptions],
   );
   const selectedBottleDepositEntries = useMemo(
     () =>
@@ -2663,12 +2652,19 @@ const DirectSales: React.FC = () => {
   );
   const totalBottleReturnCount = useMemo(
     () =>
-      selectedBottleReturnEntries.reduce(
-        (sum, bottle) => sum + bottle.quantity,
-        0,
-      ),
+      selectedBottleReturnEntries
+        .filter((item) => item.kind === "bottle")
+        .reduce((sum, bottle) => sum + bottle.quantity, 0),
     [selectedBottleReturnEntries],
   );
+  const totalItemReturnCount = useMemo(
+    () =>
+      selectedBottleReturnEntries
+        .filter((item) => item.kind === "item")
+        .reduce((sum, bottle) => sum + bottle.quantity, 0),
+    [selectedBottleReturnEntries],
+  );
+  const totalReturnCount = totalBottleReturnCount + totalItemReturnCount;
   const totalBottleDepositCount = useMemo(
     () =>
       selectedBottleDepositEntries
@@ -2689,14 +2685,8 @@ const DirectSales: React.FC = () => {
   );
   const totalActionSelections = useMemo(
     () =>
-      selectedAssetEntries.length +
-      totalTruckDepositCount +
-      totalBottleReturnCount,
-    [
-      selectedAssetEntries.length,
-      totalTruckDepositCount,
-      totalBottleReturnCount,
-    ],
+      selectedAssetEntries.length + totalTruckDepositCount + totalReturnCount,
+    [selectedAssetEntries.length, totalTruckDepositCount, totalReturnCount],
   );
   const parsedCreditCollectionAmount = useMemo(
     () => parseMoneyDraft(creditCollectionAmount),
@@ -2735,6 +2725,12 @@ const DirectSales: React.FC = () => {
       );
     }
 
+    if (totalItemReturnCount > 0) {
+      parts.push(
+        `${totalItemReturnCount} item return${totalItemReturnCount === 1 ? "" : "s"}`,
+      );
+    }
+
     if (parts.length > 0) {
       const summary =
         parts.length === 1
@@ -2766,6 +2762,7 @@ const DirectSales: React.FC = () => {
     totalBottleReturnValue,
     totalBottleDepositCount,
     totalItemDepositCount,
+    totalItemReturnCount,
     totalBottleReturnCount,
   ]);
   const hasSaleProducts = useMemo(() => {
@@ -2862,7 +2859,7 @@ const DirectSales: React.FC = () => {
   );
   const handleChangeBottleReturnQuantity = useCallback(
     (bottleKey: string, delta: number) => {
-      const bottle = directSaleBottleOptions.find(
+      const bottle = directSaleReturnOptions.find(
         (entry) => entry.key === bottleKey,
       );
       const maxQuantity = bottle?.availableQuantity ?? Infinity;
@@ -2879,7 +2876,7 @@ const DirectSales: React.FC = () => {
         };
       });
     },
-    [directSaleBottleOptions],
+    [directSaleReturnOptions],
   );
   const handleChangeBottleReturnPrice = useCallback(
     (bottleKey: string, value: string) => {
@@ -3278,8 +3275,10 @@ const DirectSales: React.FC = () => {
       assetDrafts,
       bottleDepositPrices,
       bottleDepositQuantities,
+      bottleDepositForRepair: directSaleDraft?.bottleDepositForRepair || {},
       bottleReturnPrices,
       bottleReturnQuantities,
+      bottleReturnForRepair: directSaleDraft?.bottleReturnForRepair || {},
       creditCollectionAmount,
       creditCollectionRemark,
     }),
@@ -3287,8 +3286,10 @@ const DirectSales: React.FC = () => {
       assetDrafts,
       bottleDepositPrices,
       bottleDepositQuantities,
+      directSaleDraft?.bottleDepositForRepair,
       bottleReturnPrices,
       bottleReturnQuantities,
+      directSaleDraft?.bottleReturnForRepair,
       checkDetails,
       creditCollectionAmount,
       creditCollectionRemark,
@@ -3801,7 +3802,9 @@ const DirectSales: React.FC = () => {
               />
             ) : (
               <Ionicons
-                name="water-outline"
+                name={
+                  bottle.kind === "bottle" ? "water-outline" : "cube-outline"
+                }
                 size={18}
                 color={isSelected ? "#FFFFFF" : "#0F766E"}
               />
@@ -4181,7 +4184,7 @@ const DirectSales: React.FC = () => {
               activeOpacity={0.8}
             >
               <Text style={[styles.sectionTitle, styles.collapsibleTitle]}>
-                Remark (Optional)
+                Delivery / Deposit & Return Remark (Optional)
               </Text>
               <View style={styles.collapsibleHeaderRight}>
                 <Text style={styles.collapsibleHeaderText}>
@@ -4205,7 +4208,7 @@ const DirectSales: React.FC = () => {
                 />
                 <TextInput
                   style={styles.input}
-                  placeholder="Add a note for this sale"
+                  placeholder="Example: External company bottle collected and discarded"
                   placeholderTextColor="#CBD5E1"
                   value={remark}
                   onChangeText={setRemark}
@@ -4471,7 +4474,7 @@ const DirectSales: React.FC = () => {
               <View style={styles.productsSections}>
                 {!hasSaleProducts &&
                 directSaleAssetOptions.length === 0 &&
-                directSaleBottleOptions.length === 0 ? (
+                directSaleReturnOptions.length === 0 ? (
                   <View style={styles.emptyContainer}>
                     <Ionicons name="cube-outline" size={48} color="#E2E8F0" />
                     <Text style={styles.emptyText}>No products available</Text>
@@ -4677,9 +4680,9 @@ const DirectSales: React.FC = () => {
           <View style={styles.assetActionsSummaryRow}>
             <View style={styles.assetLauncherChip}>
               <Text style={styles.assetLauncherChipText}>
-                {directSaleBottleOptions.length + heldAssetOptions.length}{" "}
+                {directSaleReturnOptions.length + heldAssetOptions.length}{" "}
                 return
-                {directSaleBottleOptions.length + heldAssetOptions.length === 1
+                {directSaleReturnOptions.length + heldAssetOptions.length === 1
                   ? ""
                   : "s"}
               </Text>
@@ -4688,12 +4691,6 @@ const DirectSales: React.FC = () => {
               <Text style={styles.assetLauncherChipText}>
                 {directSaleRefillBottleDepositOptions.length} bottle deposit
                 {directSaleRefillBottleDepositOptions.length === 1 ? "" : "s"}
-              </Text>
-            </View>
-            <View style={styles.assetLauncherChip}>
-              <Text style={styles.assetLauncherChipText}>
-                {directSaleTruckItemDepositOptions.length} item deposit
-                {directSaleTruckItemDepositOptions.length === 1 ? "" : "s"}
               </Text>
             </View>
             <View style={styles.assetLauncherChip}>
@@ -4789,7 +4786,7 @@ const DirectSales: React.FC = () => {
               </View>
               <View style={styles.productCategoryCountBadge}>
                 <Text style={styles.productCategoryCount}>
-                  {directSaleBottleOptions.length + heldAssetOptions.length}
+                  {directSaleReturnOptions.length + heldAssetOptions.length}
                 </Text>
               </View>
             </View>
@@ -4800,7 +4797,7 @@ const DirectSales: React.FC = () => {
                 : "Select a customer to load returns."}
             </Text>
 
-            {directSaleBottleOptions.length === 0 &&
+            {directSaleReturnOptions.length === 0 &&
             heldAssetOptions.length === 0 &&
             !heldItemsError &&
             customerData ? (
@@ -4930,44 +4927,6 @@ const DirectSales: React.FC = () => {
                 <View style={styles.productGrid}>
                   {directSaleRefillBottleDepositOptions.map((bottle) =>
                     renderBottleDepositCard(bottle),
-                  )}
-                </View>
-              )}
-            </View>
-
-            <View style={styles.assetActionSubsection}>
-              <View style={styles.assetActionsSectionHeader}>
-                <View
-                  style={[
-                    styles.productCategoryBadge,
-                    styles.productCategoryBadgeWholesale,
-                  ]}
-                >
-                  <Ionicons name="cube-outline" size={14} color="#0369A1" />
-                  <Text style={styles.productCategoryTitle}>Item Deposits</Text>
-                </View>
-                <View style={styles.productCategoryCountBadge}>
-                  <Text style={styles.productCategoryCount}>
-                    {directSaleTruckItemDepositOptions.length}
-                  </Text>
-                </View>
-              </View>
-
-              <Text style={styles.assetSectionHelperText}>
-                Retail and bulk items from current truck load.
-              </Text>
-
-              {directSaleTruckItemDepositOptions.length === 0 ? (
-                <View style={styles.assetSectionEmptyCard}>
-                  <Ionicons name="cube-outline" size={18} color="#94A3B8" />
-                  <Text style={styles.assetSectionEmptyText}>
-                    No item deposits available.
-                  </Text>
-                </View>
-              ) : (
-                <View style={styles.productGrid}>
-                  {directSaleTruckItemDepositOptions.map((item) =>
-                    renderBottleDepositCard(item),
                   )}
                 </View>
               )}

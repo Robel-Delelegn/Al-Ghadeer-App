@@ -26,7 +26,6 @@ import {
   UNIQUE_ITEM_KIND,
   UNIQUE_ITEM_MOVEMENT_TO_CUSTOMER,
   UNIQUE_ITEM_SALE_PREFIX,
-  UNIQUE_ITEMS_GROUP,
 } from "@/utils/uniqueItems";
 import { Ionicons } from "@expo/vector-icons";
 import { useRouter } from "expo-router";
@@ -57,40 +56,35 @@ type AssetAction = "deposit" | "deposit_return";
 interface SaleRequestBody {
   customerId: string;
   siteId?: string;
-  paymentMethod: PaymentMethod;
-  payment_method?: PaymentMethod;
+  sale?: {
+    items: {
+      itemId: string;
+      quantity: number;
+      unitPrice: number;
+      remark?: string;
+    }[];
+    totals: {
+      subtotal: number;
+      vat: number;
+      total: number;
+    };
+    payment: {
+      method: PaymentMethod;
+      amount: number;
+      checkNumber?: string;
+      checkDate?: string;
+      bankName?: string;
+      accountNumber?: string;
+    };
+  };
   remark?: string;
-  totals?: {
-    subtotal: number;
-    vat: number;
-    total: number;
-  };
-  retails?: {
-    id: string;
-    quantity: number;
-    price: number;
-  }[];
-  uniqueItems?: {
-    id: string;
-    price: number;
-  }[];
-  refills?: {
-    filledBottleId: string;
-    filledQuantity: number;
-    price: number;
-  }[];
-  check?: {
-    checkNumber?: string;
-    checkDate?: string;
-    bankName?: string;
-    accountNumber?: string;
-  };
   depositsReturns?: {
     type: "deposit" | "deposit_return";
     itemId: string;
-    depositKind: "unique-item" | "bottle";
     quantity: number;
     unitPrice: number;
+    forRepair?: boolean;
+    remark?: string;
   }[];
   creditCollections?: {
     amount: number;
@@ -116,6 +110,7 @@ interface BottleReturnOption {
   unit: string | null;
   imageUrl: string | null;
   availableQuantity: number;
+  kind: "bottle" | "item";
 }
 
 interface BottleDepositOption {
@@ -131,7 +126,7 @@ interface BottleDepositOption {
 }
 
 const EMPTY_PRODUCTS: DirectSaleDraftProduct[] = [];
-const EMPTY_HELD_ITEMS = { bottles: [], assets: [] };
+const EMPTY_HELD_ITEMS = { bottles: [], otherRetailItems: [], assets: [] };
 const EMPTY_TRUCK_ASSETS: NonNullable<
   ReturnType<typeof useOrderStore.getState>["directSaleDraft"]
 >["truckAssets"] = [];
@@ -258,6 +253,42 @@ const DirectSaleConfirmation = () => {
   const [creditCollectionRemark, setCreditCollectionRemark] = useState(
     directSaleDraft?.creditCollectionRemark || "",
   );
+  const [depositReturnForRepair, setDepositReturnForRepair] = useState<
+    Record<string, boolean>
+  >({});
+  const [saleItemRemarks, setSaleItemRemarks] = useState<
+    Record<string, string>
+  >({});
+  const [depositReturnRemarks, setDepositReturnRemarks] = useState<
+    Record<string, string>
+  >({});
+  const [expandedRemarkKey, setExpandedRemarkKey] = useState<string | null>(
+    null,
+  );
+
+  const handleToggleDepositReturnRepair = useCallback((key: string) => {
+    setDepositReturnForRepair((previous) => ({
+      ...previous,
+      [key]: previous[key] !== true,
+    }));
+  }, []);
+
+  const handleChangeSaleItemRemark = useCallback(
+    (itemId: string, remark: string) => {
+      setSaleItemRemarks((previous) => ({ ...previous, [itemId]: remark }));
+    },
+    [],
+  );
+
+  const handleChangeDepositReturnRemark = useCallback(
+    (itemId: string, remark: string) => {
+      setDepositReturnRemarks((previous) => ({
+        ...previous,
+        [itemId]: remark,
+      }));
+    },
+    [],
+  );
 
   const products = directSaleDraft?.products ?? EMPTY_PRODUCTS;
   const quantities = directSaleDraft?.quantities ?? EMPTY_QUANTITIES;
@@ -333,9 +364,12 @@ const DirectSaleConfirmation = () => {
         unit: bottle.unit,
         imageUrl: resolveResourceUrl(bottle.image_url),
         availableQuantity: bottle.quantity,
+        kind: "bottle" as const,
       })),
     [heldItems.bottles],
   );
+
+  const returnOptions = bottleReturnOptions;
 
   const bottleDepositOptions = useMemo<BottleDepositOption[]>(() => {
     const productsById = new Map<string, DirectSaleDraftProduct>();
@@ -366,29 +400,14 @@ const DirectSaleConfirmation = () => {
 
       const isBottleDeposit =
         bulkItem.isRefillableBottle || Boolean(refillProduct);
-      const matchedProductCategory = normalizeCategory(
-        matchedProduct?.category,
-      );
-      const matchedProductType = normalizeCategory(matchedProduct?.type);
-      const bulkCategory = normalizeCategory(bulkItem.category);
-      const isAssetBulkItem =
-        matchedProduct?.type === UNIQUE_ITEMS_GROUP ||
-        isUniqueItemSignal(matchedProductType) ||
-        isUniqueItemSignal(matchedProductCategory) ||
-        isUniqueItemSignal(bulkCategory);
-
-      if (!isBottleDeposit && isAssetBulkItem) {
+      if (!isBottleDeposit) {
         return options;
       }
 
       options.push({
-        key: `truck:${isBottleDeposit ? "bottle" : "item"}:${bulkItem.id}`,
-        itemId: isBottleDeposit
-          ? bulkItem.emptyBottleId || bulkItem.itemId || bulkItem.id
-          : bulkItem.itemId || bulkItem.id,
-        label: isBottleDeposit
-          ? toEmptyRefillLabel(refillProduct?.label || bulkItem.label)
-          : matchedProduct?.label || bulkItem.label,
+        key: `truck:bottle:${bulkItem.id}`,
+        itemId: bulkItem.emptyBottleId || bulkItem.itemId || bulkItem.id,
+        label: toEmptyRefillLabel(refillProduct?.label || bulkItem.label),
         description: matchedProduct?.description ?? bulkItem.description,
         category: matchedProduct?.category ?? bulkItem.category,
         unit: matchedProduct?.unit ?? refillProduct?.unit ?? bulkItem.unit,
@@ -397,7 +416,7 @@ const DirectSaleConfirmation = () => {
           refillProduct?.image_url ||
           resolveResourceUrl(bulkItem.image_url),
         availableQuantity,
-        kind: isBottleDeposit ? "bottle" : "item",
+        kind: "bottle",
       });
       return options;
     }, []);
@@ -430,7 +449,7 @@ const DirectSaleConfirmation = () => {
 
   const selectedBottleReturnEntries = useMemo(
     () =>
-      bottleReturnOptions
+      returnOptions
         .map((bottle) => {
           const quantity =
             directSaleDraft?.bottleReturnQuantities[bottle.key] ?? 0;
@@ -455,7 +474,7 @@ const DirectSaleConfirmation = () => {
           } => bottle !== null,
         ),
     [
-      bottleReturnOptions,
+      returnOptions,
       directSaleDraft?.bottleReturnPrices,
       directSaleDraft?.bottleReturnQuantities,
     ],
@@ -668,66 +687,61 @@ const DirectSaleConfirmation = () => {
     setIsProcessing(true);
     setApiError(null);
     try {
-      const retails: NonNullable<SaleRequestBody["retails"]> = [];
-      const uniqueItems: NonNullable<SaleRequestBody["uniqueItems"]> = [];
-      const refills: NonNullable<SaleRequestBody["refills"]> = [];
       const depositsReturns: NonNullable<SaleRequestBody["depositsReturns"]> = [
         ...selectedAssetEntries.map((asset) => ({
           type: asset.action,
           itemId: asset.itemId,
-          depositKind: UNIQUE_ITEM_KIND,
           quantity: 1,
           unitPrice: Number(asset.price.toFixed(2)),
+          forRepair:
+            depositReturnForRepair[asset.key] ??
+            directSaleDraft.assetDrafts[asset.key]?.forRepair === true,
+          ...(depositReturnRemarks[asset.key]?.trim()
+            ? { remark: depositReturnRemarks[asset.key].trim() }
+            : {}),
         })),
         ...selectedBottleDepositEntries.map((bottle) => ({
           type: "deposit" as const,
           itemId: bottle.itemId,
-          depositKind:
-            bottle.kind === "bottle" ? ("bottle" as const) : UNIQUE_ITEM_KIND,
           quantity: bottle.quantity,
           unitPrice: Number(bottle.unitPrice.toFixed(2)),
+          forRepair:
+            depositReturnForRepair[bottle.key] ??
+            directSaleDraft.bottleDepositForRepair?.[bottle.key] === true,
+          ...(depositReturnRemarks[bottle.key]?.trim()
+            ? { remark: depositReturnRemarks[bottle.key].trim() }
+            : {}),
         })),
         ...selectedBottleReturnEntries.map((bottle) => ({
           type: "deposit_return" as const,
           itemId: bottle.itemId,
-          depositKind: "bottle" as const,
           quantity: bottle.quantity,
           unitPrice: Number(bottle.unitPrice.toFixed(2)),
+          forRepair:
+            depositReturnForRepair[bottle.key] ??
+            directSaleDraft.bottleReturnForRepair?.[bottle.key] === true,
+          ...(depositReturnRemarks[bottle.key]?.trim()
+            ? { remark: depositReturnRemarks[bottle.key].trim() }
+            : {}),
         })),
       ];
 
-      selectedProducts.forEach((product) => {
+      const saleRequestItems = selectedProducts.flatMap((product) => {
         const quantity = quantities[product.id] || 0;
-        if (quantity <= 0) return;
+        if (quantity <= 0) return [];
         const unitPrice = Number(product.pricePerUnit);
-        if (!Number.isFinite(unitPrice)) return;
-
-        const lineType = getSaleLineType(product);
-        if (lineType === "refill") {
-          refills.push({
-            filledBottleId: product.itemId,
-            filledQuantity: quantity,
-            price: unitPrice,
-          });
-          return;
-        }
-
-        if (lineType === UNIQUE_ITEM_KIND) {
-          const assetQuantity = Math.max(0, Math.floor(quantity));
-          for (let index = 0; index < assetQuantity; index += 1) {
-            uniqueItems.push({
-              id: getDirectSaleAssetId(product),
-              price: unitPrice,
-            });
-          }
-          return;
-        }
-
-        retails.push({
-          id: product.itemId,
-          quantity,
-          price: unitPrice,
-        });
+        if (!Number.isFinite(unitPrice)) return [];
+        return [
+          {
+            // The updated API expects the exact id returned by GET /products.
+            itemId: product.saleItemId || product.id,
+            quantity,
+            unitPrice,
+            ...(saleItemRemarks[product.id]?.trim()
+              ? { remark: saleItemRemarks[product.id].trim() }
+              : {}),
+          },
+        ];
       });
 
       const selectedCreditCollections =
@@ -742,25 +756,15 @@ const DirectSaleConfirmation = () => {
             ]
           : [];
 
-      const saleSubtotal =
-        retails.reduce((sum, item) => sum + item.price * item.quantity, 0) +
-        uniqueItems.reduce((sum, item) => sum + item.price, 0) +
-        refills.reduce(
-          (sum, item) => sum + item.price * item.filledQuantity,
-          0,
-        );
+      const saleSubtotal = saleRequestItems.reduce(
+        (sum, item) => sum + item.unitPrice * item.quantity,
+        0,
+      );
       const saleVat = saleSubtotal * VAT_RATE;
       const saleTotalForPayload = saleSubtotal + saleVat;
 
       const saleData: SaleRequestBody = {
         customerId: directSaleDraft.customerData.id,
-        paymentMethod: directSaleDraft.paymentMethod,
-        payment_method: directSaleDraft.paymentMethod,
-        totals: {
-          subtotal: Number(saleSubtotal.toFixed(2)),
-          vat: Number(saleVat.toFixed(2)),
-          total: Number(saleTotalForPayload.toFixed(2)),
-        },
       };
 
       const normalizedRemark = directSaleDraft.remark.trim();
@@ -771,39 +775,50 @@ const DirectSaleConfirmation = () => {
       if (selectedSiteId) {
         saleData.siteId = selectedSiteId;
       }
-      if (retails.length > 0) {
-        saleData.retails = retails;
-      }
-      if (uniqueItems.length > 0) {
-        saleData.uniqueItems = uniqueItems;
-      }
-      if (refills.length > 0) {
-        saleData.refills = refills;
+      if (saleRequestItems.length > 0) {
+        saleData.sale = {
+          items: saleRequestItems,
+          totals: {
+            subtotal: Number(saleSubtotal.toFixed(2)),
+            vat: Number(saleVat.toFixed(2)),
+            total: Number(saleTotalForPayload.toFixed(2)),
+          },
+          payment: {
+            method: directSaleDraft.paymentMethod,
+            amount: Number(saleTotalForPayload.toFixed(2)),
+            ...(directSaleDraft.paymentMethod === "check"
+              ? {
+                  ...(directSaleDraft.checkDetails.checkNumber.trim()
+                    ? {
+                        checkNumber:
+                          directSaleDraft.checkDetails.checkNumber.trim(),
+                      }
+                    : {}),
+                  ...(directSaleDraft.checkDetails.checkDate.trim()
+                    ? {
+                        checkDate:
+                          directSaleDraft.checkDetails.checkDate.trim(),
+                      }
+                    : {}),
+                  ...(directSaleDraft.checkDetails.bankName.trim()
+                    ? { bankName: directSaleDraft.checkDetails.bankName.trim() }
+                    : {}),
+                  ...(directSaleDraft.checkDetails.accountNumber.trim()
+                    ? {
+                        accountNumber:
+                          directSaleDraft.checkDetails.accountNumber.trim(),
+                      }
+                    : {}),
+                }
+              : {}),
+          },
+        };
       }
       if (depositsReturns.length > 0) {
         saleData.depositsReturns = depositsReturns;
       }
       if (selectedCreditCollections.length > 0) {
         saleData.creditCollections = selectedCreditCollections;
-      }
-      if (directSaleDraft.paymentMethod === "check") {
-        saleData.check = {
-          ...(directSaleDraft.checkDetails.checkNumber.trim()
-            ? { checkNumber: directSaleDraft.checkDetails.checkNumber.trim() }
-            : {}),
-          ...(directSaleDraft.checkDetails.checkDate.trim()
-            ? { checkDate: directSaleDraft.checkDetails.checkDate.trim() }
-            : {}),
-          ...(directSaleDraft.checkDetails.bankName.trim()
-            ? { bankName: directSaleDraft.checkDetails.bankName.trim() }
-            : {}),
-          ...(directSaleDraft.checkDetails.accountNumber.trim()
-            ? {
-                accountNumber:
-                  directSaleDraft.checkDetails.accountNumber.trim(),
-              }
-            : {}),
-        };
       }
 
       const response = await authenticatedFetch(
@@ -968,6 +983,12 @@ const DirectSaleConfirmation = () => {
           action_source: "held_item" as const,
           unit: bottle.unit,
           description: bottle.description,
+          other_action_type:
+            bottle.kind === "item"
+              ? ("item-movement-from-customer" as const)
+              : undefined,
+          other_action_item_type:
+            bottle.kind === "item" ? ("bottle" as const) : undefined,
         })),
       ];
 
@@ -1094,6 +1115,9 @@ const DirectSaleConfirmation = () => {
     selectedAssetEntries,
     selectedBottleDepositEntries,
     selectedBottleReturnEntries,
+    depositReturnForRepair,
+    depositReturnRemarks,
+    saleItemRemarks,
     selectedProducts,
     setLastConfirmPaymentResponse,
     setPaymentMethod,
@@ -1250,6 +1274,61 @@ const DirectSaleConfirmation = () => {
                     </Text>
                   </View>
                 </View>
+                <TouchableOpacity
+                  style={styles.remarkToggle}
+                  onPress={() =>
+                    setExpandedRemarkKey((current) =>
+                      current === `sale:${product.id}`
+                        ? null
+                        : `sale:${product.id}`,
+                    )
+                  }
+                  activeOpacity={0.75}
+                >
+                  <Ionicons
+                    name={
+                      saleItemRemarks[product.id]
+                        ? "chatbubble"
+                        : "chatbubble-outline"
+                    }
+                    size={14}
+                    color={saleItemRemarks[product.id] ? "#2563EB" : "#64748B"}
+                  />
+                  <Text
+                    style={[
+                      styles.remarkToggleText,
+                      saleItemRemarks[product.id] &&
+                        styles.remarkToggleTextActive,
+                    ]}
+                  >
+                    {saleItemRemarks[product.id]
+                      ? "Remark added"
+                      : "Add remark"}
+                  </Text>
+                  <Ionicons
+                    name={
+                      expandedRemarkKey === `sale:${product.id}`
+                        ? "chevron-up"
+                        : "chevron-down"
+                    }
+                    size={14}
+                    color="#94A3B8"
+                  />
+                </TouchableOpacity>
+                {expandedRemarkKey === `sale:${product.id}` ? (
+                  <TextInput
+                    style={styles.itemRemarkInput}
+                    value={saleItemRemarks[product.id] || ""}
+                    onChangeText={(value) =>
+                      handleChangeSaleItemRemark(product.id, value)
+                    }
+                    placeholder="Add a note about this item"
+                    placeholderTextColor="#94A3B8"
+                    multiline
+                    maxLength={2000}
+                    autoFocus
+                  />
+                ) : null}
                 {index < selectedProducts.length - 1 ? (
                   <View style={styles.itemDivider} />
                 ) : null}
@@ -1281,10 +1360,31 @@ const DirectSaleConfirmation = () => {
                 <MovementRow
                   key={bottle.key}
                   label={bottle.label}
-                  meta={`Bottle Return - Qty: ${bottle.quantity}`}
+                  meta={`${bottle.kind === "bottle" ? "Bottle" : "Item"} Return - Qty: ${bottle.quantity}`}
                   price={`- AED ${(bottle.unitPrice * bottle.quantity).toFixed(2)}`}
                   icon="return-up-back-outline"
                   tone="return"
+                  forRepair={
+                    depositReturnForRepair[bottle.key] ??
+                    directSaleDraft.bottleReturnForRepair?.[bottle.key] === true
+                  }
+                  remark={depositReturnRemarks[bottle.key] || ""}
+                  remarkExpanded={
+                    expandedRemarkKey === `movement:${bottle.key}`
+                  }
+                  onToggleRemark={() =>
+                    setExpandedRemarkKey((current) =>
+                      current === `movement:${bottle.key}`
+                        ? null
+                        : `movement:${bottle.key}`,
+                    )
+                  }
+                  onChangeRemark={(value) =>
+                    handleChangeDepositReturnRemark(bottle.key, value)
+                  }
+                  onToggleForRepair={() =>
+                    handleToggleDepositReturnRepair(bottle.key)
+                  }
                   showDivider={
                     index <
                     selectedBottleReturnEntries.length +
@@ -1302,6 +1402,28 @@ const DirectSaleConfirmation = () => {
                   price={`AED ${(bottle.unitPrice * bottle.quantity).toFixed(2)}`}
                   icon="arrow-redo-outline"
                   tone="leave"
+                  forRepair={
+                    depositReturnForRepair[bottle.key] ??
+                    directSaleDraft.bottleDepositForRepair?.[bottle.key] ===
+                      true
+                  }
+                  remark={depositReturnRemarks[bottle.key] || ""}
+                  remarkExpanded={
+                    expandedRemarkKey === `movement:${bottle.key}`
+                  }
+                  onToggleRemark={() =>
+                    setExpandedRemarkKey((current) =>
+                      current === `movement:${bottle.key}`
+                        ? null
+                        : `movement:${bottle.key}`,
+                    )
+                  }
+                  onChangeRemark={(value) =>
+                    handleChangeDepositReturnRemark(bottle.key, value)
+                  }
+                  onToggleForRepair={() =>
+                    handleToggleDepositReturnRepair(bottle.key)
+                  }
                   showDivider={
                     selectedBottleReturnEntries.length + index <
                     selectedBottleReturnEntries.length +
@@ -1323,6 +1445,25 @@ const DirectSaleConfirmation = () => {
                       : "arrow-redo-outline"
                   }
                   tone={asset.action === "deposit_return" ? "return" : "leave"}
+                  forRepair={
+                    depositReturnForRepair[asset.key] ??
+                    directSaleDraft.assetDrafts[asset.key]?.forRepair === true
+                  }
+                  remark={depositReturnRemarks[asset.key] || ""}
+                  remarkExpanded={expandedRemarkKey === `movement:${asset.key}`}
+                  onToggleRemark={() =>
+                    setExpandedRemarkKey((current) =>
+                      current === `movement:${asset.key}`
+                        ? null
+                        : `movement:${asset.key}`,
+                    )
+                  }
+                  onChangeRemark={(value) =>
+                    handleChangeDepositReturnRemark(asset.key, value)
+                  }
+                  onToggleForRepair={() =>
+                    handleToggleDepositReturnRepair(asset.key)
+                  }
                   showDivider={index < selectedAssetEntries.length - 1}
                 />
               ))}
@@ -1410,7 +1551,7 @@ const DirectSaleConfirmation = () => {
           {depositValue > 0 ? (
             <View style={styles.summaryRow}>
               <Text style={styles.summaryLabel}>
-                Bottle/Item/Unique Item Deposits
+                Bottle/Unique Item Deposits
               </Text>
               <Text style={styles.summaryValue}>
                 AED {depositValue.toFixed(2)}
@@ -1483,6 +1624,12 @@ const MovementRow = ({
   icon,
   tone,
   showDivider,
+  forRepair,
+  onToggleForRepair,
+  remark,
+  onChangeRemark,
+  remarkExpanded,
+  onToggleRemark,
 }: {
   label: string;
   meta: string;
@@ -1490,6 +1637,12 @@ const MovementRow = ({
   icon: keyof typeof Ionicons.glyphMap;
   tone: "return" | "leave";
   showDivider: boolean;
+  forRepair: boolean;
+  onToggleForRepair: () => void;
+  remark: string;
+  onChangeRemark: (value: string) => void;
+  remarkExpanded: boolean;
+  onToggleRemark: () => void;
 }) => (
   <View>
     <View style={styles.itemRow}>
@@ -1515,6 +1668,54 @@ const MovementRow = ({
       </View>
       <Text style={styles.itemPrice}>{price}</Text>
     </View>
+    <TouchableOpacity
+      style={styles.repairToggle}
+      onPress={onToggleForRepair}
+      activeOpacity={0.75}
+    >
+      <Ionicons
+        name={forRepair ? "checkbox" : "square-outline"}
+        size={16}
+        color={forRepair ? "#B45309" : "#94A3B8"}
+      />
+      <Text style={styles.repairToggleText}>For repair</Text>
+    </TouchableOpacity>
+    <TouchableOpacity
+      style={styles.remarkToggle}
+      onPress={onToggleRemark}
+      activeOpacity={0.75}
+    >
+      <Ionicons
+        name={remark ? "chatbubble" : "chatbubble-outline"}
+        size={14}
+        color={remark ? "#2563EB" : "#64748B"}
+      />
+      <Text
+        style={[
+          styles.remarkToggleText,
+          remark && styles.remarkToggleTextActive,
+        ]}
+      >
+        {remark ? "Remark added" : "Add remark"}
+      </Text>
+      <Ionicons
+        name={remarkExpanded ? "chevron-up" : "chevron-down"}
+        size={14}
+        color="#94A3B8"
+      />
+    </TouchableOpacity>
+    {remarkExpanded ? (
+      <TextInput
+        style={styles.itemRemarkInput}
+        value={remark}
+        onChangeText={onChangeRemark}
+        placeholder="Add a note about this movement"
+        placeholderTextColor="#94A3B8"
+        multiline
+        maxLength={2000}
+        autoFocus
+      />
+    ) : null}
     {showDivider ? <View style={styles.itemDivider} /> : null}
   </View>
 );
@@ -1772,6 +1973,46 @@ const styles = StyleSheet.create({
     height: 1,
     backgroundColor: "#F3F4F6",
     marginLeft: 48,
+  },
+  repairToggle: {
+    flexDirection: "row",
+    alignItems: "center",
+    alignSelf: "flex-end",
+    gap: 5,
+    marginTop: 4,
+  },
+  repairToggleText: {
+    fontSize: 11,
+    color: "#64748B",
+  },
+  remarkToggle: {
+    flexDirection: "row",
+    alignItems: "center",
+    alignSelf: "flex-end",
+    gap: 5,
+    marginTop: 5,
+    paddingVertical: 2,
+  },
+  remarkToggleText: {
+    fontSize: 11,
+    color: "#64748B",
+    fontWeight: "600",
+  },
+  remarkToggleTextActive: {
+    color: "#2563EB",
+  },
+  itemRemarkInput: {
+    minHeight: 34,
+    borderWidth: 1,
+    borderColor: "#E2E8F0",
+    borderRadius: 8,
+    paddingHorizontal: 9,
+    paddingVertical: 7,
+    marginTop: 5,
+    marginBottom: 5,
+    fontSize: 12,
+    color: "#334155",
+    backgroundColor: "#FFFFFF",
   },
   itemsList: {
     gap: 0,

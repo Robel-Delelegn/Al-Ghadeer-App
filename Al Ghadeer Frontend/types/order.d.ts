@@ -87,6 +87,8 @@ export interface OrderRentItem {
   unique_item_category?: string | null;
   in_truck?: boolean;
   max_quantity?: number;
+  for_repair?: boolean;
+  remark?: string;
   deposit_action?: "deposit" | "deposit_return";
   deposit_kind?: DepositItemKind;
   action_source?:
@@ -322,6 +324,7 @@ export interface Driver {
 export interface Product {
   // Basic Info
   id: string;
+  sale_item_id?: string;
   item_id?: string;
   item_type?: DeliveryProductItemType;
   name: string;
