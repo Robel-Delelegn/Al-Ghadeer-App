@@ -8,6 +8,7 @@ import { useAuthStore } from "@/store/auth";
 import type { CustomerHeldItems } from "@/utils/customerHeldItems";
 import type { DriverHistoryDetail } from "@/utils/driverHistory";
 import type { TruckAsset, TruckBulkItem } from "@/utils/truckLoad";
+import type { QuantityType } from "@/types/quantityType";
 import { isUniqueItemSignal } from "@/utils/uniqueItems";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { create } from "zustand";
@@ -108,6 +109,7 @@ interface CartItem {
   assetCategory?: string | null;
   loaded_quantity?: number;
   remark?: string;
+  quantityType?: QuantityType | null;
   type?: "5L" | "10L" | "300ml" | "1L" | "20L" | "dispenser"; // Optional - not used in UI
 }
 
@@ -215,7 +217,7 @@ export type DirectSaleDraftPaymentMethod = SelectedPaymentMethod;
 export interface DirectSaleDraftProduct {
   id: string;
   saleItemId?: string;
-  type: "retail" | "refill" | "unique-items" | "assets" | "other";
+  type: "retail" | "refill" | "unique-items" | "assets" | "offer" | "other";
   itemId: string;
   assetId?: string;
   assetDisplayId?: string | null;
@@ -298,6 +300,8 @@ export interface DirectSaleDraft {
   truckAssets: TruckAsset[];
   heldItems: CustomerHeldItems;
   assetDrafts: Record<string, DirectSaleDraftAssetDraft>;
+  saleQuantityTypes: Record<string, QuantityType | null>;
+  depositReturnQuantityTypes: Record<string, QuantityType | null>;
   bottleDepositPrices: Record<string, string>;
   bottleDepositQuantities: Record<string, number>;
   bottleDepositForRepair: Record<string, boolean>;
@@ -366,6 +370,10 @@ interface OrderStore {
   removeFromCart: (productId: string) => void;
   updateCartItemQuantity: (productId: string, quantity: number) => void;
   updateCartItemRemark: (productId: string, remark: string) => void;
+  updateCartItemQuantityType: (
+    productId: string,
+    quantityType: QuantityType | null,
+  ) => void;
   clearCart: () => void;
   getAvailableStock: (productId: string) => number; // Get available stock for a product (loaded_quantity - cart quantity)
 
@@ -632,6 +640,14 @@ export const useOrderStore = create<OrderStore>()(
         set((state) => ({
           cartItems: state.cartItems.map((item) =>
             item.id === productId ? { ...item, remark } : item,
+          ),
+        }));
+      },
+
+      updateCartItemQuantityType: (productId, quantityType) => {
+        set((state) => ({
+          cartItems: state.cartItems.map((item) =>
+            item.id === productId ? { ...item, quantityType } : item,
           ),
         }));
       },

@@ -37,7 +37,6 @@ import {
   getSpecificUniqueItemCategory,
   isUniqueItemSignal,
   UNIQUE_ITEM_KIND,
-  UNIQUE_ITEM_MOVEMENT_TO_CUSTOMER,
   UNIQUE_ITEMS_GROUP,
 } from "@/utils/uniqueItems";
 import { Ionicons } from "@expo/vector-icons";
@@ -263,7 +262,7 @@ const toEmptyRefillLabel = (label: string) => {
 };
 
 const getInventoryIconName = (
-  kind: "bottle" | "unique-item",
+  kind: "bottle" | "unique-item" | "retail",
   category?: string | null,
 ) => {
   if (kind === "bottle") return "water-outline" as const;
@@ -282,18 +281,21 @@ const getMovementCopy = (item: RentItem) => {
   const action = getRentItemDepositAction(item);
   const kind = getRentItemDepositKind(item);
   const isReturn = action === "deposit_return";
-  const isGenericItem = isGenericItemDeposit(item);
+  const label =
+    kind === "retail"
+      ? isReturn
+        ? "Collected item"
+        : "Left item"
+      : kind === UNIQUE_ITEM_KIND
+        ? isReturn
+          ? "Collected unique item"
+          : "Left unique item"
+        : isReturn
+          ? "Collected empty bottle"
+          : "Left empty bottle";
 
   return {
-    label: isGenericItem
-      ? "Left item"
-      : isReturn
-        ? kind === UNIQUE_ITEM_KIND
-          ? "Collected unique item"
-          : "Collected empty bottle"
-        : kind === UNIQUE_ITEM_KIND
-          ? "Left unique item"
-          : "Left empty bottle",
+    label,
     verb: isReturn ? "Collect" : "Leave",
     tone: isReturn ? "return" : "leave",
   };
@@ -375,7 +377,7 @@ const MovementItem = ({
   const accentColor = isReturn ? "#047857" : "#1D4ED8";
   const accentBackground = isReturn ? "#ECFDF5" : "#EFF6FF";
   const isAsset = depositKind === UNIQUE_ITEM_KIND;
-  const isGenericItem = isGenericItemDeposit(item);
+  const isGenericItem = isGenericItemMovement(item);
   const movementTitle = isAsset
     ? getAssetMovementTitle(item)
     : item.name || getRentItemDisplayLabel(item);
@@ -860,7 +862,7 @@ const BottlesUniqueItems = () => {
           truckAssets,
         ),
         heldItems,
-      ).filter((item) => !isGenericItemMovement(item)),
+      ),
     [
       currentOrder?.rent_items,
       heldItems,
@@ -1014,6 +1016,19 @@ const BottlesUniqueItems = () => {
       const isBottleDeposit =
         bulkItem.isRefillableBottle || Boolean(refillProduct);
       if (!isBottleDeposit) {
+        options.push({
+          key: `truck:item:${bulkItem.id}`,
+          itemId: bulkItem.itemId || bulkItem.id,
+          label: matchedProduct?.name || bulkItem.label,
+          description: matchedProduct?.description ?? bulkItem.description,
+          category: matchedProduct?.category ?? bulkItem.category,
+          unit: matchedProduct?.unit ?? bulkItem.unit,
+          imageUrl:
+            resolveResourceUrl(matchedProduct?.image_url) ||
+            resolveResourceUrl(bulkItem.image_url),
+          availableQuantity,
+          kind: "item",
+        });
         return options;
       }
 
@@ -1038,6 +1053,10 @@ const BottlesUniqueItems = () => {
 
   const refillBottleDepositOptions = useMemo(
     () => bottleDepositOptions.filter((item) => item.kind === "bottle"),
+    [bottleDepositOptions],
+  );
+  const retailItemDepositOptions = useMemo(
+    () => bottleDepositOptions.filter((item) => item.kind === "item"),
     [bottleDepositOptions],
   );
 
@@ -1203,18 +1222,19 @@ const BottlesUniqueItems = () => {
             max_quantity: bottle.availableQuantity,
             deposit_action: "deposit" as const,
             deposit_kind:
-              bottle.kind === "bottle" ? ("bottle" as const) : UNIQUE_ITEM_KIND,
+              bottle.kind === "bottle"
+                ? ("bottle" as const)
+                : ("retail" as const),
             action_source:
               bottle.kind === "bottle"
                 ? ("product_asset" as const)
                 : ("product_unique_item" as const),
             unit: bottle.unit,
-            other_action_type:
-              bottle.kind === "bottle"
-                ? ("item-movement-to-customer" as const)
-                : UNIQUE_ITEM_MOVEMENT_TO_CUSTOMER,
+            other_action_type: "item-movement-to-customer" as const,
             other_action_item_type:
-              bottle.kind === "bottle" ? ("bottle" as const) : UNIQUE_ITEM_KIND,
+              bottle.kind === "bottle"
+                ? ("bottle" as const)
+                : ("retail" as const),
             for_repair: rentItemForRepair[bottle.key] === true,
           },
         ];
@@ -1506,6 +1526,34 @@ const BottlesUniqueItems = () => {
           </View>
 
           <View style={styles.subsection}>
+            <Text style={styles.subsectionTitle}>Retail Item Returns</Text>
+            {heldRetailReturnItems.length > 0 ? (
+              <View style={styles.itemList}>
+                {heldRetailReturnItems.map((item) => (
+                  <MovementItem
+                    key={item.id}
+                    item={item}
+                    quantity={Math.max(0, rentItemQuantities[item.id] ?? 0)}
+                    onChangeQuantity={handleChangeRentItemQuantity}
+                    showPriceInput
+                    priceDraft={
+                      rentItemDepositPrices[item.id] ?? toMoneyDraft(item.price)
+                    }
+                    onChangePrice={handleChangeRentItemDepositPrice}
+                    forRepair={rentItemForRepair[item.id] === true}
+                    onToggleForRepair={handleToggleRentItemRepair}
+                  />
+                ))}
+              </View>
+            ) : (
+              <EmptySection
+                icon="cube-outline"
+                text="No customer-held retail items are available for return."
+              />
+            )}
+          </View>
+
+          <View style={styles.subsection}>
             <Text style={styles.subsectionTitle}>Unique Item Returns</Text>
             {heldAssetReturnItems.length > 0 ? (
               <View style={styles.itemList}>
@@ -1591,6 +1639,34 @@ const BottlesUniqueItems = () => {
               <EmptySection
                 icon="water-outline"
                 text="No empty bottle deposits available."
+              />
+            )}
+          </View>
+
+          <View style={styles.subsection}>
+            <Text style={styles.subsectionTitle}>Retail Item Deposits</Text>
+            {retailItemDepositOptions.length > 0 ? (
+              <View style={styles.itemList}>
+                {retailItemDepositOptions.map((item) => (
+                  <BottleDepositItem
+                    key={item.key}
+                    bottle={item}
+                    quantity={Math.max(
+                      0,
+                      bottleDepositQuantities[item.key] ?? 0,
+                    )}
+                    onChangeQuantity={handleChangeBottleDepositQuantity}
+                    priceDraft={bottleDepositPrices[item.key] ?? "0.00"}
+                    onChangePrice={handleChangeBottleDepositPrice}
+                    forRepair={rentItemForRepair[item.key] === true}
+                    onToggleForRepair={handleToggleRentItemRepair}
+                  />
+                ))}
+              </View>
+            ) : (
+              <EmptySection
+                icon="cube-outline"
+                text="No truck retail items are available to leave with this customer."
               />
             )}
           </View>

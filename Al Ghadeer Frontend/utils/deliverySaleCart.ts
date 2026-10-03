@@ -8,6 +8,7 @@ import {
   isUniqueItemSignal,
   UNIQUE_ITEM_KIND,
 } from "@/utils/uniqueItems";
+import type { QuantityType } from "@/types/quantityType";
 
 type CartImage = { uri: string } | null;
 
@@ -25,6 +26,7 @@ export type DeliveryCartItemLike = {
   assetCategory?: string | null;
   loaded_quantity?: number | string | null;
   remark?: string | null;
+  quantityType?: QuantityType | null;
 };
 
 export type DeliverySaleCartRow = {
@@ -40,6 +42,7 @@ export type DeliverySaleCartRow = {
   category: string | null;
   assetCategory: string | null;
   remark: string;
+  quantityType: QuantityType | null;
 };
 
 export type InvalidDeliverySaleCartItem = {
@@ -177,6 +180,7 @@ export const buildDeliverySaleCartRows = (
         assetCategory:
           toCleanText(item.uniqueItemCategory ?? item.assetCategory) || null,
         remark: toCleanText(item.remark),
+        quantityType: item.quantityType ?? null,
       },
     ];
   });
@@ -189,6 +193,7 @@ export type DeliverySaleRequestItem = {
   quantity: number;
   unitPrice: number;
   remark?: string;
+  quantityType?: QuantityType;
 };
 
 export type ActualDeliverySaleItem = DeliverySaleRequestItem & {
@@ -198,20 +203,24 @@ export type ActualDeliverySaleItem = DeliverySaleRequestItem & {
 export const toDeliverySaleRequestItems = (
   rows: DeliverySaleCartRow[],
 ): DeliverySaleRequestItem[] =>
-  rows.map(({ saleItemId, quantity, unitPrice, remark }) => ({
+  rows.map(({ saleItemId, quantity, unitPrice, remark, quantityType }) => ({
     itemId: saleItemId,
     quantity,
     unitPrice,
+    ...(quantityType ? { quantityType } : {}),
     ...(remark ? { remark } : {}),
   }));
 
 export const toActualDeliverySaleItems = (
   rows: DeliverySaleCartRow[],
 ): ActualDeliverySaleItem[] =>
-  rows.map(({ itemId, itemType, quantity, unitPrice, remark }) => ({
-    itemId,
-    itemType,
-    quantity,
-    unitPrice,
-    remark,
-  }));
+  rows.map(
+    ({ itemId, itemType, quantity, unitPrice, remark, quantityType }) => ({
+      itemId,
+      itemType,
+      quantity,
+      unitPrice,
+      remark,
+      quantityType: quantityType ?? undefined,
+    }),
+  );

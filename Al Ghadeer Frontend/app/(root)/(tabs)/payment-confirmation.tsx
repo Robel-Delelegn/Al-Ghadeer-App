@@ -37,6 +37,7 @@ import {
   getRentItemDisplayLabel,
 } from "@/utils/rentItems";
 import {
+  attachHistoryQuantityTypes,
   DriverHistoryDetail,
   getDriverHistoryInvoiceDisplayId,
   getDriverHistoryPrimaryId,
@@ -90,10 +91,13 @@ const PaymentConfirmation: React.FC = () => {
 
   useEffect(() => {
     const initial: Record<string, number> = {};
+    const initialRepair: Record<string, boolean> = {};
     editableRentItems.forEach((item) => {
       initial[item.id] = Math.max(0, item.quantity || 0);
+      initialRepair[item.id] = item.for_repair === true;
     });
     setRentItemQuantities(initial);
+    setRentItemForRepair(initialRepair);
   }, [editableRentItems]);
 
   const handleToggleRentItemRepair = useCallback((itemId: string) => {
@@ -280,6 +284,7 @@ const PaymentConfirmation: React.FC = () => {
       const rentItems = editableRentItems
         .map((item) => ({
           ...item,
+          for_repair: rentItemForRepair[item.id] ?? item.for_repair === true,
           quantity: Math.max(
             0,
             rentItemQuantities[item.id] ?? item.quantity ?? 0,
@@ -302,7 +307,8 @@ const PaymentConfirmation: React.FC = () => {
         itemId: item.item_id || item.id,
         quantity: item.quantity,
         unitPrice: toMoney(item.price),
-        forRepair: rentItemForRepair[item.id] === true,
+        ...(item.quantity_type ? { quantityType: item.quantity_type } : {}),
+        forRepair: rentItemForRepair[item.id] ?? item.for_repair === true,
         ...(item.remark?.trim() ? { remark: item.remark.trim() } : {}),
       }));
       const depositsReturns = actualDepositReturns.map(
@@ -381,7 +387,16 @@ const PaymentConfirmation: React.FC = () => {
         setApiError(parseResult.error);
         return;
       }
-      const result = normalizeDeliveryConfirmationResponse(parseResult.data);
+      const normalizedResult = normalizeDeliveryConfirmationResponse(
+        parseResult.data,
+      );
+      const result = normalizedResult
+        ? attachHistoryQuantityTypes(
+            normalizedResult,
+            saleItems,
+            depositsReturns,
+          )
+        : null;
       const legacyDeliveryNoteId = readDeliveryNoteId(parseResult.data);
       if (!result && !legacyDeliveryNoteId) {
         setApiError("Invalid response from server.");

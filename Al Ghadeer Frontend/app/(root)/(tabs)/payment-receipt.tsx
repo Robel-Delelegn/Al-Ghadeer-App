@@ -16,6 +16,7 @@ import {
   isGenericItemMovement,
 } from "@/utils/rentItems";
 import { getApiBaseUrl } from "@/utils/resources";
+import type { QuantityType } from "@/types/quantityType";
 import {
   getSpecificUniqueItemCategory,
   isGenericUniqueItemLabel,
@@ -54,11 +55,12 @@ type DeliveryActionRow = {
   quantity: number;
   unitPrice: number;
   type: "deposit" | "deposit_return";
-  depositKind: "unique-item" | "bottle";
+  depositKind: "unique-item" | "bottle" | "retail";
   isAsset: boolean;
   isGenericItem?: boolean;
   forRepair?: boolean;
   remark?: string | null;
+  quantityType?: QuantityType | null;
 };
 
 type SaleRow = {
@@ -71,6 +73,7 @@ type SaleRow = {
   unitPrice: number;
   isAsset: boolean;
   remark?: string | null;
+  quantityType?: QuantityType | null;
 };
 
 type ItemDisplayData = {
@@ -388,7 +391,9 @@ const getDeliveryActionTypeLabel = (row: DeliveryActionRow): string => {
     ? "Item"
     : row.depositKind === "bottle"
       ? "Bottle"
-      : "Unique Item";
+      : row.depositKind === "retail"
+        ? "Item"
+        : "Unique Item";
   const action = row.type === "deposit" ? "Deposit" : "Return";
   return `${kind} ${action}`;
 };
@@ -455,6 +460,7 @@ const buildActionSectionHtml = (rows: DeliveryActionRow[]): string => {
         <tr>
           <td>${escapeHtml(`${getDeliveryActionTypeLabel(row)}${row.forRepair ? " (For repair)" : ""}`)}</td>
           <td>${buildItemLabelHtml(row)}</td>
+          <td>${escapeHtml(row.quantityType || "-")}</td>
           <td class="qty-cell">${escapeHtml(formatQuantity(row.quantity))}</td>
         </tr>
       `,
@@ -469,6 +475,7 @@ const buildActionSectionHtml = (rows: DeliveryActionRow[]): string => {
           <tr>
             <th>Type</th>
             <th>Item</th>
+            <th>Quantity Type</th>
             <th class="qty-head">Qty</th>
           </tr>
         </thead>
@@ -507,6 +514,9 @@ const DeliveryNoteTableSection: React.FC<{
         >
           Item
         </Text>
+        <Text style={[styles.invoiceItemsHeaderText, styles.quantityTypeCell]}>
+          Quantity Type
+        </Text>
         <Text style={[styles.invoiceItemsHeaderText, styles.invoiceQtyCell]}>
           Qty
         </Text>
@@ -523,6 +533,9 @@ const DeliveryNoteTableSection: React.FC<{
             item={row}
             style={[styles.invoiceItemText, styles.invoiceProductCell]}
           />
+          <Text style={[styles.invoiceItemText, styles.quantityTypeCell]}>
+            {row.quantityType || "-"}
+          </Text>
           <Text style={[styles.invoiceItemText, styles.invoiceQtyCell]}>
             {formatQuantity(row.quantity)}
           </Text>
@@ -553,6 +566,9 @@ const DeliveryNoteActionSection: React.FC<{
         >
           Item
         </Text>
+        <Text style={[styles.invoiceItemsHeaderText, styles.quantityTypeCell]}>
+          Quantity Type
+        </Text>
         <Text style={[styles.invoiceItemsHeaderText, styles.invoiceQtyCell]}>
           Qty
         </Text>
@@ -573,6 +589,9 @@ const DeliveryNoteActionSection: React.FC<{
             item={row}
             style={[styles.invoiceItemText, styles.invoiceProductCell]}
           />
+          <Text style={[styles.invoiceItemText, styles.quantityTypeCell]}>
+            {row.quantityType || "-"}
+          </Text>
           <Text style={[styles.invoiceItemText, styles.invoiceQtyCell]}>
             {formatQuantity(row.quantity)}
           </Text>
@@ -730,6 +749,7 @@ const PaymentReceipt: React.FC = () => {
           unitPrice: item.unitPrice,
           isAsset: isAssetKind(item.itemType),
           remark: item.remark,
+          quantityType: item.quantityType,
         };
       });
     }
@@ -757,6 +777,7 @@ const PaymentReceipt: React.FC = () => {
               product.asset_category,
             ),
             remark: null,
+            quantityType: product.quantity_type ?? null,
           };
         },
       );
@@ -783,6 +804,7 @@ const PaymentReceipt: React.FC = () => {
           unitPrice: item.price,
           isAsset: isAssetKind(item.item_type, item.category),
           remark: item.remark ?? null,
+          quantityType: item.quantityType ?? null,
         };
       });
   }, [
@@ -831,6 +853,7 @@ const PaymentReceipt: React.FC = () => {
           isGenericItem,
           forRepair: entry.forRepair,
           remark: entry.remark,
+          quantityType: entry.quantityType,
         };
       });
     }
@@ -858,6 +881,7 @@ const PaymentReceipt: React.FC = () => {
           isGenericItem: isGenericItemMovement(item),
           forRepair: item.for_repair,
           remark: item.remark ?? null,
+          quantityType: item.quantity_type ?? null,
         };
       });
   }, [confirmationDetail, deliveryActionAssetDisplayLookup, orderDetail]);
@@ -1188,6 +1212,7 @@ const PaymentReceipt: React.FC = () => {
               (row) => `
                 <tr>
                   <td>${buildItemLabelHtml(row)}</td>
+                  <td>${escapeHtml(row.quantityType || "-")}</td>
                   <td class="qty-cell">${escapeHtml(formatQuantity(row.quantity))}</td>
                 </tr>
               `,
@@ -1195,7 +1220,7 @@ const PaymentReceipt: React.FC = () => {
             .join("")
         : `
             <tr>
-              <td colspan="2" class="empty-cell">No sale items recorded.</td>
+              <td colspan="3" class="empty-cell">No sale items recorded.</td>
             </tr>
           `;
 
@@ -1432,6 +1457,7 @@ const PaymentReceipt: React.FC = () => {
                   <thead>
                     <tr>
                       <th>Item</th>
+                      <th>Quantity Type</th>
                       <th class="qty-head">Qty</th>
                     </tr>
                   </thead>
@@ -2767,6 +2793,11 @@ const styles = StyleSheet.create({
     width: 48,
     textAlign: "center",
   },
+  quantityTypeCell: {
+    width: 92,
+    paddingHorizontal: 6,
+    textAlign: "center",
+  },
   invoiceVatCell: {
     width: 60,
     textAlign: "right",
@@ -2776,7 +2807,7 @@ const styles = StyleSheet.create({
     textAlign: "right",
   },
   deliveryNoteTypeCell: {
-    width: 110,
+    width: 82,
     color: "#475569",
     paddingRight: 12,
   },

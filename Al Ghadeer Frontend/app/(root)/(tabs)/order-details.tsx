@@ -1093,6 +1093,12 @@ const OrderDetails = () => {
                     </View>
                   </View>
 
+                  {task.remark ? (
+                    <Text style={styles.taskMetaSecondary}>
+                      Remark: {task.remark}
+                    </Text>
+                  ) : null}
+
                   <View style={styles.taskPillsRow}>
                     <View style={styles.taskPill}>
                       <Ionicons name="list" size={12} color="#475569" />
@@ -1145,6 +1151,7 @@ const OrderDetails = () => {
                                 {line.unitPrice > 0
                                   ? ` • AED ${line.unitPrice.toFixed(2)} each`
                                   : ""}
+                                {line.forRepair ? " • For repair" : ""}
                               </Text>
                             </View>
                           </View>

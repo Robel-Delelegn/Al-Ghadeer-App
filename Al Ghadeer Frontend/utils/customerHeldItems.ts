@@ -337,13 +337,13 @@ const toHeldRetailRentItem = (item: CustomerHeldRetailItem): RentItem => ({
   image_url: resolveResourceUrl(item.image_url) || "",
   in_truck: false,
   deposit_action: "deposit_return",
-  deposit_kind: "bottle",
+  deposit_kind: "retail",
   action_source: "held_item",
   max_quantity: item.quantity,
   unit: item.unit,
   description: item.description,
   other_action_type: "item-movement-from-customer",
-  other_action_item_type: "bottle",
+  other_action_item_type: "retail",
 });
 
 const toHeldBottleRentItem = (bottle: CustomerHeldBottle): RentItem => {

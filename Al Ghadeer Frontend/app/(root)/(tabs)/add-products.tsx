@@ -38,7 +38,7 @@ interface ServerProduct {
   itemId: string;
   assetDisplayId?: string | null;
   assetDisplayLabel?: string | null;
-  type: "retail" | "refill" | "unique-items" | "assets" | "other";
+  type: "retail" | "refill" | "unique-items" | "assets" | "offer" | "other";
   name: string;
   price: number;
   unit: string | null;
@@ -69,6 +69,7 @@ const normalizeProductType = (value: unknown): ServerProduct["type"] => {
   const raw = typeof value === "string" ? value.trim().toLowerCase() : "";
   if (raw === "refill") return "refill";
   if (raw === "retail") return "retail";
+  if (raw === "offer") return "offer";
   if (isUniqueItemSignal(raw)) return UNIQUE_ITEMS_GROUP;
   return "other";
 };
@@ -169,6 +170,7 @@ const getProductItemType = (
 ): Product["item_type"] => {
   if (getProductGroup(product) === UNIQUE_ITEMS_GROUP) return UNIQUE_ITEM_KIND;
   if (getProductGroup(product) === "refill") return "refill";
+  if (product.type === "offer") return "offer";
   return "retail";
 };
 

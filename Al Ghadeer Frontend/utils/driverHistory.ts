@@ -5,6 +5,7 @@ import {
   isUniqueItemSignal,
   UNIQUE_ITEM_KIND,
 } from "@/utils/uniqueItems";
+import { normalizeQuantityType, type QuantityType } from "@/types/quantityType";
 
 export type DriverHistoryKind = "scheduled_delivery" | "adhoc_delivery";
 
@@ -18,11 +19,12 @@ export interface DriverHistoryDepositReturn {
   id: string;
   type: "deposit" | "deposit_return";
   itemId: string;
-  depositKind: "unique-item" | "bottle";
+  depositKind: "unique-item" | "bottle" | "retail";
   quantity: number;
   unitPrice: number;
   forRepair: boolean;
   remark: string | null;
+  quantityType: QuantityType | null;
   label: string;
   assetCategory: string | null;
   imageUrl: string | null;
@@ -31,13 +33,14 @@ export interface DriverHistoryDepositReturn {
 export interface DriverHistorySaleItem {
   id: string;
   itemId: string;
-  itemType: "unique-item" | "retail" | "refill";
+  itemType: "unique-item" | "retail" | "refill" | "offer";
   label: string;
   assetCategory: string | null;
   imageUrl: string | null;
   quantity: number;
   unitPrice: number;
   remark: string | null;
+  quantityType: QuantityType | null;
 }
 
 export interface DriverHistoryInvoice {
@@ -109,6 +112,76 @@ export interface DriverSaleInvoiceResponse {
   hasPendingPayment: boolean;
   remark: string | null;
 }
+
+type QuantityTypeRequestLine = {
+  itemId: string;
+  quantityType?: QuantityType | null;
+  type?: "deposit" | "deposit_return";
+};
+
+const normalizeRequestItemId = (value: string): string =>
+  value
+    .trim()
+    .replace(/^(?:retail|refill|offer|unique-items|unique-item|asset):/i, "");
+
+const getRequestItemKind = (value: string): string | null => {
+  const prefix = value.trim().split(":", 1)[0]?.toLowerCase();
+  if (prefix === "unique-items" || prefix === "asset") return UNIQUE_ITEM_KIND;
+  if (
+    prefix === "unique-item" ||
+    prefix === "retail" ||
+    prefix === "refill" ||
+    prefix === "offer"
+  ) {
+    return prefix;
+  }
+  return null;
+};
+
+const findRequestQuantityType = (
+  line: {
+    itemId: string;
+    itemType?: DriverHistorySaleItem["itemType"];
+    type?: DriverHistoryDepositReturn["type"];
+  },
+  requestLines: QuantityTypeRequestLine[],
+): QuantityType | null => {
+  const normalizedItemId = normalizeRequestItemId(line.itemId);
+  const matchingLine = requestLines.find((requestLine) => {
+    if (normalizeRequestItemId(requestLine.itemId) !== normalizedItemId) {
+      return false;
+    }
+    if (line.type && requestLine.type && line.type !== requestLine.type) {
+      return false;
+    }
+    const requestKind = getRequestItemKind(requestLine.itemId);
+    return !line.itemType || !requestKind || line.itemType === requestKind;
+  });
+  return matchingLine?.quantityType ?? null;
+};
+
+export const attachHistoryQuantityTypes = (
+  detail: DriverHistoryDetail,
+  saleItems: QuantityTypeRequestLine[],
+  depositReturns: QuantityTypeRequestLine[],
+): DriverHistoryDetail => ({
+  ...detail,
+  sale: detail.sale
+    ? {
+        ...detail.sale,
+        items: detail.sale.items.map((item) => ({
+          ...item,
+          quantityType:
+            item.quantityType ?? findRequestQuantityType(item, saleItems),
+        })),
+      }
+    : null,
+  depositReturns: detail.depositReturns.map((item) => ({
+    ...item,
+    quantityType:
+      item.quantityType ?? findRequestQuantityType(item, depositReturns),
+  })),
+});
 
 const EMPTY_ADDRESS: DeliveryAddress = {
   location_id: "",
@@ -235,7 +308,9 @@ const normalizeDepositReturn = (
   if (
     !record ||
     (type !== "deposit" && type !== "deposit_return") ||
-    (depositKind !== UNIQUE_ITEM_KIND && depositKind !== "bottle") ||
+    (depositKind !== UNIQUE_ITEM_KIND &&
+      depositKind !== "bottle" &&
+      depositKind !== "retail") ||
     quantity === null ||
     unitPrice === null
   ) {
@@ -251,6 +326,12 @@ const normalizeDepositReturn = (
     unitPrice,
     forRepair: record.forRepair === true,
     remark: toNullableText(record.remark),
+    quantityType: normalizeQuantityType(
+      record.quantityType ??
+        record.quantity_type ??
+        record.legacyQuantityType ??
+        record.legacy_quantity_type,
+    ),
     label: toText(record.label) || toText(record.name) || toText(item?.label),
     assetCategory:
       toNullableText(record.uniqueItemCategory) ??
@@ -285,7 +366,8 @@ const normalizeSaleItem = (value: unknown): DriverHistorySaleItem | null => {
     !record ||
     (itemType !== UNIQUE_ITEM_KIND &&
       itemType !== "retail" &&
-      itemType !== "refill") ||
+      itemType !== "refill" &&
+      itemType !== "offer") ||
     quantity === null ||
     unitPrice === null
   ) {
@@ -312,6 +394,12 @@ const normalizeSaleItem = (value: unknown): DriverHistorySaleItem | null => {
     quantity,
     unitPrice,
     remark: toNullableText(record.remark),
+    quantityType: normalizeQuantityType(
+      record.quantityType ??
+        record.quantity_type ??
+        record.legacyQuantityType ??
+        record.legacy_quantity_type,
+    ),
   };
 };
 

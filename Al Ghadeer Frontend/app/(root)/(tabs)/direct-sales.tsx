@@ -62,7 +62,7 @@ const API_BASE_URL = (
 interface ServerProduct {
   id: string;
   saleItemId?: string;
-  type: "retail" | "refill" | "unique-items" | "assets" | "other";
+  type: "retail" | "refill" | "unique-items" | "assets" | "offer" | "other";
   itemId: string;
   assetId?: string;
   assetDisplayId?: string | null;
@@ -501,6 +501,7 @@ const normalizeProductType = (value: unknown): ServerProduct["type"] => {
   const normalized = normalizeCategory(toStringValue(value));
   if (normalized.includes("refill")) return "refill";
   if (normalized.includes("retail")) return "retail";
+  if (normalized.includes("offer")) return "offer";
   if (isUniqueItemSignal(normalized)) return UNIQUE_ITEMS_GROUP;
   return "other";
 };
@@ -3273,6 +3274,9 @@ const DirectSales: React.FC = () => {
       truckAssets,
       heldItems,
       assetDrafts,
+      saleQuantityTypes: directSaleDraft?.saleQuantityTypes || {},
+      depositReturnQuantityTypes:
+        directSaleDraft?.depositReturnQuantityTypes || {},
       bottleDepositPrices,
       bottleDepositQuantities,
       bottleDepositForRepair: directSaleDraft?.bottleDepositForRepair || {},
@@ -3287,6 +3291,8 @@ const DirectSales: React.FC = () => {
       bottleDepositPrices,
       bottleDepositQuantities,
       directSaleDraft?.bottleDepositForRepair,
+      directSaleDraft?.depositReturnQuantityTypes,
+      directSaleDraft?.saleQuantityTypes,
       bottleReturnPrices,
       bottleReturnQuantities,
       directSaleDraft?.bottleReturnForRepair,

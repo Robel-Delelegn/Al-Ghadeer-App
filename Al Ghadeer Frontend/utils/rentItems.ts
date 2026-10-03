@@ -2,7 +2,7 @@ import type { Order } from "@/types/order";
 import { isUniqueItemDepositKind, UNIQUE_ITEM_KIND } from "@/utils/uniqueItems";
 
 export type RentItem = NonNullable<Order["rent_items"]>[number];
-export type RentItemDepositKind = typeof UNIQUE_ITEM_KIND | "bottle";
+export type RentItemDepositKind = typeof UNIQUE_ITEM_KIND | "bottle" | "retail";
 
 export const getRentItemDepositAction = (
   item: RentItem,
@@ -25,6 +25,9 @@ export const getRentItemDepositAction = (
 export const getRentItemDepositKind = (item: RentItem): RentItemDepositKind => {
   if (item.deposit_kind === "bottle") {
     return "bottle";
+  }
+  if (item.deposit_kind === "retail") {
+    return "retail";
   }
   if (isUniqueItemDepositKind(item.deposit_kind)) {
     return UNIQUE_ITEM_KIND;
@@ -52,6 +55,14 @@ export const getRentItemDepositKind = (item: RentItem): RentItemDepositKind => {
     normalizedSignals.includes("empty")
   ) {
     return "bottle";
+  }
+
+  if (
+    item.id.startsWith("truck:item:") ||
+    item.id.startsWith("held:item:") ||
+    normalizedSignals.includes("retail")
+  ) {
+    return "retail";
   }
 
   return UNIQUE_ITEM_KIND;
@@ -98,14 +109,14 @@ export const getRentItemDisplayLabel = (item: RentItem): string => {
   }
 
   if (action === "deposit_return") {
-    return depositKind === UNIQUE_ITEM_KIND
-      ? "Unique Item Return"
-      : "Bottle Return";
+    if (depositKind === UNIQUE_ITEM_KIND) return "Unique Item Return";
+    if (depositKind === "retail") return "Item Return";
+    return "Bottle Return";
   }
 
-  return depositKind === UNIQUE_ITEM_KIND
-    ? "Unique Item Deposit"
-    : "Bottle Deposit";
+  if (depositKind === UNIQUE_ITEM_KIND) return "Unique Item Deposit";
+  if (depositKind === "retail") return "Item Deposit";
+  return "Bottle Deposit";
 };
 
 export const getRentItemQuantityLimit = (item: RentItem): number => {
@@ -127,7 +138,5 @@ export const getOrderSelectedDeliveryActions = (
     ? order.draft_delivery_actions
     : (order.rent_items || []).filter((item) => item.in_truck === true);
 
-  // The API accepts deposit movements only for bottles and unique items.
-  // Discard generic-retail drafts created by older app builds.
-  return selectedItems.filter((item) => !isGenericItemMovement(item));
+  return selectedItems;
 };

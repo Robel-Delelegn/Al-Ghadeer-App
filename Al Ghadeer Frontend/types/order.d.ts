@@ -1,6 +1,12 @@
+import type { QuantityType } from "@/types/quantityType";
+
 export type UniqueItemWireKind = "unique-item" | "asset";
-export type DeliveryProductItemType = UniqueItemWireKind | "retail" | "refill";
-export type DepositItemKind = UniqueItemWireKind | "bottle";
+export type DeliveryProductItemType =
+  | UniqueItemWireKind
+  | "retail"
+  | "refill"
+  | "offer";
+export type DepositItemKind = UniqueItemWireKind | "bottle" | "retail";
 export type UniqueItemMovementType =
   | "unique-item-movement-from-customer"
   | "unique-item-movement-to-customer"
@@ -88,6 +94,7 @@ export interface OrderRentItem {
   in_truck?: boolean;
   max_quantity?: number;
   for_repair?: boolean;
+  quantity_type?: QuantityType | null;
   remark?: string;
   deposit_action?: "deposit" | "deposit_return";
   deposit_kind?: DepositItemKind;
@@ -252,6 +259,7 @@ export interface Order {
         category?: string;
         asset_category?: string | null;
         unique_item_category?: string | null;
+        quantity_type?: QuantityType | null;
       }[]
     | Record<string, number>;
   total_amount?: number;
@@ -334,6 +342,7 @@ export interface Product {
   assetCategory?: string | null;
   uniqueItemCategory?: string | null;
   unit?: string | null;
+  quantityType?: QuantityType | null;
   pricePerUnit?: number;
 
   // Pricing

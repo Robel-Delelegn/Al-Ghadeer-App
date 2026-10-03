@@ -1,4 +1,5 @@
 import ApiErrorText from "@/components/ApiErrorText";
+import QuantityTypeSelect from "@/components/QuantityTypeSelect";
 import { VAT_MULTIPLIER, VAT_RATE } from "@/constants/tax";
 import { authenticatedFetch } from "@/store/auth";
 import {
@@ -11,12 +12,14 @@ import { parseApiResponseWithSoftError } from "@/utils/api";
 import { toTransferableUniqueItemProduct } from "@/utils/uniqueItemTransfers";
 import { formatDeliveryAddress } from "@/utils/deliveries";
 import {
+  attachHistoryQuantityTypes,
   DriverHistoryDetail,
   getDriverHistoryInvoiceDisplayId,
   getDriverHistoryPrimaryId,
   getDriverHistorySaleId,
   normalizeDriverHistoryDetail,
 } from "@/utils/driverHistory";
+import type { QuantityType } from "@/types/quantityType";
 import { resolveResourceUrl } from "@/utils/resources";
 import { getTruckBulkItemMatchKeys } from "@/utils/truckLoad";
 import {
@@ -24,7 +27,6 @@ import {
   isUniqueItemSignal,
   LEGACY_ASSET_SALE_PREFIX,
   UNIQUE_ITEM_KIND,
-  UNIQUE_ITEM_MOVEMENT_TO_CUSTOMER,
   UNIQUE_ITEM_SALE_PREFIX,
 } from "@/utils/uniqueItems";
 import { Ionicons } from "@expo/vector-icons";
@@ -61,6 +63,7 @@ interface SaleRequestBody {
       itemId: string;
       quantity: number;
       unitPrice: number;
+      quantityType?: QuantityType;
       remark?: string;
     }[];
     totals: {
@@ -83,6 +86,7 @@ interface SaleRequestBody {
     itemId: string;
     quantity: number;
     unitPrice: number;
+    quantityType?: QuantityType;
     forRepair?: boolean;
     remark?: string;
   }[];
@@ -142,10 +146,11 @@ const normalizeCategory = (category?: string | null) =>
 
 const getSaleLineType = (
   product: Pick<DirectSaleDraftProduct, "type" | "category">,
-): "retail" | "unique-item" | "refill" => {
+): "retail" | "unique-item" | "refill" | "offer" => {
   const normalized = normalizeCategory(product.type);
   const normalizedCategory = normalizeCategory(product.category);
   if (normalized.includes("refill")) return "refill";
+  if (normalized.includes("offer")) return "offer";
   if (
     isUniqueItemSignal(normalized) ||
     isUniqueItemSignal(normalizedCategory)
@@ -255,13 +260,28 @@ const DirectSaleConfirmation = () => {
   );
   const [depositReturnForRepair, setDepositReturnForRepair] = useState<
     Record<string, boolean>
-  >({});
+  >(() => {
+    const assetRepairEntries = Object.entries(
+      directSaleDraft?.assetDrafts || {},
+    ).map(([key, draft]) => [key, draft.forRepair === true] as const);
+    return {
+      ...(directSaleDraft?.bottleDepositForRepair || {}),
+      ...(directSaleDraft?.bottleReturnForRepair || {}),
+      ...Object.fromEntries(assetRepairEntries),
+    };
+  });
   const [saleItemRemarks, setSaleItemRemarks] = useState<
     Record<string, string>
   >({});
   const [depositReturnRemarks, setDepositReturnRemarks] = useState<
     Record<string, string>
   >({});
+  const [saleQuantityTypes, setSaleQuantityTypes] = useState<
+    Record<string, QuantityType | null>
+  >(directSaleDraft?.saleQuantityTypes || {});
+  const [depositReturnQuantityTypes, setDepositReturnQuantityTypes] = useState<
+    Record<string, QuantityType | null>
+  >(directSaleDraft?.depositReturnQuantityTypes || {});
   const [expandedRemarkKey, setExpandedRemarkKey] = useState<string | null>(
     null,
   );
@@ -285,6 +305,26 @@ const DirectSaleConfirmation = () => {
       setDepositReturnRemarks((previous) => ({
         ...previous,
         [itemId]: remark,
+      }));
+    },
+    [],
+  );
+
+  const handleChangeSaleQuantityType = useCallback(
+    (itemId: string, quantityType: QuantityType | null) => {
+      setSaleQuantityTypes((previous) => ({
+        ...previous,
+        [itemId]: quantityType,
+      }));
+    },
+    [],
+  );
+
+  const handleChangeDepositReturnQuantityType = useCallback(
+    (itemId: string, quantityType: QuantityType | null) => {
+      setDepositReturnQuantityTypes((previous) => ({
+        ...previous,
+        [itemId]: quantityType,
       }));
     },
     [],
@@ -369,7 +409,25 @@ const DirectSaleConfirmation = () => {
     [heldItems.bottles],
   );
 
-  const returnOptions = bottleReturnOptions;
+  const retailItemReturnOptions = useMemo<BottleReturnOption[]>(
+    () =>
+      heldItems.otherRetailItems.map((item) => ({
+        key: `held:item:${item.itemId}`,
+        itemId: item.itemId,
+        label: item.label,
+        description: item.description,
+        unit: item.unit,
+        imageUrl: resolveResourceUrl(item.image_url),
+        availableQuantity: item.quantity,
+        kind: "item" as const,
+      })),
+    [heldItems.otherRetailItems],
+  );
+
+  const returnOptions = useMemo(
+    () => [...bottleReturnOptions, ...retailItemReturnOptions],
+    [bottleReturnOptions, retailItemReturnOptions],
+  );
 
   const bottleDepositOptions = useMemo<BottleDepositOption[]>(() => {
     const productsById = new Map<string, DirectSaleDraftProduct>();
@@ -401,6 +459,18 @@ const DirectSaleConfirmation = () => {
       const isBottleDeposit =
         bulkItem.isRefillableBottle || Boolean(refillProduct);
       if (!isBottleDeposit) {
+        options.push({
+          key: `truck:item:${bulkItem.id}`,
+          itemId: bulkItem.itemId || bulkItem.id,
+          label: matchedProduct?.label || bulkItem.label,
+          description: matchedProduct?.description ?? bulkItem.description,
+          category: matchedProduct?.category ?? bulkItem.category,
+          unit: matchedProduct?.unit ?? bulkItem.unit,
+          imageUrl:
+            matchedProduct?.image_url || resolveResourceUrl(bulkItem.image_url),
+          availableQuantity,
+          kind: "item",
+        });
         return options;
       }
 
@@ -599,11 +669,15 @@ const DirectSaleConfirmation = () => {
       ...directSaleDraft,
       creditCollectionAmount,
       creditCollectionRemark,
+      saleQuantityTypes,
+      depositReturnQuantityTypes,
     });
   }, [
     creditCollectionAmount,
     creditCollectionRemark,
+    depositReturnQuantityTypes,
     directSaleDraft,
+    saleQuantityTypes,
     setDirectSaleDraft,
   ]);
 
@@ -693,6 +767,9 @@ const DirectSaleConfirmation = () => {
           itemId: asset.itemId,
           quantity: 1,
           unitPrice: Number(asset.price.toFixed(2)),
+          ...(depositReturnQuantityTypes[asset.key]
+            ? { quantityType: depositReturnQuantityTypes[asset.key]! }
+            : {}),
           forRepair:
             depositReturnForRepair[asset.key] ??
             directSaleDraft.assetDrafts[asset.key]?.forRepair === true,
@@ -705,6 +782,9 @@ const DirectSaleConfirmation = () => {
           itemId: bottle.itemId,
           quantity: bottle.quantity,
           unitPrice: Number(bottle.unitPrice.toFixed(2)),
+          ...(depositReturnQuantityTypes[bottle.key]
+            ? { quantityType: depositReturnQuantityTypes[bottle.key]! }
+            : {}),
           forRepair:
             depositReturnForRepair[bottle.key] ??
             directSaleDraft.bottleDepositForRepair?.[bottle.key] === true,
@@ -717,6 +797,9 @@ const DirectSaleConfirmation = () => {
           itemId: bottle.itemId,
           quantity: bottle.quantity,
           unitPrice: Number(bottle.unitPrice.toFixed(2)),
+          ...(depositReturnQuantityTypes[bottle.key]
+            ? { quantityType: depositReturnQuantityTypes[bottle.key]! }
+            : {}),
           forRepair:
             depositReturnForRepair[bottle.key] ??
             directSaleDraft.bottleReturnForRepair?.[bottle.key] === true,
@@ -737,6 +820,9 @@ const DirectSaleConfirmation = () => {
             itemId: product.saleItemId || product.id,
             quantity,
             unitPrice,
+            ...(saleQuantityTypes[product.id]
+              ? { quantityType: saleQuantityTypes[product.id]! }
+              : {}),
             ...(saleItemRemarks[product.id]?.trim()
               ? { remark: saleItemRemarks[product.id].trim() }
               : {}),
@@ -835,11 +921,16 @@ const DirectSaleConfirmation = () => {
         return;
       }
 
-      const data = normalizeDriverHistoryDetail(parseResult.data);
-      if (!data) {
+      const normalizedData = normalizeDriverHistoryDetail(parseResult.data);
+      if (!normalizedData) {
         setApiError("Invalid response from server.");
         return;
       }
+      const data = attachHistoryQuantityTypes(
+        normalizedData,
+        saleRequestItems,
+        depositsReturns,
+      );
 
       clearCart();
       const saleDetail = data.sale;
@@ -901,6 +992,11 @@ const DirectSaleConfirmation = () => {
                   selectedProduct?.assetCategory ??
                   item.assetCategory ??
                   null,
+                quantityType:
+                  item.quantityType ??
+                  (selectedProduct
+                    ? saleQuantityTypes[selectedProduct.id]
+                    : null),
               };
             })
           : selectedProducts.map((product) => {
@@ -922,6 +1018,7 @@ const DirectSaleConfirmation = () => {
                 category: product.type || "",
                 assetCategory:
                   product.uniqueItemCategory ?? product.assetCategory ?? null,
+                quantityType: saleQuantityTypes[product.id] ?? null,
               };
             });
       const selectedRentItems: NonNullable<Order["rent_items"]> = [
@@ -943,6 +1040,7 @@ const DirectSaleConfirmation = () => {
               : ("product_unique_item" as const),
           asset_category: asset.category,
           unique_item_category: asset.category,
+          quantity_type: depositReturnQuantityTypes[asset.key] ?? null,
         })),
         ...selectedBottleDepositEntries.map((bottle) => ({
           id: bottle.key,
@@ -956,7 +1054,9 @@ const DirectSaleConfirmation = () => {
           in_truck: true,
           deposit_action: "deposit" as const,
           deposit_kind:
-            bottle.kind === "bottle" ? ("bottle" as const) : UNIQUE_ITEM_KIND,
+            bottle.kind === "bottle"
+              ? ("bottle" as const)
+              : ("retail" as const),
           action_source:
             bottle.kind === "bottle"
               ? ("product_asset" as const)
@@ -965,9 +1065,12 @@ const DirectSaleConfirmation = () => {
           other_action_type:
             bottle.kind === "bottle"
               ? ("item-movement-to-customer" as const)
-              : UNIQUE_ITEM_MOVEMENT_TO_CUSTOMER,
+              : ("item-movement-to-customer" as const),
           other_action_item_type:
-            bottle.kind === "bottle" ? ("bottle" as const) : UNIQUE_ITEM_KIND,
+            bottle.kind === "bottle"
+              ? ("bottle" as const)
+              : ("retail" as const),
+          quantity_type: depositReturnQuantityTypes[bottle.key] ?? null,
         })),
         ...selectedBottleReturnEntries.map((bottle) => ({
           id: bottle.key,
@@ -979,7 +1082,10 @@ const DirectSaleConfirmation = () => {
           image_url: bottle.imageUrl || "",
           in_truck: true,
           deposit_action: "deposit_return" as const,
-          deposit_kind: "bottle" as const,
+          deposit_kind:
+            bottle.kind === "bottle"
+              ? ("bottle" as const)
+              : ("retail" as const),
           action_source: "held_item" as const,
           unit: bottle.unit,
           description: bottle.description,
@@ -988,7 +1094,8 @@ const DirectSaleConfirmation = () => {
               ? ("item-movement-from-customer" as const)
               : undefined,
           other_action_item_type:
-            bottle.kind === "item" ? ("bottle" as const) : undefined,
+            bottle.kind === "item" ? ("retail" as const) : undefined,
+          quantity_type: depositReturnQuantityTypes[bottle.key] ?? null,
         })),
       ];
 
@@ -1056,6 +1163,7 @@ const DirectSaleConfirmation = () => {
                     selectedProduct?.uniqueItemCategory ??
                     selectedProduct?.assetCategory ??
                     item.assetCategory,
+                  quantity_type: item.quantityType,
                 };
               })
             : selectedProducts.map((product) => ({
@@ -1070,6 +1178,7 @@ const DirectSaleConfirmation = () => {
                   product.uniqueItemCategory ?? product.assetCategory,
                 unique_item_category:
                   product.uniqueItemCategory ?? product.assetCategory,
+                quantity_type: saleQuantityTypes[product.id] ?? null,
               })),
       };
 
@@ -1116,7 +1225,9 @@ const DirectSaleConfirmation = () => {
     selectedBottleDepositEntries,
     selectedBottleReturnEntries,
     depositReturnForRepair,
+    depositReturnQuantityTypes,
     depositReturnRemarks,
+    saleQuantityTypes,
     saleItemRemarks,
     selectedProducts,
     setLastConfirmPaymentResponse,
@@ -1274,6 +1385,12 @@ const DirectSaleConfirmation = () => {
                     </Text>
                   </View>
                 </View>
+                <QuantityTypeSelect
+                  value={saleQuantityTypes[product.id]}
+                  onChange={(value) =>
+                    handleChangeSaleQuantityType(product.id, value)
+                  }
+                />
                 <TouchableOpacity
                   style={styles.remarkToggle}
                   onPress={() =>
@@ -1364,6 +1481,10 @@ const DirectSaleConfirmation = () => {
                   price={`- AED ${(bottle.unitPrice * bottle.quantity).toFixed(2)}`}
                   icon="return-up-back-outline"
                   tone="return"
+                  quantityType={depositReturnQuantityTypes[bottle.key]}
+                  onChangeQuantityType={(value) =>
+                    handleChangeDepositReturnQuantityType(bottle.key, value)
+                  }
                   forRepair={
                     depositReturnForRepair[bottle.key] ??
                     directSaleDraft.bottleReturnForRepair?.[bottle.key] === true
@@ -1402,6 +1523,10 @@ const DirectSaleConfirmation = () => {
                   price={`AED ${(bottle.unitPrice * bottle.quantity).toFixed(2)}`}
                   icon="arrow-redo-outline"
                   tone="leave"
+                  quantityType={depositReturnQuantityTypes[bottle.key]}
+                  onChangeQuantityType={(value) =>
+                    handleChangeDepositReturnQuantityType(bottle.key, value)
+                  }
                   forRepair={
                     depositReturnForRepair[bottle.key] ??
                     directSaleDraft.bottleDepositForRepair?.[bottle.key] ===
@@ -1445,6 +1570,10 @@ const DirectSaleConfirmation = () => {
                       : "arrow-redo-outline"
                   }
                   tone={asset.action === "deposit_return" ? "return" : "leave"}
+                  quantityType={depositReturnQuantityTypes[asset.key]}
+                  onChangeQuantityType={(value) =>
+                    handleChangeDepositReturnQuantityType(asset.key, value)
+                  }
                   forRepair={
                     depositReturnForRepair[asset.key] ??
                     directSaleDraft.assetDrafts[asset.key]?.forRepair === true
@@ -1630,6 +1759,8 @@ const MovementRow = ({
   onChangeRemark,
   remarkExpanded,
   onToggleRemark,
+  quantityType,
+  onChangeQuantityType,
 }: {
   label: string;
   meta: string;
@@ -1643,6 +1774,8 @@ const MovementRow = ({
   onChangeRemark: (value: string) => void;
   remarkExpanded: boolean;
   onToggleRemark: () => void;
+  quantityType?: QuantityType | null;
+  onChangeQuantityType: (value: QuantityType | null) => void;
 }) => (
   <View>
     <View style={styles.itemRow}>
@@ -1668,6 +1801,7 @@ const MovementRow = ({
       </View>
       <Text style={styles.itemPrice}>{price}</Text>
     </View>
+    <QuantityTypeSelect value={quantityType} onChange={onChangeQuantityType} />
     <TouchableOpacity
       style={styles.repairToggle}
       onPress={onToggleForRepair}

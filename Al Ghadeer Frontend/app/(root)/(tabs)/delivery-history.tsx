@@ -299,6 +299,10 @@ const getDepositReturnSummaryGroup = (
     return "bottle";
   }
 
+  if (entry.depositKind === "retail") {
+    return "item";
+  }
+
   const idSignal = `${entry.id} ${entry.itemId}`.toLowerCase();
   if (
     idSignal.includes("truck:item:") ||
@@ -567,6 +571,7 @@ const normalizeHistoryTasks = (tasks: unknown[]): NormalizedHistoryTask[] => {
         task.creditCollections.length > 0
           ? `${task.creditCollections.length} credit collection(s)`
           : null,
+        task.remark ? `Remark: ${task.remark}` : null,
       ].filter((entry): entry is string => Boolean(entry));
 
       return {
@@ -974,7 +979,9 @@ const HistoryScreen = () => {
 
         const params = new URLSearchParams();
         if (kindFilter === "delivery") {
-          params.set("kind", "delivery");
+          params.set("kind", "scheduled_delivery");
+        } else if (kindFilter === "direct_sale") {
+          params.set("kind", "adhoc_delivery");
         }
         params.set("page", String(pageToLoad));
         params.set("limit", String(PAGE_LIMIT));
@@ -1840,7 +1847,7 @@ const HistoryScreen = () => {
               <Text style={styles.statValue}>{stats.total}</Text>
             </View>
             <View style={styles.statCard}>
-              <Text style={styles.statLabel}>Drop</Text>
+              <Text style={styles.statLabel}>Scheduled</Text>
               <Text style={styles.statValue}>{stats.deliveries}</Text>
             </View>
             <View style={styles.statCard}>
@@ -1927,7 +1934,7 @@ const HistoryScreen = () => {
                   kindFilter === "delivery" && styles.filterChipTextActive,
                 ]}
               >
-                Drop
+                Scheduled
               </Text>
             </TouchableOpacity>
             <TouchableOpacity
@@ -2666,6 +2673,11 @@ const HistoryScreen = () => {
                           Qty {entry.quantity} • AED{" "}
                           {formatAmount(entry.unitPrice)}
                         </Text>
+                        {entry.quantityType ? (
+                          <Text style={styles.detailListMeta}>
+                            Quantity Type: {entry.quantityType}
+                          </Text>
+                        ) : null}
                         {entry.forRepair ? (
                           <Text style={styles.detailListMeta}>For repair</Text>
                         ) : null}
@@ -2773,6 +2785,11 @@ const HistoryScreen = () => {
                             <Text style={styles.saleItemMeta}>
                               {saleItem.itemType} • Qty {saleItem.quantity}
                             </Text>
+                            {saleItem.quantityType ? (
+                              <Text style={styles.saleItemMeta}>
+                                Quantity Type: {saleItem.quantityType}
+                              </Text>
+                            ) : null}
                             <Text style={styles.saleItemMeta}>
                               AED {formatAmount(saleItem.unitPrice)} each • AED{" "}
                               {formatAmount(

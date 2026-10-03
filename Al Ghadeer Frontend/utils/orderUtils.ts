@@ -1,4 +1,5 @@
 import { Order } from "@/types/order";
+import type { QuantityType } from "@/types/quantityType";
 
 const normalizeProductKind = (value?: string | null): string => {
   const normalized = (value || "")
@@ -39,6 +40,7 @@ export interface OrderProduct {
   category?: string;
   asset_category?: string | null;
   unique_item_category?: string | null;
+  quantity_type?: QuantityType | null;
 }
 
 /**

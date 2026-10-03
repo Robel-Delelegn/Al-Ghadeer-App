@@ -21,6 +21,8 @@ import {
 } from "react-native";
 import { showWarningAlert } from "@/store/utils/alert";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
+import QuantityTypeSelect from "@/components/QuantityTypeSelect";
+import type { QuantityType } from "@/types/quantityType";
 
 type PaymentMethod = "cash" | "wallet" | "credit";
 
@@ -80,6 +82,7 @@ const Checkout: React.FC = () => {
     setPaymentMethod,
     setAssignedOrders,
     updateCartItemRemark,
+    updateCartItemQuantityType,
   } = useOrderStore();
 
   const orderDetail = assignedOrders.find(
@@ -161,6 +164,23 @@ const Checkout: React.FC = () => {
       if (!orderDetail) return;
       const nextActions = selectedDeliveryActions.map((item) =>
         item.id === itemId ? { ...item, remark } : item,
+      );
+      setAssignedOrders(
+        assignedOrders.map((order) =>
+          order.id === orderDetail.id
+            ? { ...order, draft_delivery_actions: nextActions }
+            : order,
+        ),
+      );
+    },
+    [assignedOrders, orderDetail, selectedDeliveryActions, setAssignedOrders],
+  );
+
+  const handleChangeDepositQuantityType = useCallback(
+    (itemId: string, quantityType: QuantityType | null) => {
+      if (!orderDetail) return;
+      const nextActions = selectedDeliveryActions.map((item) =>
+        item.id === itemId ? { ...item, quantity_type: quantityType } : item,
       );
       setAssignedOrders(
         assignedOrders.map((order) =>
@@ -445,6 +465,12 @@ const Checkout: React.FC = () => {
                       </Text>
                     </View>
                   </View>
+                  <QuantityTypeSelect
+                    value={item.quantityType}
+                    onChange={(value) =>
+                      updateCartItemQuantityType(item.id, value)
+                    }
+                  />
                   <TouchableOpacity
                     style={styles.remarkToggle}
                     onPress={() =>
@@ -560,6 +586,12 @@ const Checkout: React.FC = () => {
                           AED {(item.price * item.quantity).toFixed(2)}
                         </Text>
                       </View>
+                      <QuantityTypeSelect
+                        value={item.quantity_type}
+                        onChange={(value) =>
+                          handleChangeDepositQuantityType(item.id, value)
+                        }
+                      />
                       <TouchableOpacity
                         style={styles.repairToggle}
                         onPress={() => handleToggleRepair(item.id)}
