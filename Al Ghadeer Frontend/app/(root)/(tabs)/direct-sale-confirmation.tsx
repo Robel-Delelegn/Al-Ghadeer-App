@@ -19,7 +19,7 @@ import {
   getDriverHistorySaleId,
   normalizeDriverHistoryDetail,
 } from "@/utils/driverHistory";
-import type { QuantityType } from "@/types/quantityType";
+import { toQuantityTypeField, type QuantityType } from "@/types/quantityType";
 import { resolveResourceUrl } from "@/utils/resources";
 import { getTruckBulkItemMatchKeys } from "@/utils/truckLoad";
 import {
@@ -87,7 +87,6 @@ interface SaleRequestBody {
     quantity: number;
     unitPrice: number;
     quantityType?: QuantityType;
-    forRepair?: boolean;
     remark?: string;
   }[];
   creditCollections?: {
@@ -767,12 +766,12 @@ const DirectSaleConfirmation = () => {
           itemId: asset.itemId,
           quantity: 1,
           unitPrice: Number(asset.price.toFixed(2)),
-          ...(depositReturnQuantityTypes[asset.key]
-            ? { quantityType: depositReturnQuantityTypes[asset.key]! }
-            : {}),
-          forRepair:
+          ...toQuantityTypeField(
+            depositReturnQuantityTypes[asset.key],
             depositReturnForRepair[asset.key] ??
-            directSaleDraft.assetDrafts[asset.key]?.forRepair === true,
+              directSaleDraft.assetDrafts[asset.key]?.forRepair === true,
+            asset.action === "deposit" ? "No Deposit" : "Return",
+          ),
           ...(depositReturnRemarks[asset.key]?.trim()
             ? { remark: depositReturnRemarks[asset.key].trim() }
             : {}),
@@ -782,12 +781,12 @@ const DirectSaleConfirmation = () => {
           itemId: bottle.itemId,
           quantity: bottle.quantity,
           unitPrice: Number(bottle.unitPrice.toFixed(2)),
-          ...(depositReturnQuantityTypes[bottle.key]
-            ? { quantityType: depositReturnQuantityTypes[bottle.key]! }
-            : {}),
-          forRepair:
+          ...toQuantityTypeField(
+            depositReturnQuantityTypes[bottle.key],
             depositReturnForRepair[bottle.key] ??
-            directSaleDraft.bottleDepositForRepair?.[bottle.key] === true,
+              directSaleDraft.bottleDepositForRepair?.[bottle.key] === true,
+            "No Deposit",
+          ),
           ...(depositReturnRemarks[bottle.key]?.trim()
             ? { remark: depositReturnRemarks[bottle.key].trim() }
             : {}),
@@ -797,17 +796,29 @@ const DirectSaleConfirmation = () => {
           itemId: bottle.itemId,
           quantity: bottle.quantity,
           unitPrice: Number(bottle.unitPrice.toFixed(2)),
-          ...(depositReturnQuantityTypes[bottle.key]
-            ? { quantityType: depositReturnQuantityTypes[bottle.key]! }
-            : {}),
-          forRepair:
+          ...toQuantityTypeField(
+            depositReturnQuantityTypes[bottle.key],
             depositReturnForRepair[bottle.key] ??
-            directSaleDraft.bottleReturnForRepair?.[bottle.key] === true,
+              directSaleDraft.bottleReturnForRepair?.[bottle.key] === true,
+            "Return",
+          ),
           ...(depositReturnRemarks[bottle.key]?.trim()
             ? { remark: depositReturnRemarks[bottle.key].trim() }
             : {}),
         })),
       ];
+
+      const exchangeWithoutRemark = depositsReturns.find(
+        (entry) => entry.quantityType === "Exchange" && !entry.remark?.trim(),
+      );
+      if (exchangeWithoutRemark) {
+        setIsProcessing(false);
+        showWarningAlert(
+          "Exchange Company Required",
+          "Add a remark identifying the company for every Exchange movement.",
+        );
+        return;
+      }
 
       const saleRequestItems = selectedProducts.flatMap((product) => {
         const quantity = quantities[product.id] || 0;
@@ -1830,7 +1841,11 @@ const MovementRow = ({
           remark && styles.remarkToggleTextActive,
         ]}
       >
-        {remark ? "Remark added" : "Add remark"}
+        {remark
+          ? "Remark added"
+          : quantityType === "Exchange"
+            ? "Add exchange company *"
+            : "Add remark"}
       </Text>
       <Ionicons
         name={remarkExpanded ? "chevron-up" : "chevron-down"}
@@ -1843,7 +1858,11 @@ const MovementRow = ({
         style={styles.itemRemarkInput}
         value={remark}
         onChangeText={onChangeRemark}
-        placeholder="Add a note about this movement"
+        placeholder={
+          quantityType === "Exchange"
+            ? "Enter exchange company (required)"
+            : "Add a note about this movement"
+        }
         placeholderTextColor="#94A3B8"
         multiline
         maxLength={2000}

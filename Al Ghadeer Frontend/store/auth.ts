@@ -129,13 +129,7 @@ export const useAuthStore = create<AuthStore>()(
       requestOtp: async (phone: string) => {
         set({ isLoading: true });
         try {
-          console.log("[requestOtp] Input:", { phone, API_BASE_URL });
           const url = `${API_BASE_URL}/auth/login`;
-          console.log("[requestOtp] Request:", {
-            method: "POST",
-            url,
-            body: { phone },
-          });
 
           const response = await fetch(url, {
             method: "POST",
@@ -147,15 +141,6 @@ export const useAuthStore = create<AuthStore>()(
             }),
           });
 
-          console.log("[requestOtp] Response metadata:", {
-            ok: response.ok,
-            status: response.status,
-            statusText: response.statusText,
-            headers: Object.fromEntries(response.headers.entries()),
-          });
-          const responseBody = await response.clone().json();
-          console.log("[requestOtp] Response body:", responseBody);
-
           const data = await parseApiResponse<{
             message?: string;
             tempToken?: string;
@@ -163,7 +148,6 @@ export const useAuthStore = create<AuthStore>()(
             requiresOtp?: boolean;
             requires_otp?: boolean;
           }>(response);
-          console.log("[requestOtp] Parsed data:", data);
           set({ isLoading: false });
           const token = data.tempToken ?? data.temp_token;
           if (!token) {
@@ -176,20 +160,12 @@ export const useAuthStore = create<AuthStore>()(
             tempToken: token,
             requiresOtp,
           };
-          console.log("[requestOtp] Return:", result);
           return result;
         } catch (error) {
-          console.error("[requestOtp] Error caught:", error);
           set({ isLoading: false });
           let errorMessage = "Failed to send OTP. Please try again.";
 
           if (error instanceof Error) {
-            console.error("[requestOtp] Error details:", {
-              name: error.name,
-              message: error.message,
-              stack: error.stack,
-            });
-
             if (
               error.message.includes("Network request failed") ||
               error.message.includes("fetch") ||
@@ -203,9 +179,7 @@ export const useAuthStore = create<AuthStore>()(
             }
           }
 
-          const result = { success: false, message: errorMessage };
-          console.error("[requestOtp] Return (error):", result);
-          return result;
+          return { success: false, message: errorMessage };
         }
       },
 
@@ -213,7 +187,6 @@ export const useAuthStore = create<AuthStore>()(
         set({ isLoading: true });
         try {
           const url = `${API_BASE_URL}/auth/verify-otp`;
-          console.log(`🌐 API Request: POST ${url}`);
           const response = await fetch(url, {
             method: "POST",
             headers: {
@@ -267,7 +240,6 @@ export const useAuthStore = create<AuthStore>()(
         set({ isLoading: true });
         try {
           const url = `${API_BASE_URL}/auth/resend-otp`;
-          console.log(`🌐 API Request: POST ${url}`);
           const response = await fetch(url, {
             method: "POST",
             headers: {
@@ -316,7 +288,6 @@ export const useAuthStore = create<AuthStore>()(
           if (token) {
             try {
               const url = `${API_BASE_URL}/auth/logout`;
-              console.log(`🌐 API Request: POST ${url}`);
               await fetch(url, {
                 method: "POST",
                 headers: {
@@ -355,10 +326,6 @@ export const useAuthStore = create<AuthStore>()(
         set({ isLoading: true });
         try {
           const token = await SecureStore.getItemAsync("auth_token");
-          console.log(
-            "Checking authentication token:",
-            token ? "exists" : "null",
-          );
 
           if (!token) {
             set({
@@ -479,9 +446,6 @@ export const authenticatedFetch = async (
   url: string,
   options: RequestInit = {},
 ): Promise<Response> => {
-  // Console log the API URL before making the request
-  console.log(`🌐 API Request: ${options.method || "GET"} ${url}`);
-
   const token = await getAuthToken();
   const method = (options.method || "GET").toUpperCase();
 

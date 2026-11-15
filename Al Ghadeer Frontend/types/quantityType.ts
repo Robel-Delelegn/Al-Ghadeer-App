@@ -35,3 +35,23 @@ export const normalizeQuantityType = (value: unknown): QuantityType | null => {
     ? (normalized as QuantityType)
     : null;
 };
+
+/**
+ * The driver API records repairs as a quantity type rather than a separate
+ * `forRepair` flag. Keep this conversion here so legacy drafts are submitted
+ * using the current API contract.
+ */
+export const resolveQuantityType = (
+  value: QuantityType | null | undefined,
+  forRepair = false,
+): QuantityType | undefined =>
+  forRepair ? "Ret. to Rep." : value || undefined;
+
+export const toQuantityTypeField = (
+  value: QuantityType | null | undefined,
+  forRepair = false,
+  fallback?: QuantityType,
+): { quantityType?: QuantityType } => {
+  const quantityType = resolveQuantityType(value ?? fallback, forRepair);
+  return quantityType ? { quantityType } : {};
+};

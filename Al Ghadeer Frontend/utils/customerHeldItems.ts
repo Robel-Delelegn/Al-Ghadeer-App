@@ -296,6 +296,27 @@ export const normalizeCustomerHeldItems = (
 ): CustomerHeldItems => {
   const root = isRecord(value) ? value : null;
   const record = isRecord(root?.data) ? root.data : root;
+  const assetsBySerial = new Map<string, CustomerHeldAsset>();
+  pickArray(record, [
+    "uniqueItems",
+    "unique_items",
+    "heldUniqueItems",
+    "held_unique_items",
+    "customerUniqueItems",
+    "customer_unique_items",
+    "assets",
+    "heldAssets",
+    "held_assets",
+    "customerAssets",
+    "customer_assets",
+  ])
+    .map((entry) => normalizeAsset(entry))
+    .filter((entry): entry is CustomerHeldAsset => entry !== null)
+    .forEach((asset) => {
+      const key = `${asset.itemId}:${asset.serial.toLowerCase()}`;
+      if (!assetsBySerial.has(key)) assetsBySerial.set(key, asset);
+    });
+
   return {
     bottles: pickArray(record, [
       "bottles",
@@ -309,21 +330,7 @@ export const normalizeCustomerHeldItems = (
     otherRetailItems: pickArray(record, ["otherRetailItems"])
       .map((entry) => normalizeRetailItem(entry))
       .filter((entry): entry is CustomerHeldRetailItem => entry !== null),
-    assets: pickArray(record, [
-      "uniqueItems",
-      "unique_items",
-      "heldUniqueItems",
-      "held_unique_items",
-      "customerUniqueItems",
-      "customer_unique_items",
-      "assets",
-      "heldAssets",
-      "held_assets",
-      "customerAssets",
-      "customer_assets",
-    ])
-      .map((entry) => normalizeAsset(entry))
-      .filter((entry): entry is CustomerHeldAsset => entry !== null),
+    assets: Array.from(assetsBySerial.values()),
   };
 };
 

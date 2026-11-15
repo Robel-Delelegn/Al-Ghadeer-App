@@ -22,7 +22,6 @@ import {
   getSpecificUniqueItemCategory,
   isUniqueItemSaleId,
   isUniqueItemSignal,
-  UNIQUE_ITEM_SALE_PREFIX,
   UNIQUE_ITEMS_GROUP,
 } from "@/utils/uniqueItems";
 import { Ionicons } from "@expo/vector-icons";
@@ -115,6 +114,25 @@ const isEmptyBottleSaleProduct = (
 const isTruckAssetSaleProduct = (product: Pick<ServerProduct, "id">) =>
   isUniqueItemSaleId(product.id);
 
+const isDepositReturnEquipment = (
+  product: Pick<ServerProduct, "label" | "category" | "description">,
+) => {
+  const text = [product.label, product.category, product.description]
+    .filter((value): value is string => typeof value === "string")
+    .join(" ")
+    .toLowerCase();
+  return /\b(cooler|rack|pump|dispenser)\b/.test(text);
+};
+
+const getWaterProductSortRank = (label: string): number => {
+  const normalized = label.toLowerCase().replace(/\s+/g, "");
+  if (/\b5(?:gallon|gal)\b/.test(normalized)) return 0;
+  if (/\b200ml\b/.test(normalized)) return 1;
+  if (/\b330ml\b/.test(normalized)) return 2;
+  if (/\b500ml\b/.test(normalized)) return 3;
+  return 4;
+};
+
 const isSyntheticSaleProduct = (
   product: Pick<ServerProduct, "id" | "category">,
 ) => isEmptyBottleSaleProduct(product) || isTruckAssetSaleProduct(product);
@@ -126,17 +144,6 @@ const appendUniqueDisplayPart = (parts: string[], value?: string | null) => {
   if (parts.some((part) => part.toLowerCase() === normalized)) return;
   parts.push(label);
 };
-
-const getAssetProductLabel = (
-  metadata: ServerProduct | undefined,
-  asset: TruckUniqueItem,
-) =>
-  metadata?.label ||
-  metadata?.uniqueItemCategory ||
-  metadata?.assetCategory ||
-  asset.category ||
-  asset.label ||
-  "Unique Item";
 
 const getAssetProductTitle = (product: ServerProduct) =>
   getSpecificUniqueItemCategory(
@@ -182,16 +189,14 @@ const getProductGroup = (
   const normalized = normalizeCategory(product.type);
   const normalizedCategory = normalizeCategory(product.category || undefined);
 
+  if (isUniqueItemSignal(normalized)) return UNIQUE_ITEMS_GROUP;
   if (normalized.includes("refill")) return "refill";
-  if (
-    isUniqueItemSignal(normalized) ||
-    isUniqueItemSignal(normalizedCategory)
-  ) {
-    return UNIQUE_ITEMS_GROUP;
-  }
-  if (normalized.includes("retail")) {
-    return "wholesale";
-  }
+  if (normalized.includes("retail")) return "wholesale";
+  if (normalized.includes("offer")) return "other";
+
+  if (isUniqueItemSignal(normalizedCategory)) return UNIQUE_ITEMS_GROUP;
+  if (normalizedCategory.includes("refill")) return "refill";
+  if (normalizedCategory.includes("retail")) return "wholesale";
   return "other";
 };
 
@@ -590,70 +595,13 @@ const normalizeProductsPayload = (payload: unknown): ServerProduct[] => {
 
 const buildSellableProducts = (
   baseProducts: ServerProduct[],
-  truckAssets: TruckUniqueItem[],
 ): ServerProduct[] => {
-  const cleanBaseProducts = baseProducts.filter(
-    (product) => !isSyntheticSaleProduct(product),
-  );
-
-  const assetProductsById = new Map<string, ServerProduct>();
-  cleanBaseProducts
-    .filter((product) => product.type === UNIQUE_ITEMS_GROUP)
-    .forEach((product) => {
-      assetProductsById.set(product.itemId, product);
-      assetProductsById.set(product.id, product);
-    });
-
-  const truckAssetItemIds = new Set<string>();
-  const truckAssetProducts = truckAssets.flatMap((asset) => {
-    const metadata =
-      assetProductsById.get(asset.itemId) || assetProductsById.get(asset.id);
-    truckAssetItemIds.add(asset.itemId);
-
-    const assetDisplayId = asset.serial || asset.id;
-
-    return [
-      {
-        id: `${UNIQUE_ITEM_SALE_PREFIX}${asset.id}:${asset.serial || asset.itemId}`,
-        saleItemId:
-          metadata?.saleItemId || `${UNIQUE_ITEMS_GROUP}:${asset.itemId}`,
-        type: UNIQUE_ITEMS_GROUP,
-        itemId: asset.itemId,
-        assetId: asset.id,
-        assetDisplayId,
-        assetDisplayLabel: asset.label || metadata?.label || null,
-        label: getAssetProductLabel(metadata, asset),
-        pricePerUnit: metadata?.pricePerUnit ?? 0,
-        unit: metadata?.unit ?? null,
-        image_url:
-          resolveResourceUrl(asset.image_url) || metadata?.image_url || null,
-        description: metadata?.description ?? asset.description ?? null,
-        category: asset.category || metadata?.category || "Unique Items",
-        uniqueItemCategory:
-          asset.category || metadata?.uniqueItemCategory || null,
-        assetCategory: asset.category || metadata?.assetCategory || null,
-        originalPrice: metadata?.originalPrice,
-        badge: "Unique Item",
-        loaded_quantity: 1,
-        available_stock: 1,
-      },
-    ];
-  });
-
-  const visibleBaseProducts = cleanBaseProducts.filter(
+  return baseProducts.filter(
     (product) =>
-      product.type !== UNIQUE_ITEMS_GROUP ||
-      !truckAssetItemIds.has(product.itemId),
+      !isSyntheticSaleProduct(product) &&
+      product.type !== UNIQUE_ITEMS_GROUP &&
+      !isDepositReturnEquipment(product),
   );
-
-  const deduped = new Map<string, ServerProduct>();
-  [...visibleBaseProducts, ...truckAssetProducts].forEach((product) => {
-    if (!deduped.has(product.id)) {
-      deduped.set(product.id, product);
-    }
-  });
-
-  return Array.from(deduped.values());
 };
 
 interface DirectSaleCheckDraft {
@@ -1306,7 +1254,7 @@ const DirectSales: React.FC = () => {
         }
 
         const normalizedProducts = normalizeProductsPayload(result.data);
-        setProducts(buildSellableProducts(normalizedProducts, truckAssets));
+        setProducts(buildSellableProducts(normalizedProducts));
       } catch (err) {
         console.error("Error fetching products:", err);
       } finally {
@@ -1315,7 +1263,7 @@ const DirectSales: React.FC = () => {
         }
       }
     },
-    [driverId, selectedSite?.id, truckAssets],
+    [driverId, selectedSite?.id],
   );
 
   useFocusEffect(
@@ -1765,7 +1713,9 @@ const DirectSales: React.FC = () => {
     try {
       setApiError(null);
       const params = new URLSearchParams();
-      params.set("q", query);
+      // The driver API accepts `search` for customer name and free-text
+      // lookup, including phone numbers. `q` is ignored by this endpoint.
+      params.set("search", query);
 
       const response = await authenticatedFetch(
         `${API_BASE_URL}/customers?${params.toString()}`,
@@ -2579,7 +2529,7 @@ const DirectSales: React.FC = () => {
   );
 
   const groupedProducts = useMemo(() => {
-    return products.reduce(
+    const groups = products.reduce(
       (acc, product) => {
         const group = getProductGroup(product);
         acc[group].push(product);
@@ -2592,6 +2542,16 @@ const DirectSales: React.FC = () => {
         other: [] as ServerProduct[],
       } satisfies Record<ProductGroup, ServerProduct[]>,
     );
+
+    Object.values(groups).forEach((items) => {
+      items.sort(
+        (first, second) =>
+          getWaterProductSortRank(first.label) -
+            getWaterProductSortRank(second.label) ||
+          first.label.localeCompare(second.label),
+      );
+    });
+    return groups;
   }, [products]);
 
   const totalItems = useMemo(() => {
@@ -4562,7 +4522,7 @@ const DirectSales: React.FC = () => {
                           color="#6D28D9"
                         />
                         <Text style={styles.productCategoryTitle}>
-                          Unique Items
+                          Unique Item Sales
                         </Text>
                       </View>
                       <View style={styles.productCategoryCountBadge}>
@@ -5008,7 +4968,7 @@ const DirectSales: React.FC = () => {
               />
               <TextInput
                 style={styles.input}
-                placeholder="Search customer"
+                placeholder="Search by name or mobile number"
                 placeholderTextColor="#CBD5E1"
                 value={customerSearchQuery}
                 onChangeText={setCustomerSearchQuery}
@@ -5099,8 +5059,7 @@ const DirectSales: React.FC = () => {
             </View>
           ) : (
             <Text style={styles.modalHelperText}>
-              Search using a single query. The app will send only the `search`
-              field to the customer endpoint.
+              Search by customer name or mobile number.
             </Text>
           )}
         </View>

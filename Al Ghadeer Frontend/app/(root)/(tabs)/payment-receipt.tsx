@@ -58,7 +58,6 @@ type DeliveryActionRow = {
   depositKind: "unique-item" | "bottle" | "retail";
   isAsset: boolean;
   isGenericItem?: boolean;
-  forRepair?: boolean;
   remark?: string | null;
   quantityType?: QuantityType | null;
 };
@@ -458,7 +457,6 @@ const buildActionSectionHtml = (rows: DeliveryActionRow[]): string => {
     .map(
       (row) => `
         <tr>
-          <td>${escapeHtml(`${getDeliveryActionTypeLabel(row)}${row.forRepair ? " (For repair)" : ""}`)}</td>
           <td>${buildItemLabelHtml(row)}</td>
           <td>${escapeHtml(row.quantityType || "-")}</td>
           <td class="qty-cell">${escapeHtml(formatQuantity(row.quantity))}</td>
@@ -473,7 +471,6 @@ const buildActionSectionHtml = (rows: DeliveryActionRow[]): string => {
       <table class="table">
         <thead>
           <tr>
-            <th>Type</th>
             <th>Item</th>
             <th>Quantity Type</th>
             <th class="qty-head">Qty</th>
@@ -557,11 +554,6 @@ const DeliveryNoteActionSection: React.FC<{
       <Text style={styles.deliveryNoteSectionTitle}>Deposits & Returns</Text>
       <View style={styles.invoiceItemsHeaderRow}>
         <Text
-          style={[styles.invoiceItemsHeaderText, styles.deliveryNoteTypeCell]}
-        >
-          Type
-        </Text>
-        <Text
           style={[styles.invoiceItemsHeaderText, styles.invoiceProductCell]}
         >
           Item
@@ -581,10 +573,6 @@ const DeliveryNoteActionSection: React.FC<{
             index !== rows.length - 1 && styles.invoiceItemRowBorder,
           ]}
         >
-          <Text style={[styles.invoiceItemText, styles.deliveryNoteTypeCell]}>
-            {getDeliveryActionTypeLabel(row)}
-            {row.forRepair ? " (For repair)" : ""}
-          </Text>
           <ReceiptItemLabel
             item={row}
             style={[styles.invoiceItemText, styles.invoiceProductCell]}
@@ -851,7 +839,6 @@ const PaymentReceipt: React.FC = () => {
           depositKind: entry.depositKind,
           isAsset: entry.depositKind === UNIQUE_ITEM_KIND,
           isGenericItem,
-          forRepair: entry.forRepair,
           remark: entry.remark,
           quantityType: entry.quantityType,
         };
@@ -2805,11 +2792,6 @@ const styles = StyleSheet.create({
   invoiceAmountCell: {
     width: 65,
     textAlign: "right",
-  },
-  deliveryNoteTypeCell: {
-    width: 82,
-    color: "#475569",
-    paddingRight: 12,
   },
   invoiceItemRow: {
     flexDirection: "row",

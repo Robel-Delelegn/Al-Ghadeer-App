@@ -4,13 +4,11 @@ import { useAuthStore, authenticatedFetch } from "@/store/auth";
 import { parseApiResponseWithSoftError } from "@/utils/api";
 import { getDriverRequestId } from "@/utils/driverIdentity";
 import { getApiBaseUrl, resolveResourceUrl } from "@/utils/resources";
-import { extractTruckUniqueItems, TruckUniqueItem } from "@/utils/truckLoad";
 import {
   getSpecificUniqueItemCategory,
   isUniqueItemSaleId,
   isUniqueItemSignal,
   UNIQUE_ITEM_KIND,
-  UNIQUE_ITEM_SALE_PREFIX,
   UNIQUE_ITEMS_GROUP,
 } from "@/utils/uniqueItems";
 import { Product } from "@/types/order";
@@ -113,6 +111,33 @@ const isEmptyBottleSaleProduct = (
 const isTruckAssetSaleProduct = (product: Pick<ServerProduct, "id">) =>
   isUniqueItemSaleId(product.id);
 
+const isDepositReturnEquipment = (
+  product: Pick<ServerProduct, "name" | "category" | "description">,
+) => {
+  const text = [product.name, product.category, product.description]
+    .filter((value): value is string => typeof value === "string")
+    .join(" ")
+    .toLowerCase();
+  return /\b(cooler|rack|pump|dispenser)\b/.test(text);
+};
+
+const getWaterProductSortRank = (label: string): number => {
+  const normalized = label.toLowerCase().replace(/\s+/g, "");
+  if (/\b5(?:gallon|gal)\b/.test(normalized)) return 0;
+  if (/\b200ml\b/.test(normalized)) return 1;
+  if (/\b330ml\b/.test(normalized)) return 2;
+  if (/\b500ml\b/.test(normalized)) return 3;
+  return 4;
+};
+
+const sortProductsForDisplay = (products: ServerProduct[]) =>
+  [...products].sort(
+    (first, second) =>
+      getWaterProductSortRank(first.name) -
+        getWaterProductSortRank(second.name) ||
+      first.name.localeCompare(second.name),
+  );
+
 const appendUniqueDisplayPart = (parts: string[], value?: string | null) => {
   const label = (value || "").trim();
   if (!label) return;
@@ -120,16 +145,6 @@ const appendUniqueDisplayPart = (parts: string[], value?: string | null) => {
   if (parts.some((part) => part.toLowerCase() === normalized)) return;
   parts.push(label);
 };
-
-const getAssetProductName = (
-  metadata: ServerProduct | undefined,
-  asset: TruckUniqueItem,
-) =>
-  metadata?.name ||
-  metadata?.assetCategory ||
-  asset.category ||
-  asset.label ||
-  "Unique Item";
 
 const getAssetProductTitle = (product: ServerProduct) =>
   getSpecificUniqueItemCategory(product.assetCategory, product.category) ||
@@ -166,7 +181,7 @@ const getProductStockGroupKey = (
 };
 
 const getProductItemType = (
-  product: Pick<ServerProduct, "type" | "category" | "assetCategory">,
+  product: Pick<ServerProduct, "type" | "category">,
 ): Product["item_type"] => {
   if (getProductGroup(product) === UNIQUE_ITEMS_GROUP) return UNIQUE_ITEM_KIND;
   if (getProductGroup(product) === "refill") return "refill";
@@ -175,33 +190,19 @@ const getProductItemType = (
 };
 
 const getProductGroup = (
-  product: Pick<ServerProduct, "type" | "category" | "assetCategory">,
+  product: Pick<ServerProduct, "type" | "category">,
 ): ProductGroup => {
   const normalizedType = normalizeCategory(product.type);
   const normalizedCategory = normalizeCategory(product.category);
-  const assetCategory = product.assetCategory?.trim();
 
-  if (
-    isUniqueItemSignal(normalizedType) ||
-    isUniqueItemSignal(normalizedCategory) ||
-    Boolean(assetCategory)
-  ) {
-    return UNIQUE_ITEMS_GROUP;
-  }
+  if (isUniqueItemSignal(normalizedType)) return UNIQUE_ITEMS_GROUP;
+  if (normalizedType.includes("refill")) return "refill";
+  if (normalizedType.includes("retail")) return "wholesale";
+  if (normalizedType.includes("offer")) return "other";
 
-  if (
-    normalizedType.includes("refill") ||
-    normalizedCategory.includes("refill")
-  ) {
-    return "refill";
-  }
-
-  if (
-    normalizedType.includes("retail") ||
-    normalizedCategory.includes("retail")
-  ) {
-    return "wholesale";
-  }
+  if (isUniqueItemSignal(normalizedCategory)) return UNIQUE_ITEMS_GROUP;
+  if (normalizedCategory.includes("refill")) return "refill";
+  if (normalizedCategory.includes("retail")) return "wholesale";
 
   return "other";
 };
@@ -302,68 +303,14 @@ const normalizeProductsPayload = (payload: unknown): ServerProduct[] => {
 
 const buildSellableProducts = (
   baseProducts: ServerProduct[],
-  truckAssets: TruckUniqueItem[],
 ): ServerProduct[] => {
-  const cleanBaseProducts = baseProducts.filter(
+  return baseProducts.filter(
     (product) =>
-      !isEmptyBottleSaleProduct(product) && !isTruckAssetSaleProduct(product),
+      !isEmptyBottleSaleProduct(product) &&
+      !isTruckAssetSaleProduct(product) &&
+      product.type !== UNIQUE_ITEMS_GROUP &&
+      !isDepositReturnEquipment(product),
   );
-
-  const assetProductsById = new Map<string, ServerProduct>();
-  cleanBaseProducts
-    .filter((product) => product.type === UNIQUE_ITEMS_GROUP)
-    .forEach((product) => {
-      assetProductsById.set(product.itemId, product);
-      assetProductsById.set(product.id, product);
-    });
-
-  const truckAssetItemIds = new Set<string>();
-  const truckAssetProducts = truckAssets.flatMap((asset) => {
-    const metadata =
-      assetProductsById.get(asset.itemId) || assetProductsById.get(asset.id);
-    truckAssetItemIds.add(asset.itemId);
-
-    const assetDisplayId = asset.serial || asset.id;
-    const price = metadata?.price ?? 0;
-
-    return [
-      {
-        id: `${UNIQUE_ITEM_SALE_PREFIX}${asset.id}:${asset.serial || asset.itemId}`,
-        saleItemId:
-          metadata?.saleItemId || `${UNIQUE_ITEMS_GROUP}:${asset.itemId}`,
-        itemId: asset.itemId,
-        assetDisplayId,
-        assetDisplayLabel: asset.label || metadata?.name || null,
-        type: UNIQUE_ITEMS_GROUP,
-        name: getAssetProductName(metadata, asset),
-        price,
-        unit: metadata?.unit ?? null,
-        image_url:
-          resolveResourceUrl(asset.image_url) || metadata?.image_url || null,
-        description: metadata?.description ?? asset.description ?? null,
-        category: asset.category || metadata?.category || "Unique Items",
-        assetCategory: asset.category || metadata?.assetCategory || null,
-        originalPrice: metadata?.originalPrice,
-        badge: "Unique Item",
-        loaded_quantity: 1,
-      },
-    ];
-  });
-
-  const visibleBaseProducts = cleanBaseProducts.filter(
-    (product) =>
-      product.type !== UNIQUE_ITEMS_GROUP ||
-      !truckAssetItemIds.has(product.itemId),
-  );
-
-  const deduped = new Map<string, ServerProduct>();
-  [...visibleBaseProducts, ...truckAssetProducts].forEach((product) => {
-    if (!deduped.has(product.id)) {
-      deduped.set(product.id, product);
-    }
-  });
-
-  return Array.from(deduped.values());
 };
 
 const getProductIconName = (type?: string) => {
@@ -601,19 +548,10 @@ const ProductList: React.FC = () => {
       const requestHeaders = {
         "X-Driver-Id": driverId,
       };
-      const [productsResponse, truckResponse] = await Promise.all([
-        authenticatedFetch(url, {
-          method: "GET",
-          headers: requestHeaders,
-        }),
-        authenticatedFetch(`${IP_ADDRESS}/truck`, {
-          method: "GET",
-          headers: requestHeaders,
-        }).catch((error) => {
-          console.error("Error fetching truck inventory:", error);
-          return null;
-        }),
-      ]);
+      const productsResponse = await authenticatedFetch(url, {
+        method: "GET",
+        headers: requestHeaders,
+      });
 
       const parseResult =
         await parseApiResponseWithSoftError<unknown>(productsResponse);
@@ -622,17 +560,8 @@ const ProductList: React.FC = () => {
         setStoreProducts([]);
         setApiError(parseResult.error);
       } else {
-        const truckResult = truckResponse
-          ? await parseApiResponseWithSoftError<unknown>(truckResponse)
-          : null;
-        const nextTruckAssets = truckResult?.ok
-          ? extractTruckUniqueItems(truckResult.data)
-          : [];
         const normalizedProducts = normalizeProductsPayload(parseResult.data);
-        const sellableProducts = buildSellableProducts(
-          normalizedProducts,
-          nextTruckAssets,
-        );
+        const sellableProducts = buildSellableProducts(normalizedProducts);
         setProducts(sellableProducts);
 
         // Update products in store with loaded_quantity for stock tracking
@@ -677,17 +606,21 @@ const ProductList: React.FC = () => {
 
   const groupedProducts = useMemo(
     () => ({
-      refill: saleProducts.filter(
-        (product) => getProductGroup(product) === "refill",
+      refill: sortProductsForDisplay(
+        saleProducts.filter((product) => getProductGroup(product) === "refill"),
       ),
-      wholesale: saleProducts.filter(
-        (product) => getProductGroup(product) === "wholesale",
+      wholesale: sortProductsForDisplay(
+        saleProducts.filter(
+          (product) => getProductGroup(product) === "wholesale",
+        ),
       ),
-      uniqueItems: saleProducts.filter(
-        (product) => getProductGroup(product) === UNIQUE_ITEMS_GROUP,
+      uniqueItems: sortProductsForDisplay(
+        saleProducts.filter(
+          (product) => getProductGroup(product) === UNIQUE_ITEMS_GROUP,
+        ),
       ),
-      other: saleProducts.filter(
-        (product) => getProductGroup(product) === "other",
+      other: sortProductsForDisplay(
+        saleProducts.filter((product) => getProductGroup(product) === "other"),
       ),
     }),
     [saleProducts],
@@ -1068,7 +1001,9 @@ const ProductList: React.FC = () => {
                   ]}
                 >
                   <Ionicons name="cube-outline" size={14} color="#6D28D9" />
-                  <Text style={styles.productCategoryTitle}>Unique Items</Text>
+                  <Text style={styles.productCategoryTitle}>
+                    Unique Item Sales
+                  </Text>
                 </View>
                 <View style={styles.productCategoryCountBadge}>
                   <Text style={styles.productCategoryCount}>
@@ -1168,9 +1103,7 @@ const ProductList: React.FC = () => {
             onPress={handleCheckout}
             activeOpacity={0.8}
           >
-            <Text style={styles.checkoutButtonText}>
-              Bottles & Unique Items
-            </Text>
+            <Text style={styles.checkoutButtonText}>Deposits & Returns</Text>
             <View style={styles.checkoutArrow}>
               <Ionicons name="arrow-forward" size={16} color="#1E40AF" />
             </View>

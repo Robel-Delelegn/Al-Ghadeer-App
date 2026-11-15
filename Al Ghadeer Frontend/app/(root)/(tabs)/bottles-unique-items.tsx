@@ -91,6 +91,13 @@ const normalizeCategory = (value?: string | null) =>
     .toLowerCase()
     .replace(/[\s_-]+/g, "");
 
+// Small packaged-water SKUs belong in Add Products. Empty bottles already held
+// by a customer remain available in the return section below.
+const isWaterSaleProduct = (value?: string | null): boolean => {
+  const normalized = (value || "").toLowerCase().replace(/\s+/g, "");
+  return ["200ml", "330ml", "500ml"].some((size) => normalized.includes(size));
+};
+
 const normalizeProductType = (value: unknown): ServerProduct["type"] => {
   const raw = normalizeCategory(typeof value === "string" ? value : "");
   if (raw.includes("refill")) return "refill";
@@ -284,15 +291,15 @@ const getMovementCopy = (item: RentItem) => {
   const label =
     kind === "retail"
       ? isReturn
-        ? "Collected item"
-        : "Left item"
+        ? "Customer-held item"
+        : "Truck item"
       : kind === UNIQUE_ITEM_KIND
         ? isReturn
-          ? "Collected unique item"
-          : "Left unique item"
+          ? "Customer-held unique item"
+          : "Truck unique item"
         : isReturn
-          ? "Collected empty bottle"
-          : "Left empty bottle";
+          ? "Customer-held empty bottle"
+          : "Truck empty bottle";
 
   return {
     label,
@@ -851,25 +858,44 @@ const BottlesUniqueItems = () => {
     [products],
   );
 
-  const selectableRentItems = useMemo(
-    () =>
-      mergeHeldItemsIntoRentItems(
-        mergeTruckUniqueItemsIntoRentItems(
-          mergeUniqueItemProductsIntoRentItems(
-            currentOrder?.rent_items,
-            truckAssets.length > 0 ? [] : transferableAssetProducts,
-          ),
-          truckAssets,
-        ),
-        heldItems,
+  const selectableRentItems = useMemo(() => {
+    const heldAssetKeys = new Set(
+      heldItems.assets.map(
+        (asset) => `${asset.itemId}:${asset.serial.toLowerCase()}`,
       ),
-    [
-      currentOrder?.rent_items,
+    );
+    const availableTruckAssets = truckAssets.filter((asset) => {
+      if (!asset.serial) return true;
+      return !heldAssetKeys.has(
+        `${asset.itemId}:${asset.serial.toLowerCase()}`,
+      );
+    });
+
+    const movementItems = mergeHeldItemsIntoRentItems(
+      mergeTruckUniqueItemsIntoRentItems(
+        mergeUniqueItemProductsIntoRentItems(
+          currentOrder?.rent_items,
+          truckAssets.length > 0 ? [] : transferableAssetProducts,
+        ),
+        availableTruckAssets,
+      ),
       heldItems,
-      transferableAssetProducts,
-      truckAssets,
-    ],
-  );
+    );
+
+    // Small packaged-water SKUs are sold products, not deposit/return items.
+    return movementItems.filter(
+      (item) =>
+        !(
+          getRentItemDepositAction(item) === "deposit_return" &&
+          isWaterSaleProduct(item.name)
+        ),
+    );
+  }, [
+    currentOrder?.rent_items,
+    heldItems,
+    transferableAssetProducts,
+    truckAssets,
+  ]);
 
   const selectedDeliveryActionMap = useMemo(() => {
     const next = new Map<string, RentItem>();
@@ -1008,8 +1034,10 @@ const BottlesUniqueItems = () => {
         .find((product): product is ServerProduct => Boolean(product));
 
       const availableQuantity = Math.max(0, Math.floor(bulkItem.quantity));
+      const productLabel =
+        matchedProduct?.name || refillProduct?.name || bulkItem.label;
 
-      if (availableQuantity <= 0) {
+      if (availableQuantity <= 0 || isWaterSaleProduct(productLabel)) {
         return options;
       }
 
@@ -1146,13 +1174,17 @@ const BottlesUniqueItems = () => {
         (item) =>
           getRentItemDepositAction(item) === "deposit_return" &&
           getRentItemDepositKind(item) === "bottle" &&
-          !isGenericItemReturn(item),
+          !isGenericItemReturn(item) &&
+          !isWaterSaleProduct(item.name),
       ),
     [selectableRentItems],
   );
 
   const heldRetailReturnItems = useMemo(
-    () => selectableRentItems.filter((item) => isGenericItemReturn(item)),
+    () =>
+      selectableRentItems.filter(
+        (item) => isGenericItemReturn(item) && !isWaterSaleProduct(item.name),
+      ),
     [selectableRentItems],
   );
 

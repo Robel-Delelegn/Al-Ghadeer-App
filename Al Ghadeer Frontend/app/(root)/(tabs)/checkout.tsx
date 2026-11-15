@@ -635,7 +635,11 @@ const Checkout: React.FC = () => {
                             item.remark && styles.remarkToggleTextActive,
                           ]}
                         >
-                          {item.remark ? "Remark added" : "Add remark"}
+                          {item.remark
+                            ? "Remark added"
+                            : item.quantity_type === "Exchange"
+                              ? "Add exchange company *"
+                              : "Add remark"}
                         </Text>
                         <Ionicons
                           name={
@@ -654,7 +658,11 @@ const Checkout: React.FC = () => {
                           onChangeText={(value) =>
                             handleChangeDepositRemark(item.id, value)
                           }
-                          placeholder="Add a note about this movement"
+                          placeholder={
+                            item.quantity_type === "Exchange"
+                              ? "Enter exchange company (required)"
+                              : "Add a note about this movement"
+                          }
                           placeholderTextColor="#94A3B8"
                           multiline
                           maxLength={2000}

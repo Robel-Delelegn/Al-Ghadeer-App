@@ -949,6 +949,27 @@ const getDefaultOutcome = (
   return "failure";
 };
 
+const getTaskOutcomeId = (
+  task: ParsedDeliveryTask,
+  seenOutcomeIds: Set<string>,
+): string => {
+  const outcomeId = task.referenceId?.trim();
+  if (!outcomeId || /^task:/i.test(outcomeId)) {
+    throw new Error(
+      `The assigned ${task.label} is missing its planned reference. Refresh today's deliveries and try again.`,
+    );
+  }
+
+  const uniqueKey = `${task.bucket}:${outcomeId}`;
+  if (seenOutcomeIds.has(uniqueKey)) {
+    throw new Error(
+      `The assigned ${task.label} appears more than once. Refresh today's deliveries and try again.`,
+    );
+  }
+  seenOutcomeIds.add(uniqueKey);
+  return outcomeId;
+};
+
 export const buildDeliveryTaskOutcomes = (
   tasks: unknown,
   status: "success" | "failure",
@@ -957,43 +978,49 @@ export const buildDeliveryTaskOutcomes = (
   const taskValues = normalizeDeliveryTasks(tasks);
   const parsedTasks = parseDeliveryTasks(tasks);
 
-  if (taskValues.length > parsedTasks.length) {
-    console.warn("[deliveries] Some tasks could not be parsed for outcomes.", {
+  if (taskValues.length !== parsedTasks.length) {
+    console.error("[deliveries] Refusing to submit unparsed delivery tasks.", {
       status,
       totalTasks: taskValues.length,
       parsedTasks: parsedTasks.length,
+      tasks: taskValues,
     });
+    throw new Error(
+      "Some assigned delivery tasks could not be read. Refresh today's deliveries and try again.",
+    );
   }
 
+  const seenOutcomeIds = new Set<string>();
   parsedTasks.forEach((task) => {
     const bucket = task.bucket;
     const outcome = getDefaultOutcome(bucket, status);
 
+    // Server contract: tasks.subscriptions must be empty for failure submissions.
+    if (bucket === "subscriptions" && status === "failure") {
+      return;
+    }
+
+    const outcomeId = getTaskOutcomeId(task, seenOutcomeIds);
+
     if (bucket === "pay_on_delivery_orders") {
-      outcomes.pay_on_delivery_orders[task.id] =
+      outcomes.pay_on_delivery_orders[outcomeId] =
         outcome === "not_done" ? "failure" : outcome;
       return;
     }
 
     if (bucket === "staff_orders") {
-      outcomes.staff_orders[task.id] =
+      outcomes.staff_orders[outcomeId] =
         outcome === "not_done" ? "failure" : outcome;
       return;
     }
 
     if (bucket === "prepaid_orders") {
-      outcomes.prepaid_orders[task.id] =
+      outcomes.prepaid_orders[outcomeId] =
         outcome === "failure" ? "not_done" : outcome;
       return;
     }
 
-    // Server contract: tasks.subscriptions must be empty for failure submissions.
-    if (status === "failure") {
-      return;
-    }
-
-    const subscriptionOutcomeId = task.referenceId || task.id;
-    outcomes.subscriptions[subscriptionOutcomeId] =
+    outcomes.subscriptions[outcomeId] =
       outcome === "failure" ? "not_done" : outcome;
   });
 
@@ -1143,30 +1170,31 @@ export const buildDeliveryTaskOutcomesForActualDelivery = (
   }
 
   const outcomes = emptyTaskOutcomes();
+  const seenOutcomeIds = new Set<string>();
 
   parsedTasks.forEach((task) => {
     const outcome = getAdjustedSuccessOutcome(task.bucket);
+    const outcomeId = getTaskOutcomeId(task, seenOutcomeIds);
 
     if (task.bucket === "pay_on_delivery_orders") {
-      outcomes.pay_on_delivery_orders[task.id] =
+      outcomes.pay_on_delivery_orders[outcomeId] =
         outcome === "not_done" ? "failure" : outcome;
       return;
     }
 
     if (task.bucket === "staff_orders") {
-      outcomes.staff_orders[task.id] =
+      outcomes.staff_orders[outcomeId] =
         outcome === "not_done" ? "failure" : outcome;
       return;
     }
 
     if (task.bucket === "prepaid_orders") {
-      outcomes.prepaid_orders[task.id] =
+      outcomes.prepaid_orders[outcomeId] =
         outcome === "failure" ? "not_done" : outcome;
       return;
     }
 
-    const subscriptionOutcomeId = task.referenceId || task.id;
-    outcomes.subscriptions[subscriptionOutcomeId] =
+    outcomes.subscriptions[outcomeId] =
       outcome === "failure" ? "not_done" : outcome;
   });
 

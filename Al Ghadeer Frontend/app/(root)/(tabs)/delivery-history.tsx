@@ -2678,9 +2678,6 @@ const HistoryScreen = () => {
                             Quantity Type: {entry.quantityType}
                           </Text>
                         ) : null}
-                        {entry.forRepair ? (
-                          <Text style={styles.detailListMeta}>For repair</Text>
-                        ) : null}
                         {entry.remark ? (
                           <Text style={styles.detailListMeta}>
                             Remark: {entry.remark}

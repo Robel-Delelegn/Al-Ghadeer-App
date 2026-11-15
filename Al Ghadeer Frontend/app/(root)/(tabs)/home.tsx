@@ -75,6 +75,67 @@ const comparePendingFirst = (first: Order, second: Order) => {
 const sortPendingFirst = (orders: Order[]) =>
   [...orders].sort(comparePendingFirst);
 
+const normalizeSearchText = (value: unknown): string =>
+  typeof value === "string"
+    ? value
+        .normalize("NFKD")
+        .replace(/[\u0300-\u036f]/g, "")
+        .toLocaleLowerCase()
+        .replace(/\s+/g, " ")
+        .trim()
+    : "";
+
+const normalizePhoneNumber = (value: unknown): string =>
+  typeof value === "string" ? value.replace(/\D/g, "") : "";
+
+const phoneSearchVariants = (value: unknown): string[] => {
+  const digits = normalizePhoneNumber(value);
+  if (!digits) return [];
+
+  const variants = new Set([digits]);
+  if (digits.startsWith("971") && digits.length > 3) {
+    variants.add(`0${digits.slice(3)}`);
+  }
+  if (digits.startsWith("0") && digits.length > 1) {
+    variants.add(`971${digits.slice(1)}`);
+  }
+  return [...variants];
+};
+
+const matchesDeliverySearch = (order: Order, searchQuery: string): boolean => {
+  const textQuery = normalizeSearchText(searchQuery);
+  const phoneQuery = normalizePhoneNumber(searchQuery);
+  if (!textQuery) return true;
+
+  const customer = order.customer;
+  const customerName = [customer?.name, customer?.firstName, customer?.lastName]
+    .filter((value): value is string => typeof value === "string")
+    .join(" ");
+  const textFields = [
+    order.customer_name,
+    customerName,
+    order.customer_address,
+    order.order_number,
+    order.display_id,
+    order.customer_site_id,
+    order.delivery_zone,
+    order.route_name,
+    order.customer_email,
+  ];
+
+  if (
+    textFields.some((value) => normalizeSearchText(value).includes(textQuery))
+  ) {
+    return true;
+  }
+
+  if (!phoneQuery) return false;
+
+  return [order.customer_phone, customer?.phone].some((phone) =>
+    phoneSearchVariants(phone).some((variant) => variant.includes(phoneQuery)),
+  );
+};
+
 const Home = () => {
   const { user } = useAuthStore();
   const { setAssignedOrders, selectOrder, assignedOrders, currentDriver } =
@@ -136,27 +197,9 @@ const Home = () => {
       return sortPendingFirst(assignedOrders);
     }
 
-    const query = searchQuery.toLowerCase().trim();
-    const searchFields = [
-      "customer_name",
-      "customer_phone",
-      "customer_address",
-      "order_number",
-      "display_id",
-      "customer_site_id",
-      "delivery_zone",
-      "route_name",
-      "customer_email",
-    ];
-
     return sortPendingFirst(
       assignedOrders.filter((order) =>
-        searchFields.some((field) => {
-          const value = order[field as keyof Order];
-          return (
-            typeof value === "string" && value.toLowerCase().includes(query)
-          );
-        }),
+        matchesDeliverySearch(order, searchQuery),
       ),
     );
   }, [assignedOrders, searchQuery]);
@@ -363,7 +406,7 @@ const Home = () => {
               />
               <TextInput
                 className="flex-1 text-[14px] font-JakartaSemiBold text-slate-800"
-                placeholder="Search deliveries"
+                placeholder="Search name or mobile number"
                 placeholderTextColor="#94A3B8"
                 value={searchQuery}
                 onChangeText={setSearchQuery}

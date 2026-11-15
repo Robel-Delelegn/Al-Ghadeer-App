@@ -299,8 +299,13 @@ export const extractTruckUniqueItems = (
 
   const deduped = new Map<string, TruckUniqueItem>();
   uniqueItems.forEach((asset) => {
-    if (!deduped.has(asset.id)) {
-      deduped.set(asset.id, asset);
+    // Some truck payloads can expose the same physical asset through more
+    // than one load record. A serial identifies the physical unique item.
+    const key = asset.serial
+      ? `${asset.itemId}:${asset.serial.toLowerCase()}`
+      : asset.id;
+    if (!deduped.has(key)) {
+      deduped.set(key, asset);
     }
   });
 

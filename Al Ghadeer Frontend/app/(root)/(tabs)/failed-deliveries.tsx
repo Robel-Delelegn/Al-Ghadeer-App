@@ -7,6 +7,7 @@ import {
   getDeliveryEarlierAttemptsTodayCount,
 } from "@/utils/deliveries";
 import type { DriverHistoryDetail } from "@/utils/driverHistory";
+import { getApiBaseUrl } from "@/utils/resources";
 import { Ionicons } from "@expo/vector-icons";
 import { useRouter } from "expo-router";
 import React, { useState, useCallback } from "react";
@@ -25,8 +26,7 @@ import {
   showWarningAlert,
 } from "@/store/utils/alert";
 
-const IP_ADDRESS =
-  process.env.EXPO_PUBLIC_IP_ADDRESS || "http://localhost:3000";
+const IP_ADDRESS = getApiBaseUrl();
 
 const FAILURE_REASONS = [
   "Customer not available",
@@ -84,13 +84,6 @@ const FailedDeliveries = () => {
         tasks: buildDeliveryTaskOutcomes(order.tasks || [], "failure"),
         remark,
       };
-
-      console.log("[delivery-failure] request payload", {
-        deliveryId: order.id,
-        displayId: payload.displayId,
-        earlierAttemptsTodayCount: payload.earlierAttemptsTodayCount,
-        tasks: payload.tasks,
-      });
 
       const url = `${IP_ADDRESS}/deliveries/${encodeURIComponent(order.id)}`;
       const response = await authenticatedFetch(url, {

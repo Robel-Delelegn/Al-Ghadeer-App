@@ -22,7 +22,6 @@ export interface DriverHistoryDepositReturn {
   depositKind: "unique-item" | "bottle" | "retail";
   quantity: number;
   unitPrice: number;
-  forRepair: boolean;
   remark: string | null;
   quantityType: QuantityType | null;
   label: string;
@@ -115,6 +114,8 @@ export interface DriverSaleInvoiceResponse {
 
 type QuantityTypeRequestLine = {
   itemId: string;
+  quantity?: number;
+  unitPrice?: number;
   quantityType?: QuantityType | null;
   type?: "deposit" | "deposit_return";
 };
@@ -143,21 +144,46 @@ const findRequestQuantityType = (
     itemId: string;
     itemType?: DriverHistorySaleItem["itemType"];
     type?: DriverHistoryDepositReturn["type"];
+    quantity: number;
+    unitPrice: number;
   },
   requestLines: QuantityTypeRequestLine[],
 ): QuantityType | null => {
   const normalizedItemId = normalizeRequestItemId(line.itemId);
-  const matchingLine = requestLines.find((requestLine) => {
-    if (normalizeRequestItemId(requestLine.itemId) !== normalizedItemId) {
-      return false;
-    }
+
+  const hasCompatibleOperation = (requestLine: QuantityTypeRequestLine) => {
     if (line.type && requestLine.type && line.type !== requestLine.type) {
       return false;
     }
     const requestKind = getRequestItemKind(requestLine.itemId);
     return !line.itemType || !requestKind || line.itemType === requestKind;
+  };
+
+  const exactMatch = requestLines.find(
+    (requestLine) =>
+      requestLine.quantityType &&
+      normalizeRequestItemId(requestLine.itemId) === normalizedItemId &&
+      hasCompatibleOperation(requestLine),
+  );
+  if (exactMatch?.quantityType) return exactMatch.quantityType;
+
+  const semanticMatches = requestLines.filter((requestLine) => {
+    if (!requestLine.quantityType || !hasCompatibleOperation(requestLine)) {
+      return false;
+    }
+    if (
+      typeof requestLine.quantity !== "number" ||
+      requestLine.quantity !== line.quantity
+    ) {
+      return false;
+    }
+    if (typeof requestLine.unitPrice !== "number") return false;
+    return Math.abs(requestLine.unitPrice - line.unitPrice) < 0.005;
   });
-  return matchingLine?.quantityType ?? null;
+
+  return semanticMatches.length === 1
+    ? (semanticMatches[0].quantityType ?? null)
+    : null;
 };
 
 export const attachHistoryQuantityTypes = (
@@ -324,7 +350,6 @@ const normalizeDepositReturn = (
     depositKind,
     quantity,
     unitPrice,
-    forRepair: record.forRepair === true,
     remark: toNullableText(record.remark),
     quantityType: normalizeQuantityType(
       record.quantityType ??

@@ -36,6 +36,7 @@ import {
   getRentItemDepositKind,
   getRentItemDisplayLabel,
 } from "@/utils/rentItems";
+import { toQuantityTypeField } from "@/types/quantityType";
 import {
   attachHistoryQuantityTypes,
   DriverHistoryDetail,
@@ -307,13 +308,30 @@ const PaymentConfirmation: React.FC = () => {
         itemId: item.item_id || item.id,
         quantity: item.quantity,
         unitPrice: toMoney(item.price),
-        ...(item.quantity_type ? { quantityType: item.quantity_type } : {}),
-        forRepair: rentItemForRepair[item.id] ?? item.for_repair === true,
+        ...toQuantityTypeField(
+          item.quantity_type,
+          rentItemForRepair[item.id] ?? item.for_repair === true,
+          getRentItemDepositAction(item) === "deposit"
+            ? "No Deposit"
+            : "Return",
+        ),
         ...(item.remark?.trim() ? { remark: item.remark.trim() } : {}),
       }));
       const depositsReturns = actualDepositReturns.map(
         ({ depositKind: _depositKind, ...entry }) => entry,
       );
+
+      const exchangeWithoutRemark = depositsReturns.find(
+        (entry) => entry.quantityType === "Exchange" && !entry.remark?.trim(),
+      );
+      if (exchangeWithoutRemark) {
+        setIsProcessing(false);
+        showErrorAlert(
+          "Exchange Company Required",
+          "Add a remark identifying the company for every Exchange movement.",
+        );
+        return;
+      }
 
       const receiver =
         receiverName && receiverName.trim().length > 0

@@ -71,6 +71,12 @@ const EMPTY_TRUCK_ASSETS: NonNullable<
 const EMPTY_TRUCK_BULK_ITEMS: NonNullable<
   ReturnType<typeof useOrderStore.getState>["directSaleDraft"]
 >["truckBulkItems"] = [];
+
+const isWaterSaleProduct = (value?: string | null): boolean => {
+  const normalized = (value || "").toLowerCase().replace(/\s+/g, "");
+  return ["200ml", "330ml", "500ml"].some((size) => normalized.includes(size));
+};
+
 const appendUniqueDisplayPart = (parts: string[], value?: string | null) => {
   const label = (value || "").trim();
   if (!label) return;
@@ -294,26 +300,39 @@ const DirectSaleBottlesUniqueItems = () => {
       transferableAssetProducts.map((asset) => [asset.itemId, asset]),
     );
 
-    const productAssets = truckAssets.map((asset) => {
+    const heldAssetKeys = new Set(
+      heldItems.assets.map(
+        (asset) => `${asset.itemId}:${asset.serial.toLowerCase()}`,
+      ),
+    );
+    const productAssets = truckAssets.flatMap((asset) => {
+      if (
+        asset.serial &&
+        heldAssetKeys.has(`${asset.itemId}:${asset.serial.toLowerCase()}`)
+      ) {
+        return [];
+      }
       const metadata =
         assetMetadataByItemId.get(asset.itemId) ||
         assetMetadataByItemId.get(asset.id);
 
-      return {
-        key: `product:${asset.id}:${asset.serial || asset.itemId}`,
-        itemId: asset.itemId,
-        label: asset.label || metadata?.label || "Truck Unique Item",
-        serial: asset.serial ?? metadata?.serial ?? null,
-        category:
-          asset.category ??
-          metadata?.uniqueItemCategory ??
-          metadata?.assetCategory ??
-          null,
-        imageUrl:
-          resolveResourceUrl(asset.image_url) || metadata?.imageUrl || null,
-        source: "product" as const,
-        defaultPrice: 0,
-      };
+      return [
+        {
+          key: `product:${asset.id}:${asset.serial || asset.itemId}`,
+          itemId: asset.itemId,
+          label: asset.label || metadata?.label || "Truck Unique Item",
+          serial: asset.serial ?? metadata?.serial ?? null,
+          category:
+            asset.category ??
+            metadata?.uniqueItemCategory ??
+            metadata?.assetCategory ??
+            null,
+          imageUrl:
+            resolveResourceUrl(asset.image_url) || metadata?.imageUrl || null,
+          source: "product" as const,
+          defaultPrice: 0,
+        },
+      ];
     });
 
     const heldAssets = heldItems.assets.map((asset) => ({
@@ -332,31 +351,35 @@ const DirectSaleBottlesUniqueItems = () => {
 
   const bottleReturnOptions = useMemo<BottleReturnOption[]>(
     () =>
-      heldItems.bottles.map((bottle) => ({
-        key: `held:bottle:${bottle.emptyBottleId}`,
-        itemId: bottle.emptyBottleId,
-        label: toEmptyRefillLabel(bottle.label),
-        description: bottle.description,
-        unit: bottle.unit,
-        imageUrl: resolveResourceUrl(bottle.image_url),
-        availableQuantity: bottle.quantity,
-        kind: "bottle" as const,
-      })),
+      heldItems.bottles
+        .filter((bottle) => !isWaterSaleProduct(bottle.label))
+        .map((bottle) => ({
+          key: `held:bottle:${bottle.emptyBottleId}`,
+          itemId: bottle.emptyBottleId,
+          label: toEmptyRefillLabel(bottle.label),
+          description: bottle.description,
+          unit: bottle.unit,
+          imageUrl: resolveResourceUrl(bottle.image_url),
+          availableQuantity: bottle.quantity,
+          kind: "bottle" as const,
+        })),
     [heldItems.bottles],
   );
 
   const retailItemReturnOptions = useMemo<BottleReturnOption[]>(
     () =>
-      heldItems.otherRetailItems.map((item) => ({
-        key: `held:item:${item.itemId}`,
-        itemId: item.itemId,
-        label: item.label,
-        description: item.description,
-        unit: item.unit,
-        imageUrl: resolveResourceUrl(item.image_url),
-        availableQuantity: item.quantity,
-        kind: "item" as const,
-      })),
+      heldItems.otherRetailItems
+        .filter((item) => !isWaterSaleProduct(item.label))
+        .map((item) => ({
+          key: `held:item:${item.itemId}`,
+          itemId: item.itemId,
+          label: item.label,
+          description: item.description,
+          unit: item.unit,
+          imageUrl: resolveResourceUrl(item.image_url),
+          availableQuantity: item.quantity,
+          kind: "item" as const,
+        })),
     [heldItems.otherRetailItems],
   );
 
@@ -389,8 +412,10 @@ const DirectSaleBottlesUniqueItems = () => {
         .find((product): product is DirectSaleDraftProduct => Boolean(product));
 
       const availableQuantity = Math.max(0, Math.floor(bulkItem.quantity));
+      const productLabel =
+        matchedProduct?.label || refillProduct?.label || bulkItem.label;
 
-      if (availableQuantity <= 0) {
+      if (availableQuantity <= 0 || isWaterSaleProduct(productLabel)) {
         return options;
       }
 
